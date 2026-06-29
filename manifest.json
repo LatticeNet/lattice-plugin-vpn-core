@@ -8,13 +8,23 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.3.0",
+  "version": "0.4.0",
   "entrypoint": "system-go/lattice-plugin-vpn-core",
   "publisher": "latticenet",
   "digest_sha256": "d75effe7a2ed65608f2604cc92b46053d8a994418daf218ca95e41e2f404c3f7",
-  "signature_ed25519": "Bw+UzE28Q7U773zAG45+SBUT/gQLvgwOYG3zqtGLglmYQu1QvDGzbzYVJ3PsN+AA97MkJCLXQiv5S1LDCo90Aw==",
+  "signature_ed25519": "wUXPZPD+Qq/FSiN+1ZAWzvWPrLKkqIoFEDRb+9T3gL8jr3MMo2rMTgPTaxHDn/jrlJrLdUQcbFXCxj1aSp5RAQ==",
   "ui": {
     "nav": [
+      {
+        "section": "vpn-manage",
+        "section_title": "VPN Manage",
+        "title": "Lines",
+        "route": "lines",
+        "icon": "Radar",
+        "scopes": [
+          "proxy:read"
+        ]
+      },
       {
         "section": "vpn-manage",
         "section_title": "VPN Manage",
@@ -64,29 +74,15 @@
         "scopes": [
           "proxy:read"
         ]
-      },
-      {
-        "section": "vpn-manage",
-        "section_title": "VPN Manage",
-        "title": "Discovered",
-        "route": "discovered",
-        "icon": "Radar",
-        "scopes": [
-          "proxy:read"
-        ]
-      },
-      {
-        "section": "vpn-manage",
-        "section_title": "VPN Manage",
-        "title": "VPN Core Nodes",
-        "route": "nodes",
-        "icon": "Radar",
-        "scopes": [
-          "proxy:read"
-        ]
       }
     ],
     "views": [
+      {
+        "route": "lines",
+        "title": "Lines",
+        "kind": "builtin",
+        "component_key": "vpn-core.lines"
+      },
       {
         "route": "inbounds",
         "title": "Inbounds",
@@ -116,53 +112,6 @@
         "title": "Usage",
         "kind": "builtin",
         "component_key": "proxy.usage"
-      },
-      {
-        "route": "discovered",
-        "title": "Discovered",
-        "kind": "builtin",
-        "component_key": "proxy.discovered"
-      },
-      {
-        "route": "nodes",
-        "title": "VPN Core Nodes",
-        "kind": "table",
-        "source": {
-          "interface": "latticenet.vpn-core/nodes",
-          "method": "list"
-        },
-        "columns": [
-          {
-            "key": "node_id",
-            "label": "Node"
-          },
-          {
-            "key": "name",
-            "label": "Name"
-          },
-          {
-            "key": "protocol",
-            "label": "Protocol",
-            "render": "badge"
-          },
-          {
-            "key": "network",
-            "label": "Network"
-          },
-          {
-            "key": "port",
-            "label": "Port"
-          },
-          {
-            "key": "address",
-            "label": "Address"
-          },
-          {
-            "key": "share_url",
-            "label": "Share URL",
-            "render": "copy-secret"
-          }
-        ]
       }
     ]
   },
@@ -172,6 +121,16 @@
       "methods": [
         "export",
         "list"
+      ],
+      "scopes": [
+        "proxy:read"
+      ]
+    },
+    {
+      "service": "latticenet.vpn-core/lines",
+      "methods": [
+        "list",
+        "get"
       ],
       "scopes": [
         "proxy:read"
