@@ -8,11 +8,11 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.6.0",
+  "version": "0.7.0",
   "entrypoint": "system-go/lattice-plugin-vpn-core",
   "publisher": "latticenet",
   "digest_sha256": "abbd38440fd8e2d028c0fa14bcfd90cd83c6929dbadbd7d48690394a611d20a8",
-  "signature_ed25519": "Zs5TUbRJ5nylOiNI8Ex+o+oJjIRzLjwJRy/eFm/pypyut7YLcVfoSC4Jbtk2Mmhb6zd9JbxWxcx1HRCw/y3rCA==",
+  "signature_ed25519": "MrfMH2tjIaiHJNvFFmgoGzXCHblx/QegStsqdIAdZ103ZpoaQaBIROudm/M3MqHYONPEHzlBwRMwhxOjq5/qDw==",
   "ui": {
     "nav": [
       {
@@ -99,13 +99,13 @@
         "route": "profiles",
         "title": "Node Profiles",
         "kind": "builtin",
-        "component_key": "proxy.profiles"
+        "component_key": "vpn-core.profiles"
       },
       {
         "route": "subscriptions",
         "title": "Subscriptions",
         "kind": "builtin",
-        "component_key": "proxy.subscriptions"
+        "component_key": "vpn-core.subscriptions"
       },
       {
         "route": "usage",
@@ -166,6 +166,24 @@
       ],
       "scopes": [
         "proxy:admin"
+      ]
+    },
+    {
+      "service": "latticenet.vpn-core/profiles",
+      "methods": [
+        "query"
+      ],
+      "scopes": [
+        "proxy:read"
+      ]
+    },
+    {
+      "service": "latticenet.vpn-core/subscriptions",
+      "methods": [
+        "query"
+      ],
+      "scopes": [
+        "proxy:read"
       ]
     }
   ]
