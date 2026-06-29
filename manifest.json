@@ -1,0 +1,16 @@
+{
+  "id": "latticenet.vpn-core",
+  "name": "vpn-core (sing-box)",
+  "type": "system",
+  "version": "0.1.0",
+  "publisher": "latticenet",
+  "entrypoint": "system-go/lattice-plugin-vpn-core",
+  "capabilities": [
+    "node:read",
+    "network:plan",
+    "network:apply",
+    "task:run"
+  ],
+  "digest_sha256": "3a73c4c7fbccbfb4af1df791c8027ea11192fdba59bd030820505d8385308511",
+  "signature_ed25519": "imamYv6urvSp+lRvGzwVF4tGzNDjbMaYthZAUAAEe6u1X+ejqqqVUPpTsRhVaDnWVR7qt5wBq30dLHFDUJmfBw=="
+}
