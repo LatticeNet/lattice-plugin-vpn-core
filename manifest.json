@@ -8,11 +8,11 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.4.0",
+  "version": "0.5.0",
   "entrypoint": "system-go/lattice-plugin-vpn-core",
   "publisher": "latticenet",
   "digest_sha256": "d75effe7a2ed65608f2604cc92b46053d8a994418daf218ca95e41e2f404c3f7",
-  "signature_ed25519": "wUXPZPD+Qq/FSiN+1ZAWzvWPrLKkqIoFEDRb+9T3gL8jr3MMo2rMTgPTaxHDn/jrlJrLdUQcbFXCxj1aSp5RAQ==",
+  "signature_ed25519": "M6XEW0vu3ICcMbD6A5RF35gY1m19kdfycyCSQF17r7vgsDYFRd4cAF40VVgRkJNVMxDvPRWLebQyY+7lHcJ/Dg==",
   "ui": {
     "nav": [
       {
@@ -93,7 +93,7 @@
         "route": "users",
         "title": "Users",
         "kind": "builtin",
-        "component_key": "proxy.users"
+        "component_key": "vpn-core.users"
       },
       {
         "route": "profiles",
@@ -134,6 +134,29 @@
       ],
       "scopes": [
         "proxy:read"
+      ]
+    },
+    {
+      "service": "latticenet.vpn-core/users",
+      "methods": [
+        "list",
+        "get"
+      ],
+      "scopes": [
+        "proxy:read"
+      ]
+    },
+    {
+      "service": "latticenet.vpn-core/users-admin",
+      "methods": [
+        "create",
+        "update",
+        "delete",
+        "bind",
+        "unbind"
+      ],
+      "scopes": [
+        "proxy:admin"
       ]
     }
   ]
