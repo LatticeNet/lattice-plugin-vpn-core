@@ -8,11 +8,11 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.5.0",
+  "version": "0.6.0",
   "entrypoint": "system-go/lattice-plugin-vpn-core",
   "publisher": "latticenet",
-  "digest_sha256": "d75effe7a2ed65608f2604cc92b46053d8a994418daf218ca95e41e2f404c3f7",
-  "signature_ed25519": "M6XEW0vu3ICcMbD6A5RF35gY1m19kdfycyCSQF17r7vgsDYFRd4cAF40VVgRkJNVMxDvPRWLebQyY+7lHcJ/Dg==",
+  "digest_sha256": "abbd38440fd8e2d028c0fa14bcfd90cd83c6929dbadbd7d48690394a611d20a8",
+  "signature_ed25519": "Zs5TUbRJ5nylOiNI8Ex+o+oJjIRzLjwJRy/eFm/pypyut7YLcVfoSC4Jbtk2Mmhb6zd9JbxWxcx1HRCw/y3rCA==",
   "ui": {
     "nav": [
       {
@@ -111,7 +111,7 @@
         "route": "usage",
         "title": "Usage",
         "kind": "builtin",
-        "component_key": "proxy.usage"
+        "component_key": "vpn-core.usage"
       }
     ]
   },
@@ -141,6 +141,15 @@
       "methods": [
         "list",
         "get"
+      ],
+      "scopes": [
+        "proxy:read"
+      ]
+    },
+    {
+      "service": "latticenet.vpn-core/usage",
+      "methods": [
+        "query"
       ],
       "scopes": [
         "proxy:read"

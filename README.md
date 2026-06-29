@@ -16,5 +16,5 @@ declared capability set.
 ## Build
 
 ```sh
-cd system-go && CGO_ENABLED=0 go build -trimpath -o lattice-plugin-vpn-core .
+cd system-go && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o lattice-plugin-vpn-core .
 ```
