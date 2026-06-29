@@ -8,15 +8,76 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.2.0",
+  "version": "0.3.0",
   "entrypoint": "system-go/lattice-plugin-vpn-core",
   "publisher": "latticenet",
-  "digest_sha256": "7839b5035db208d21c1271bda30e361fe7bd41a97e55811c428f1422bdb876e7",
-  "signature_ed25519": "f6DfDLyaymzB7BNDerLFgPZePHahg83RbgBQ32pddbp1UejsC4xEHvw5ZPlD8/d+m4jalkrHQkVtS02ho9C5Dw==",
+  "digest_sha256": "d75effe7a2ed65608f2604cc92b46053d8a994418daf218ca95e41e2f404c3f7",
+  "signature_ed25519": "Bw+UzE28Q7U773zAG45+SBUT/gQLvgwOYG3zqtGLglmYQu1QvDGzbzYVJ3PsN+AA97MkJCLXQiv5S1LDCo90Aw==",
   "ui": {
     "nav": [
       {
-        "section": "proxy",
+        "section": "vpn-manage",
+        "section_title": "VPN Manage",
+        "title": "Inbounds",
+        "route": "inbounds",
+        "icon": "DoorOpen",
+        "scopes": [
+          "proxy:read"
+        ]
+      },
+      {
+        "section": "vpn-manage",
+        "section_title": "VPN Manage",
+        "title": "Users",
+        "route": "users",
+        "icon": "Users",
+        "scopes": [
+          "proxy:read"
+        ]
+      },
+      {
+        "section": "vpn-manage",
+        "section_title": "VPN Manage",
+        "title": "Node Profiles",
+        "route": "profiles",
+        "icon": "ServerCog",
+        "scopes": [
+          "proxy:read"
+        ]
+      },
+      {
+        "section": "vpn-manage",
+        "section_title": "VPN Manage",
+        "title": "Subscriptions",
+        "route": "subscriptions",
+        "icon": "Link",
+        "scopes": [
+          "proxy:read"
+        ]
+      },
+      {
+        "section": "vpn-manage",
+        "section_title": "VPN Manage",
+        "title": "Usage",
+        "route": "usage",
+        "icon": "Gauge",
+        "scopes": [
+          "proxy:read"
+        ]
+      },
+      {
+        "section": "vpn-manage",
+        "section_title": "VPN Manage",
+        "title": "Discovered",
+        "route": "discovered",
+        "icon": "Radar",
+        "scopes": [
+          "proxy:read"
+        ]
+      },
+      {
+        "section": "vpn-manage",
+        "section_title": "VPN Manage",
         "title": "VPN Core Nodes",
         "route": "nodes",
         "icon": "Radar",
@@ -26,6 +87,42 @@
       }
     ],
     "views": [
+      {
+        "route": "inbounds",
+        "title": "Inbounds",
+        "kind": "builtin",
+        "component_key": "proxy.inbounds"
+      },
+      {
+        "route": "users",
+        "title": "Users",
+        "kind": "builtin",
+        "component_key": "proxy.users"
+      },
+      {
+        "route": "profiles",
+        "title": "Node Profiles",
+        "kind": "builtin",
+        "component_key": "proxy.profiles"
+      },
+      {
+        "route": "subscriptions",
+        "title": "Subscriptions",
+        "kind": "builtin",
+        "component_key": "proxy.subscriptions"
+      },
+      {
+        "route": "usage",
+        "title": "Usage",
+        "kind": "builtin",
+        "component_key": "proxy.usage"
+      },
+      {
+        "route": "discovered",
+        "title": "Discovered",
+        "kind": "builtin",
+        "component_key": "proxy.discovered"
+      },
       {
         "route": "nodes",
         "title": "VPN Core Nodes",
