@@ -8,11 +8,11 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.7.0",
+  "version": "0.7.1",
   "entrypoint": "system-go/lattice-plugin-vpn-core",
   "publisher": "latticenet",
   "digest_sha256": "abbd38440fd8e2d028c0fa14bcfd90cd83c6929dbadbd7d48690394a611d20a8",
-  "signature_ed25519": "MrfMH2tjIaiHJNvFFmgoGzXCHblx/QegStsqdIAdZ103ZpoaQaBIROudm/M3MqHYONPEHzlBwRMwhxOjq5/qDw==",
+  "signature_ed25519": "UwZMGVfXf4pBPXmP3oPAwoEEBuSJImVbSs046U4fqv0o/rqxHZ+z9aTUs5+vLJ4wpuOZGKGX4O/7AjU172oHBQ==",
   "ui": {
     "nav": [
       {
@@ -21,16 +21,6 @@
         "title": "Lines",
         "route": "lines",
         "icon": "Radar",
-        "scopes": [
-          "proxy:read"
-        ]
-      },
-      {
-        "section": "vpn-manage",
-        "section_title": "VPN Manage",
-        "title": "Inbounds",
-        "route": "inbounds",
-        "icon": "DoorOpen",
         "scopes": [
           "proxy:read"
         ]
@@ -82,12 +72,6 @@
         "title": "Lines",
         "kind": "builtin",
         "component_key": "vpn-core.lines"
-      },
-      {
-        "route": "inbounds",
-        "title": "Inbounds",
-        "kind": "builtin",
-        "component_key": "proxy.inbounds"
       },
       {
         "route": "users",
