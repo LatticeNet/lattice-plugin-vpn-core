@@ -8,11 +8,11 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.7.1",
+  "version": "0.7.2",
   "entrypoint": "system-go/lattice-plugin-vpn-core",
   "publisher": "latticenet",
-  "digest_sha256": "abbd38440fd8e2d028c0fa14bcfd90cd83c6929dbadbd7d48690394a611d20a8",
-  "signature_ed25519": "UwZMGVfXf4pBPXmP3oPAwoEEBuSJImVbSs046U4fqv0o/rqxHZ+z9aTUs5+vLJ4wpuOZGKGX4O/7AjU172oHBQ==",
+  "digest_sha256": "9df681f816344dba48321f678ff1e487c04da063340b252f3edcccc117ffbc35",
+  "signature_ed25519": "6Q72nFvFU+joTUNDTqTWzmiPFKjl7cKPLrvHaNRskjYkbK7Zn5IesVXfAtn426//BQh1Auw2Ye+etfYq223aBQ==",
   "ui": {
     "nav": [
       {

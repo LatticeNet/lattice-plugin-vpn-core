@@ -23,7 +23,7 @@ import (
 const (
 	pluginID      = "latticenet.vpn-core"
 	pluginName    = "vpn-core (sing-box)"
-	pluginVersion = "0.7.1"
+	pluginVersion = "0.7.2"
 )
 
 // capabilities is the surface this plugin manages. It mirrors the manifest
