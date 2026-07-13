@@ -1,1 +1,5 @@
 system-go/lattice-plugin-vpn-core
+ui/node_modules/
+ui/dist/
+dist/
+.DS_Store

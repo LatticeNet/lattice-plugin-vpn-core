@@ -1,4 +1,5 @@
 {
+  "schema": "lattice.plugin.manifest.v2",
   "id": "latticenet.vpn-core",
   "name": "vpn-core (sing-box)",
   "type": "system",
@@ -8,16 +9,35 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.7.2",
-  "entrypoint": "system-go/lattice-plugin-vpn-core",
+  "version": "0.8.0-alpha.1",
   "publisher": "latticenet",
-  "digest_sha256": "9df681f816344dba48321f678ff1e487c04da063340b252f3edcccc117ffbc35",
-  "signature_ed25519": "6Q72nFvFU+joTUNDTqTWzmiPFKjl7cKPLrvHaNRskjYkbK7Zn5IesVXfAtn426//BQh1Auw2Ye+etfYq223aBQ==",
+  "signature_ed25519": "mNEzcTEEU/UOuX7F1pYIBP4mJL8IyMU9ypIS7Ggm3cvmMI247MMRefioB7RbkBSyfHVHil0fyfHYzywo7Ge+AA==",
+  "bundle": {
+    "format": "tar+gzip",
+    "digest_sha256": "1477ab644ca395a1360b4f5e3c006588d54fbd1311d6035385cac0630685cdff"
+  },
+  "runtime": {
+    "protocol": "stdio-json-v1",
+    "entrypoints": {
+      "linux/amd64": "bin/linux-amd64/plugin",
+      "linux/arm64": "bin/linux-arm64/plugin"
+    }
+  },
+  "ui_runtime": {
+    "mode": "sandbox",
+    "entrypoint": "ui/index.html",
+    "bridge_version": "1"
+  },
+  "compatibility": {
+    "server": "\u003e=0.2.1",
+    "dashboard_host": "\u003e=1",
+    "runtime_protocol": "\u003e=1"
+  },
   "ui": {
     "nav": [
       {
-        "section": "vpn-manage",
-        "section_title": "VPN Manage",
+        "section": "extensions",
+        "section_title": "Extensions",
         "title": "Lines",
         "route": "lines",
         "icon": "Radar",
@@ -26,8 +46,8 @@
         ]
       },
       {
-        "section": "vpn-manage",
-        "section_title": "VPN Manage",
+        "section": "extensions",
+        "section_title": "Extensions",
         "title": "Users",
         "route": "users",
         "icon": "Users",
@@ -36,8 +56,8 @@
         ]
       },
       {
-        "section": "vpn-manage",
-        "section_title": "VPN Manage",
+        "section": "extensions",
+        "section_title": "Extensions",
         "title": "Node Profiles",
         "route": "profiles",
         "icon": "ServerCog",
@@ -46,8 +66,8 @@
         ]
       },
       {
-        "section": "vpn-manage",
-        "section_title": "VPN Manage",
+        "section": "extensions",
+        "section_title": "Extensions",
         "title": "Subscriptions",
         "route": "subscriptions",
         "icon": "Link",
@@ -56,8 +76,8 @@
         ]
       },
       {
-        "section": "vpn-manage",
-        "section_title": "VPN Manage",
+        "section": "extensions",
+        "section_title": "Extensions",
         "title": "Usage",
         "route": "usage",
         "icon": "Gauge",
@@ -70,32 +90,27 @@
       {
         "route": "lines",
         "title": "Lines",
-        "kind": "builtin",
-        "component_key": "vpn-core.lines"
+        "kind": "sandbox"
       },
       {
         "route": "users",
         "title": "Users",
-        "kind": "builtin",
-        "component_key": "vpn-core.users"
+        "kind": "sandbox"
       },
       {
         "route": "profiles",
         "title": "Node Profiles",
-        "kind": "builtin",
-        "component_key": "vpn-core.profiles"
+        "kind": "sandbox"
       },
       {
         "route": "subscriptions",
         "title": "Subscriptions",
-        "kind": "builtin",
-        "component_key": "vpn-core.subscriptions"
+        "kind": "sandbox"
       },
       {
         "route": "usage",
         "title": "Usage",
-        "kind": "builtin",
-        "component_key": "vpn-core.usage"
+        "kind": "sandbox"
       }
     ]
   },
@@ -103,71 +118,134 @@
     {
       "service": "latticenet.vpn-core/nodes",
       "methods": [
-        "export",
-        "list"
-      ],
-      "scopes": [
-        "proxy:read"
+        {
+          "name": "export",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        },
+        {
+          "name": "list",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        }
       ]
     },
     {
       "service": "latticenet.vpn-core/lines",
       "methods": [
-        "list",
-        "get"
-      ],
-      "scopes": [
-        "proxy:read"
+        {
+          "name": "list",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        },
+        {
+          "name": "get",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        }
       ]
     },
     {
       "service": "latticenet.vpn-core/users",
       "methods": [
-        "list",
-        "get"
-      ],
-      "scopes": [
-        "proxy:read"
-      ]
-    },
-    {
-      "service": "latticenet.vpn-core/usage",
-      "methods": [
-        "query"
-      ],
-      "scopes": [
-        "proxy:read"
+        {
+          "name": "list",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        },
+        {
+          "name": "get",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        }
       ]
     },
     {
       "service": "latticenet.vpn-core/users-admin",
       "methods": [
-        "create",
-        "update",
-        "delete",
-        "bind",
-        "unbind"
-      ],
-      "scopes": [
-        "proxy:admin"
+        {
+          "name": "create",
+          "effect": "write",
+          "scopes": [
+            "proxy:admin"
+          ]
+        },
+        {
+          "name": "update",
+          "effect": "write",
+          "scopes": [
+            "proxy:admin"
+          ]
+        },
+        {
+          "name": "delete",
+          "effect": "write",
+          "scopes": [
+            "proxy:admin"
+          ]
+        },
+        {
+          "name": "bind",
+          "effect": "write",
+          "scopes": [
+            "proxy:admin"
+          ]
+        },
+        {
+          "name": "unbind",
+          "effect": "write",
+          "scopes": [
+            "proxy:admin"
+          ]
+        }
       ]
     },
     {
       "service": "latticenet.vpn-core/profiles",
       "methods": [
-        "query"
-      ],
-      "scopes": [
-        "proxy:read"
+        {
+          "name": "query",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        }
       ]
     },
     {
       "service": "latticenet.vpn-core/subscriptions",
       "methods": [
-        "query"
-      ],
-      "scopes": [
-        "proxy:read"
+        {
+          "name": "query",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        }
+      ]
+    },
+    {
+      "service": "latticenet.vpn-core/usage",
+      "methods": [
+        {
+          "name": "query",
+          "effect": "read",
+          "scopes": [
+            "proxy:read"
+          ]
+        }
       ]
     }
   ]
