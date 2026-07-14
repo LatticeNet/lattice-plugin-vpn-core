@@ -23,6 +23,11 @@ import { BridgeClient, canCall, type HostInit } from "./bridge";
 import {
   filterLineGroups,
   formatBytes,
+  formatLineDomain,
+  formatLineEndpoint,
+  formatLineListen,
+  lineErrorText,
+  lineOwnership,
   lineStatus,
   safeErrorMessage,
   type Line,
@@ -35,7 +40,6 @@ const SERVICES = {
   users: "latticenet.vpn-core/users",
   admin: "latticenet.vpn-core/users-admin",
   profiles: "latticenet.vpn-core/profiles",
-  subscriptions: "latticenet.vpn-core/subscriptions",
   usage: "latticenet.vpn-core/usage",
 } as const;
 
@@ -58,15 +62,30 @@ interface Profile {
   capabilities: string[];
 }
 
-interface Subscription {
-  user_id: string;
-  email?: string;
-  enabled: boolean;
-  eligible: boolean;
-  has_sub_token: boolean;
-  binding_count: number;
-  credential_count: number;
-  expires_at?: string;
+interface ProfilePluginConfig {
+  singbox_discover: boolean;
+  singbox_bin?: string;
+  proxy_usage_file?: string;
+  proxy_usage_url?: string;
+  proxy_usage_xray_api?: string;
+  proxy_usage_xray_bin?: string;
+  proxy_usage_xray_pattern?: string;
+}
+
+interface ProfileSettings {
+  node_id: string;
+  node_name?: string;
+  prerequisites: {
+    allow_exec: boolean;
+    allow_root_exec: boolean;
+    no_exec: boolean;
+    reported_allow_exec: boolean;
+    reported_allow_root_exec: boolean;
+    reported_no_exec: boolean;
+  };
+  saved: ProfilePluginConfig;
+  reported?: ProfilePluginConfig;
+  reconfigure_required: boolean;
 }
 
 interface UsageByUser {
@@ -112,7 +131,6 @@ const search = ref("");
 const lines = ref<LineGroup[]>([]);
 const users = ref<VpnUser[]>([]);
 const profiles = ref<Profile[]>([]);
-const subscriptions = ref<Subscription[]>([]);
 const usage = ref<UsageResult>({ by_user: [], by_node: [], collectors: [], per_line: false });
 
 let bridge: BridgeClient | undefined;
@@ -135,11 +153,13 @@ const routeMeta = computed(() => ({
   lines: { title: "Lines", description: "Managed and discovered proxy endpoints across the fleet.", icon: Radar },
   users: { title: "Users", description: "Protocol credentials and line-level access bindings.", icon: Users },
   profiles: { title: "Node Profiles", description: "Runtime ownership, discovery and collector readiness.", icon: ServerCog },
-  subscriptions: { title: "Subscriptions", description: "Secret-free delivery eligibility for every VPN identity.", icon: Link2 },
   usage: { title: "Usage", description: "Traffic accounting by user and reporting node.", icon: Gauge },
 }[route.value] ?? { title: "VPN Core", description: "sing-box management", icon: Radar }));
-const canAdmin = computed(() => ["create", "update", "delete", "bind", "unbind"].every((method) => canCall(init.value, SERVICES.admin, method)));
 const visibleLineGroups = computed(() => filterLineGroups(lines.value, search.value));
+const visibleLines = computed(() => visibleLineGroups.value.flatMap((group) => group.lines.map((line) => ({
+  group,
+  line,
+}))));
 const allLines = computed(() => lines.value.flatMap((group) => group.lines));
 const healthyLines = computed(() => allLines.value.filter((line) => lineStatus(line) === "healthy").length);
 const managedLines = computed(() => allLines.value.filter((line) => line.managed).length);
@@ -149,8 +169,23 @@ const lineOptions = computed(() => lines.value.flatMap((group) => group.lines.ma
 }))));
 const enabledUsers = computed(() => users.value.filter((user) => user.enabled).length);
 const totalBindings = computed(() => users.value.reduce((count, user) => count + user.bindings.length, 0));
-const eligibleSubscriptions = computed(() => subscriptions.value.filter((subscription) => subscription.eligible).length);
 const totalTraffic = computed(() => usage.value.by_user.reduce((sum, row) => sum + (row.used_bytes || 0), 0));
+const canCreateUser = computed(() => canCall(init.value, SERVICES.admin, "create"));
+const canUpdateUser = computed(() => canCall(init.value, SERVICES.admin, "update"));
+const canDeleteUser = computed(() => canCall(init.value, SERVICES.admin, "delete"));
+const canBindUser = computed(() => canCall(init.value, SERVICES.admin, "bind"));
+const canUnbindUser = computed(() => canCall(init.value, SERVICES.admin, "unbind"));
+const hasUserMutations = computed(() => [
+  canCreateUser.value,
+  canUpdateUser.value,
+  canDeleteUser.value,
+  canBindUser.value,
+  canUnbindUser.value,
+].some(Boolean));
+const showUserActions = computed(() => canUpdateUser.value || canDeleteUser.value || canBindUser.value || canUnbindUser.value);
+const canViewLineDetails = computed(() => canCall(init.value, SERVICES.lines, "get"));
+const canReadProfileSettings = computed(() => canCall(init.value, SERVICES.profiles, "settings"));
+const canConfigureProfile = computed(() => canCall(init.value, SERVICES.profiles, "configure"));
 
 async function pluginCall<T>(service: string, method: string, payload: unknown = {}): Promise<T> {
   if (!bridge || !canCall(init.value, service, method)) throw new Error(`Method ${service}.${method} is not available for this session`);
@@ -183,11 +218,6 @@ async function loadCurrent(background = false): Promise<void> {
         profiles.value = result.profiles ?? [];
         break;
       }
-      case "subscriptions": {
-        const result = await pluginCall<{ subscriptions: Subscription[] }>(SERVICES.subscriptions, "query");
-        subscriptions.value = result.subscriptions ?? [];
-        break;
-      }
       case "usage":
         usage.value = await pluginCall<UsageResult>(SERVICES.usage, "query");
         break;
@@ -209,6 +239,7 @@ const userForm = reactive({
   name: "",
   enabled: true,
   quotaGiB: "",
+  expiresAt: "",
   group: "",
   comment: "",
   protocol: "vless",
@@ -218,7 +249,7 @@ const userForm = reactive({
 
 function openCreateUser(): void {
   editingUser.value = undefined;
-  Object.assign(userForm, { email: "", name: "", enabled: true, quotaGiB: "", group: "", comment: "", protocol: "vless", secret: "", flow: "" });
+  Object.assign(userForm, { email: "", name: "", enabled: true, quotaGiB: "", expiresAt: "", group: "", comment: "", protocol: "vless", secret: "", flow: "" });
   userDialogOpen.value = true;
 }
 
@@ -229,6 +260,7 @@ function openEditUser(user: VpnUser): void {
     name: user.name ?? "",
     enabled: user.enabled,
     quotaGiB: user.quota_bytes ? String(user.quota_bytes / 1024 / 1024 / 1024) : "",
+    expiresAt: formatDateTimeLocal(user.expires_at),
     group: user.group ?? "",
     comment: user.comment ?? "",
     protocol: user.credentials[0]?.protocol ?? "vless",
@@ -240,6 +272,7 @@ function openEditUser(user: VpnUser): void {
 
 async function saveUser(): Promise<void> {
   if (!userForm.email.trim() || savingUser.value) return;
+  if (editingUser.value ? !canUpdateUser.value : !canCreateUser.value) return;
   savingUser.value = true;
   error.value = "";
   try {
@@ -249,6 +282,8 @@ async function saveUser(): Promise<void> {
       quota_bytes: Number.isFinite(quota) && quota > 0 ? Math.round(quota * 1024 * 1024 * 1024) : 0,
       group: userForm.group.trim(), comment: userForm.comment.trim(),
     };
+    const expiresAt = parseDateTimeLocal(userForm.expiresAt);
+    if (expiresAt) payload.expires_at = expiresAt;
     if (editingUser.value) {
       payload.id = editingUser.value.id;
       await pluginCall(SERVICES.admin, "update", payload);
@@ -276,7 +311,7 @@ const bindingLine = ref("");
 const bindingBusy = ref(false);
 
 async function bindLine(): Promise<void> {
-  if (!bindingUser.value || !bindingLine.value || bindingBusy.value) return;
+  if (!bindingUser.value || !bindingLine.value || bindingBusy.value || !canBindUser.value) return;
   bindingBusy.value = true;
   try {
     await pluginCall(SERVICES.admin, "bind", { user_id: bindingUser.value.id, line_hash_id: bindingLine.value });
@@ -291,7 +326,7 @@ async function bindLine(): Promise<void> {
 }
 
 async function unbindLine(lineHash: string): Promise<void> {
-  if (!bindingUser.value) return;
+  if (!bindingUser.value || !canUnbindUser.value) return;
   try {
     await pluginCall(SERVICES.admin, "unbind", { user_id: bindingUser.value.id, line_hash_id: lineHash });
     notice.value = "Line binding removed";
@@ -303,7 +338,7 @@ async function unbindLine(lineHash: string): Promise<void> {
 
 const deleteTarget = ref<VpnUser>();
 async function deleteUser(): Promise<void> {
-  if (!deleteTarget.value) return;
+  if (!deleteTarget.value || !canDeleteUser.value) return;
   try {
     await pluginCall(SERVICES.admin, "delete", { id: deleteTarget.value.id });
     notice.value = `${deleteTarget.value.email} deleted`;
@@ -318,16 +353,143 @@ function currentBindingUser(): VpnUser | undefined {
   return users.value.find((user) => user.id === bindingUser.value?.id);
 }
 
-function displayEndpoint(line: Line): string {
-  const host = line.domain || line.public_host || line.listen_host || "-";
-  return line.listen_port ? `${host}:${line.listen_port}` : host;
-}
-
 function formatDate(value?: string): string {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function formatDateTimeLocal(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function parseDateTimeLocal(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
+}
+
+const lineDetailOpen = ref(false);
+const lineDetailBusy = ref(false);
+const lineDetailError = ref("");
+const lineDetail = ref<Line>();
+const lineDetailNodeName = ref("");
+
+async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
+  if (!canViewLineDetails.value) return;
+  lineDetail.value = line;
+  lineDetailNodeName.value = group.node_name || group.node_id;
+  lineDetailError.value = "";
+  lineDetailOpen.value = true;
+  lineDetailBusy.value = true;
+  try {
+    const result = await pluginCall<{ line: Line }>(SERVICES.lines, "get", { line_hash_id: line.line_hash_id });
+    if (result.line) lineDetail.value = result.line;
+  } catch (cause) {
+    lineDetailError.value = safeErrorMessage(cause, "Line details are unavailable");
+  } finally {
+    lineDetailBusy.value = false;
+    await resize();
+  }
+}
+
+function closeLineDetails(): void {
+  lineDetailOpen.value = false;
+  lineDetailBusy.value = false;
+  lineDetailError.value = "";
+  lineDetail.value = undefined;
+  lineDetailNodeName.value = "";
+}
+
+const profileSettingsOpen = ref(false);
+const profileSettingsBusy = ref(false);
+const profileSettingsSaving = ref(false);
+const profileSettingsError = ref("");
+const profileSettings = ref<ProfileSettings>();
+const profileReconfigureCommand = ref("");
+const profileForm = reactive<ProfilePluginConfig>({
+  singbox_discover: false,
+  singbox_bin: "",
+  proxy_usage_file: "",
+  proxy_usage_url: "",
+  proxy_usage_xray_api: "",
+  proxy_usage_xray_bin: "",
+  proxy_usage_xray_pattern: "",
+});
+
+function applyProfileSettings(value: ProfileSettings): void {
+  profileSettings.value = value;
+  Object.assign(profileForm, {
+    singbox_discover: value.saved.singbox_discover,
+    singbox_bin: value.saved.singbox_bin ?? "",
+    proxy_usage_file: value.saved.proxy_usage_file ?? "",
+    proxy_usage_url: value.saved.proxy_usage_url ?? "",
+    proxy_usage_xray_api: value.saved.proxy_usage_xray_api ?? "",
+    proxy_usage_xray_bin: value.saved.proxy_usage_xray_bin ?? "",
+    proxy_usage_xray_pattern: value.saved.proxy_usage_xray_pattern ?? "",
+  });
+}
+
+async function openProfileSettings(profile: Profile): Promise<void> {
+  if (!canReadProfileSettings.value || profileSettingsBusy.value) return;
+  profileSettingsOpen.value = true;
+  profileSettingsBusy.value = true;
+  profileSettingsError.value = "";
+  profileReconfigureCommand.value = "";
+  try {
+    const result = await pluginCall<ProfileSettings>(SERVICES.profiles, "settings", { node_id: profile.node_id });
+    applyProfileSettings(result);
+  } catch (cause) {
+    profileSettingsError.value = safeErrorMessage(cause, "Node settings are unavailable");
+  } finally {
+    profileSettingsBusy.value = false;
+    await resize();
+  }
+}
+
+function closeProfileSettings(): void {
+  profileSettingsOpen.value = false;
+  profileSettingsBusy.value = false;
+  profileSettingsSaving.value = false;
+  profileSettingsError.value = "";
+  profileSettings.value = undefined;
+  profileReconfigureCommand.value = "";
+}
+
+async function saveProfileSettings(): Promise<void> {
+  if (!profileSettings.value || !canConfigureProfile.value || profileSettingsSaving.value) return;
+  profileSettingsSaving.value = true;
+  profileSettingsError.value = "";
+  profileReconfigureCommand.value = "";
+  try {
+    const result = await pluginCall<{
+      command?: string;
+      settings: ProfileSettings;
+    }>(SERVICES.profiles, "configure", {
+      node_id: profileSettings.value.node_id,
+      ...profileForm,
+    });
+    applyProfileSettings(result.settings);
+    profileReconfigureCommand.value = result.command ?? "";
+    notice.value = `${profileSettings.value.node_name || profileSettings.value.node_id} plugin settings saved`;
+    await loadCurrent(true);
+  } catch (cause) {
+    profileSettingsError.value = safeErrorMessage(cause, "Node settings could not be saved");
+  } finally {
+    profileSettingsSaving.value = false;
+    await resize();
+  }
 }
 
 async function resize(): Promise<void> {
@@ -336,17 +498,14 @@ async function resize(): Promise<void> {
 }
 
 let observer: ResizeObserver | undefined;
-let poller: ReturnType<typeof setInterval> | undefined;
 onMounted(() => {
   observer = new ResizeObserver(() => { void resize(); });
   observer.observe(document.body);
-  poller = setInterval(() => { if (!loading.value && !userDialogOpen.value && !bindingUser.value && !deleteTarget.value) void loadCurrent(true); }, 20_000);
   void resize();
 });
 
 onBeforeUnmount(() => {
   observer?.disconnect();
-  if (poller) clearInterval(poller);
   bridge?.dispose();
 });
 </script>
@@ -384,20 +543,24 @@ onBeforeUnmount(() => {
         <div><span>Managed</span><strong>{{ managedLines }}</strong></div>
         <div><span>Nodes</span><strong>{{ lines.length }}</strong></div>
       </section>
-      <section class="toolbar"><input v-model="search" class="search-input" type="search" placeholder="Search node, line, protocol or status" /></section>
-      <section v-if="visibleLineGroups.length" class="stack">
-        <article v-for="group in visibleLineGroups" :key="group.node_id" class="data-panel">
-          <header class="panel-header"><div><h2>{{ group.node_name || group.node_id }}</h2><p>{{ group.node_id }}</p></div><span class="count">{{ group.lines.length }} lines</span></header>
-          <div class="table-wrap"><table><thead><tr><th>Line</th><th>Protocol</th><th>Endpoint</th><th>Source</th><th>Users</th><th>Status</th></tr></thead>
-            <tbody><tr v-for="line in group.lines" :key="line.line_hash_id">
-              <td><strong>{{ line.name }}</strong><small>{{ line.core }} / {{ line.line_hash_id }}</small></td>
-              <td><span class="badge">{{ line.type || 'unknown' }}</span></td>
-              <td class="mono">{{ displayEndpoint(line) }}</td>
-              <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ line.source }}</span></td>
-              <td>{{ line.user_known ? line.user_count : '-' }}</td>
-              <td><span class="status-dot" :data-tone="lineStatus(line)">{{ line.last_error || line.status || 'ok' }}</span></td>
-            </tr></tbody></table></div>
-        </article>
+      <section class="toolbar"><input v-model="search" class="search-input" type="search" placeholder="Search node, line, status, outbound or error" /></section>
+      <section v-if="visibleLines.length" class="data-panel">
+        <div class="table-wrap"><table><thead><tr><th>Node</th><th>Line</th><th>Core</th><th>Source</th><th>Ownership</th><th>Endpoint</th><th>Listen</th><th>Reality SNI</th><th>Users</th><th>Outbound ref</th><th>Status</th><th>Error</th><th v-if="canViewLineDetails" class="actions-cell">Actions</th></tr></thead>
+          <tbody><tr v-for="{ group, line } in visibleLines" :key="line.line_hash_id">
+            <td><strong>{{ group.node_name || group.node_id }}</strong><small>{{ group.node_id }}</small></td>
+            <td><strong>{{ line.name }}</strong><small>{{ line.type || 'unknown' }} / {{ line.line_hash_id }}</small></td>
+            <td><span class="badge">{{ line.core || 'unknown' }}</span></td>
+            <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ line.source }}</span></td>
+            <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ lineOwnership(line) }}</span></td>
+            <td class="mono">{{ formatLineEndpoint(line) }}</td>
+            <td class="mono">{{ formatLineListen(line) }}</td>
+            <td class="mono">{{ formatLineDomain(line) }}</td>
+            <td>{{ line.user_known ? line.user_count : 'unknown' }}</td>
+            <td class="mono">{{ line.outbound_ref || '-' }}<small v-if="line.outbound_server">{{ line.outbound_server }}<span v-if="line.outbound_port">:{{ line.outbound_port }}</span></small></td>
+            <td><span class="status-dot" :data-tone="lineStatus(line)">{{ line.status || (line.last_error ? 'error' : 'ok') }}</span></td>
+            <td :class="{ 'error-text': line.last_error }">{{ lineErrorText(line) }}</td>
+            <td v-if="canViewLineDetails" class="actions-cell"><button class="button button-secondary button-compact" type="button" @click="openLineDetails(group, line)">Details</button></td>
+          </tr></tbody></table></div>
       </section>
       <div v-else class="empty-state"><Radar :size="28" /><strong>No matching lines</strong><span>Managed or discovered endpoints will appear here.</span></div>
     </template>
@@ -410,19 +573,19 @@ onBeforeUnmount(() => {
         <div><span>Protocols</span><strong>{{ new Set(users.flatMap((user) => user.credentials.map((credential) => credential.protocol))).size }}</strong></div>
       </section>
       <section class="toolbar toolbar-end">
-        <span v-if="!canAdmin" class="permission-note"><KeyRound :size="14" /> Read-only session</span>
-        <button v-else class="button button-primary" type="button" @click="openCreateUser"><Plus :size="15" /> New identity</button>
+        <span v-if="!hasUserMutations" class="permission-note"><KeyRound :size="14" /> Read-only session</span>
+        <button v-if="canCreateUser" class="button button-primary" type="button" @click="openCreateUser"><Plus :size="15" /> New identity</button>
       </section>
-      <section class="data-panel"><div class="table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Credentials</th><th>Bindings</th><th>Quota</th><th class="actions-cell">Actions</th></tr></thead>
+      <section class="data-panel"><div class="table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Credentials</th><th>Bindings</th><th>Quota</th><th>Expires</th><th v-if="showUserActions" class="actions-cell">Actions</th></tr></thead>
         <tbody><tr v-for="user in users" :key="user.id">
           <td><strong>{{ user.email }}</strong><small>{{ user.name || user.id }}<span v-if="user.migrated"> / migrated</span></small></td>
           <td><span class="status-dot" :data-tone="user.enabled ? 'healthy' : 'warning'">{{ user.enabled ? 'enabled' : 'disabled' }}</span></td>
           <td><span v-for="credential in user.credentials" :key="credential.protocol" class="badge credential">{{ credential.protocol }}<KeyRound v-if="credential.has_secret" :size="11" /></span><span v-if="!user.credentials.length">-</span></td>
-          <td>{{ user.bindings.length }}</td><td>{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'Unlimited' }}</td>
-          <td class="actions-cell"><div v-if="canAdmin" class="icon-actions">
-            <button class="icon-button bordered" type="button" aria-label="Edit identity" title="Edit identity" @click="openEditUser(user)"><Pencil :size="14" /></button>
-            <button class="icon-button bordered" type="button" aria-label="Manage line bindings" title="Manage line bindings" @click="bindingUser = user"><Link2 :size="14" /></button>
-            <button class="icon-button bordered destructive" type="button" aria-label="Delete identity" title="Delete identity" @click="deleteTarget = user"><Trash2 :size="14" /></button>
+          <td>{{ user.bindings.length }}</td><td>{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'Unlimited' }}</td><td>{{ formatDate(user.expires_at) }}</td>
+          <td v-if="showUserActions" class="actions-cell"><div class="icon-actions">
+            <button v-if="canUpdateUser" class="icon-button bordered" type="button" aria-label="Edit identity" title="Edit identity" @click="openEditUser(user)"><Pencil :size="14" /></button>
+            <button v-if="canBindUser || canUnbindUser" class="icon-button bordered" type="button" aria-label="Manage line bindings" title="Manage line bindings" @click="bindingUser = user"><Link2 :size="14" /></button>
+            <button v-if="canDeleteUser" class="icon-button bordered destructive" type="button" aria-label="Delete identity" title="Delete identity" @click="deleteTarget = user"><Trash2 :size="14" /></button>
           </div></td>
         </tr></tbody></table></div>
         <div v-if="!users.length" class="empty-state"><UserRound :size="28" /><strong>No VPN identities</strong><span>Create an identity to attach credentials and lines.</span></div>
@@ -436,7 +599,7 @@ onBeforeUnmount(() => {
         <div><span>Applied</span><strong>{{ profiles.filter((profile) => profile.applied).length }}</strong></div>
         <div><span>Runtime errors</span><strong>{{ profiles.filter((profile) => profile.last_error || profile.discovery_error || profile.collector?.status === 'error').length }}</strong></div>
       </section>
-      <section class="data-panel"><div class="table-wrap"><table><thead><tr><th>Node</th><th>Core</th><th>Ownership</th><th>Inbounds</th><th>Discovered</th><th>Collector</th><th>Runtime path</th></tr></thead>
+      <section class="data-panel"><div class="table-wrap"><table><thead><tr><th>Node</th><th>Core</th><th>Ownership</th><th>Inbounds</th><th>Discovered</th><th>Collector</th><th>Runtime path</th><th v-if="canReadProfileSettings" class="actions-cell">Actions</th></tr></thead>
         <tbody><tr v-for="profile in profiles" :key="profile.node_id">
           <td><strong>{{ profile.node_name || profile.node_id }}</strong><small>{{ profile.node_id }}</small></td>
           <td><span class="badge">{{ profile.core || 'unknown' }} {{ profile.core_version || '' }}</span></td>
@@ -444,16 +607,9 @@ onBeforeUnmount(() => {
           <td>{{ profile.inbound_count }}</td><td>{{ profile.discovered_count }}</td>
           <td><span class="status-dot" :data-tone="profile.collector?.status === 'error' ? 'error' : profile.collector?.status === 'ok' ? 'healthy' : 'neutral'">{{ profile.collector?.status || 'not configured' }}</span></td>
           <td class="mono path-cell">{{ profile.config_path || '-' }}<small v-if="profile.last_error || profile.discovery_error" class="error-text">{{ profile.last_error || profile.discovery_error }}</small></td>
+          <td v-if="canReadProfileSettings" class="actions-cell"><button class="icon-button bordered" type="button" aria-label="Configure sing-box integration" title="Configure sing-box integration" @click="openProfileSettings(profile)"><Pencil :size="14" /></button></td>
         </tr></tbody></table></div>
         <div v-if="!profiles.length" class="empty-state"><ServerCog :size="28" /><strong>No node profiles</strong><span>Profiles appear when a node is managed or reports discovery.</span></div>
-      </section>
-    </template>
-
-    <template v-else-if="route === 'subscriptions'">
-      <section class="summary-strip" aria-label="Subscription summary"><div><span>Identities</span><strong>{{ subscriptions.length }}</strong></div><div><span>Eligible</span><strong>{{ eligibleSubscriptions }}</strong></div><div><span>Token ready</span><strong>{{ subscriptions.filter((item) => item.has_sub_token).length }}</strong></div><div><span>Bound lines</span><strong>{{ subscriptions.reduce((sum, item) => sum + item.binding_count, 0) }}</strong></div></section>
-      <section class="data-panel"><div class="table-wrap"><table><thead><tr><th>Identity</th><th>Eligibility</th><th>Source token</th><th>Credentials</th><th>Bindings</th><th>Expires</th></tr></thead>
-        <tbody><tr v-for="subscription in subscriptions" :key="subscription.user_id"><td><strong>{{ subscription.email || subscription.user_id }}</strong><small>{{ subscription.user_id }}</small></td><td><span class="status-dot" :data-tone="subscription.eligible ? 'healthy' : 'warning'">{{ subscription.eligible ? 'eligible' : 'ineligible' }}</span></td><td><span class="badge" :data-tone="subscription.has_sub_token ? 'info' : 'neutral'">{{ subscription.has_sub_token ? 'ready' : 'missing' }}</span></td><td>{{ subscription.credential_count }}</td><td>{{ subscription.binding_count }}</td><td>{{ formatDate(subscription.expires_at) }}</td></tr></tbody></table></div>
-        <div v-if="!subscriptions.length" class="empty-state"><Link2 :size="28" /><strong>No subscription sources</strong><span>Eligible identities remain source-only until a publisher plugin is installed.</span></div>
       </section>
     </template>
 
@@ -467,12 +623,55 @@ onBeforeUnmount(() => {
     </template>
 
     <div v-if="userDialogOpen" class="modal-backdrop" @mousedown.self="userDialogOpen = false"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><header><div><h2 id="user-dialog-title">{{ editingUser ? 'Edit identity' : 'New identity' }}</h2><p>{{ editingUser ? 'Existing secrets stay unchanged.' : 'Create one initial protocol credential.' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="userDialogOpen = false"><X :size="17" /></button></header><div class="form-grid">
-      <label class="field field-wide"><span>Email identity</span><input v-model="userForm.email" type="email" autocomplete="off" /></label><label class="field"><span>Display name</span><input v-model="userForm.name" type="text" /></label><label class="field"><span>Group</span><input v-model="userForm.group" type="text" /></label><label class="field"><span>Quota (GiB)</span><input v-model="userForm.quotaGiB" type="number" min="0" step="1" placeholder="Unlimited" /></label><label class="toggle-field"><input v-model="userForm.enabled" type="checkbox" /><span>Identity enabled</span></label>
+      <label class="field field-wide"><span>Email identity</span><input v-model="userForm.email" type="email" autocomplete="off" /></label><label class="field"><span>Display name</span><input v-model="userForm.name" type="text" /></label><label class="field"><span>Group</span><input v-model="userForm.group" type="text" /></label><label class="field"><span>Quota (GiB)</span><input v-model="userForm.quotaGiB" type="number" min="0" step="1" placeholder="Unlimited" /></label><label class="field"><span>Expires at</span><input v-model="userForm.expiresAt" type="datetime-local" /><small class="field-help">{{ editingUser ? 'Blank leaves the current expiry unchanged.' : 'Optional expiry for this identity.' }}</small></label><label class="toggle-field"><input v-model="userForm.enabled" type="checkbox" /><span>Identity enabled</span></label>
       <template v-if="!editingUser"><label class="field"><span>Protocol</span><select v-model="userForm.protocol"><option v-for="protocol in ['vless','vmess','trojan','shadowsocks','hysteria2','tuic','anytls']" :key="protocol" :value="protocol">{{ protocol }}</option></select></label><label class="field"><span>{{ ['vless','vmess','tuic'].includes(userForm.protocol) ? 'UUID' : 'Password' }}</span><input v-model="userForm.secret" type="password" autocomplete="new-password" /></label><label class="field field-wide"><span>Flow override</span><input v-model="userForm.flow" type="text" placeholder="Optional" /></label></template>
       <label class="field field-wide"><span>Comment</span><textarea v-model="userForm.comment" rows="3" /></label></div><footer><button class="button button-secondary" type="button" @click="userDialogOpen = false">Cancel</button><button class="button button-primary" type="button" :disabled="savingUser || !userForm.email.trim()" @click="saveUser"><LoaderCircle v-if="savingUser" class="spin" :size="15" />{{ editingUser ? 'Save changes' : 'Create identity' }}</button></footer></section></div>
 
-    <div v-if="bindingUser" class="modal-backdrop" @mousedown.self="bindingUser = undefined"><section class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines bound to this identity.</p></div></section></div>
+    <div v-if="bindingUser" class="modal-backdrop" @mousedown.self="bindingUser = undefined"><section class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div v-if="canBindUser" class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button v-if="canUnbindUser" class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines bound to this identity.</p><p v-if="!canBindUser && !canUnbindUser" class="empty-inline">This session cannot change bindings.</p></div></section></div>
 
     <div v-if="deleteTarget" class="modal-backdrop" @mousedown.self="deleteTarget = undefined"><section class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes plugin-owned credentials and line bindings.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong>?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>
+
+    <div v-if="lineDetailOpen && lineDetail" class="modal-backdrop" @mousedown.self="closeLineDetails()"><section class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="line-detail-title"><header><div><h2 id="line-detail-title">Line details</h2><p>{{ lineDetailNodeName }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeLineDetails()"><X :size="17" /></button></header><div class="detail-body">
+      <div v-if="lineDetailError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineDetailError }}</span></div>
+      <div class="detail-grid">
+        <div><span>Line</span><strong>{{ lineDetail.name }}</strong><small>{{ lineDetail.line_hash_id }}</small></div>
+        <div><span>Protocol</span><strong>{{ lineDetail.type || 'unknown' }}</strong><small>{{ lineDetail.core }}</small></div>
+        <div><span>Endpoint</span><strong class="mono">{{ formatLineEndpoint(lineDetail) }}</strong><small>Public address</small></div>
+        <div><span>Listen</span><strong class="mono">{{ formatLineListen(lineDetail) }}</strong><small>Bind address</small></div>
+        <div><span>Reality SNI</span><strong class="mono">{{ formatLineDomain(lineDetail) }}</strong><small>Server name</small></div>
+        <div><span>Outbound ref</span><strong class="mono">{{ lineDetail.outbound_ref || '-' }}</strong><small v-if="lineDetail.outbound_server">{{ lineDetail.outbound_server }}<span v-if="lineDetail.outbound_port">:{{ lineDetail.outbound_port }}</span></small></div>
+        <div><span>Ownership</span><strong>{{ lineOwnership(lineDetail) }}</strong><small>{{ lineDetail.source }}</small></div>
+        <div><span>Status</span><strong>{{ lineDetail.status || (lineDetail.last_error ? 'error' : 'ok') }}</strong><small>{{ lineDetail.user_known ? `${lineDetail.user_count} users` : 'user count unavailable' }}</small></div>
+      </div>
+      <div v-if="lineDetailBusy" class="loading-state loading-inline"><LoaderCircle class="spin" :size="18" /> Refreshing line details</div>
+      <section class="detail-section"><h3>Error</h3><p :class="{ 'error-text': lineDetail.last_error }">{{ lineErrorText(lineDetail) }}</p></section>
+      <section v-if="lineDetail.jump_edges?.length" class="detail-section"><h3>Relay targets</h3><ul class="detail-list"><li v-for="target in lineDetail.jump_edges" :key="target" class="mono">{{ target }}</li></ul></section>
+      <section v-if="lineDetail.metadata && Object.keys(lineDetail.metadata).length" class="detail-section"><h3>Metadata</h3><dl class="detail-pairs"><template v-for="(value, key) in lineDetail.metadata" :key="key"><dt class="mono">{{ key }}</dt><dd>{{ value || '-' }}</dd></template></dl></section>
+    </div></section></div>
+
+    <div v-if="profileSettingsOpen" class="modal-backdrop" @mousedown.self="closeProfileSettings()"><section class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="profile-settings-title"><header><div><h2 id="profile-settings-title">sing-box integration</h2><p>{{ profileSettings?.node_name || profileSettings?.node_id || 'Node profile' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeProfileSettings()"><X :size="17" /></button></header>
+      <div class="detail-body">
+        <div v-if="profileSettingsError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ profileSettingsError }}</span></div>
+        <div v-if="profileSettingsBusy" class="loading-state loading-inline"><LoaderCircle class="spin" :size="18" /> Loading node settings</div>
+        <template v-else-if="profileSettings">
+          <section class="detail-section"><h3>Native execution prerequisites</h3><div class="prerequisite-strip">
+            <span class="badge" :data-tone="profileSettings.prerequisites.allow_exec && !profileSettings.prerequisites.no_exec ? 'info' : 'neutral'">Task execution {{ profileSettings.prerequisites.allow_exec && !profileSettings.prerequisites.no_exec ? 'allowed' : 'blocked' }}</span>
+            <span class="badge" :data-tone="profileSettings.prerequisites.allow_root_exec ? 'info' : 'neutral'">Root execution {{ profileSettings.prerequisites.allow_root_exec ? 'allowed' : 'blocked' }}</span>
+            <span class="badge" :data-tone="profileSettings.reconfigure_required ? 'warning' : 'neutral'">{{ profileSettings.reconfigure_required ? 'Agent reconfigure required' : 'Saved and reported settings match' }}</span>
+          </div></section>
+          <div class="form-grid profile-form">
+            <label class="toggle-field field-wide"><input v-model="profileForm.singbox_discover" type="checkbox" /><span>Discover sing-box installations on this node</span></label>
+            <label class="field field-wide"><span>Manager binary</span><input v-model="profileForm.singbox_bin" class="mono" type="text" placeholder="/usr/local/bin/sb" autocomplete="off" /></label>
+            <label class="field"><span>Usage file</span><input v-model="profileForm.proxy_usage_file" class="mono" type="text" placeholder="/var/lib/sing-box/usage.json" autocomplete="off" /></label>
+            <label class="field"><span>Usage URL</span><input v-model="profileForm.proxy_usage_url" class="mono" type="url" placeholder="Absolute HTTPS collector URL" autocomplete="off" /></label>
+            <label class="field"><span>Xray API</span><input v-model="profileForm.proxy_usage_xray_api" class="mono" type="text" placeholder="127.0.0.1:10085" autocomplete="off" /></label>
+            <label class="field"><span>Xray binary</span><input v-model="profileForm.proxy_usage_xray_bin" class="mono" type="text" placeholder="/usr/local/bin/xray" autocomplete="off" /></label>
+            <label class="field field-wide"><span>Xray stat pattern</span><input v-model="profileForm.proxy_usage_xray_pattern" class="mono" type="text" autocomplete="off" /></label>
+          </div>
+          <section v-if="profileReconfigureCommand" class="detail-section"><h3>Generated agent command</h3><textarea class="command-output mono" :value="profileReconfigureCommand" readonly aria-label="Generated agent reconfiguration command" /></section>
+        </template>
+      </div>
+      <footer><button class="button button-secondary" type="button" @click="closeProfileSettings()">Close</button><button v-if="profileSettings && canConfigureProfile" class="button button-primary" type="button" :disabled="profileSettingsSaving" @click="saveProfileSettings"><LoaderCircle v-if="profileSettingsSaving" class="spin" :size="15" /> Save settings</button></footer>
+    </section></div>
   </main>
 </template>

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { filterLineGroups, formatBytes, lineStatus, type LineGroup } from "./vpnModel";
+import {
+  filterLineGroups,
+  formatBytes,
+  formatLineDomain,
+  formatLineEndpoint,
+  formatLineListen,
+  lineStatus,
+  type LineGroup,
+} from "./vpnModel";
 
 const groups: LineGroup[] = [{
   node_id: "node-hkg",
@@ -15,6 +23,7 @@ const groups: LineGroup[] = [{
 describe("vpnModel", () => {
   it("filters against node and line fields without mutating the source", () => {
     expect(filterLineGroups(groups, "reality")).toHaveLength(1);
+    expect(filterLineGroups(groups, "direct")).toHaveLength(0);
     expect(filterLineGroups(groups, "tokyo")).toHaveLength(0);
     expect(groups[0].lines).toHaveLength(1);
   });
@@ -22,5 +31,48 @@ describe("vpnModel", () => {
   it("formats traffic values and classifies failures", () => {
     expect(formatBytes(1024 * 1024)).toBe("1.0 MiB");
     expect(lineStatus({ ...groups[0].lines[0], last_error: "probe failed" })).toBe("error");
+  });
+
+  it("formats endpoint, listen address, and reality domain with distinct semantics", () => {
+    const line = {
+      ...groups[0].lines[0],
+      public_host: "vpn.example.com",
+      listen_host: "0.0.0.0",
+      listen_port: 443,
+      domain: "reality.example.net",
+      outbound_ref: "direct",
+      last_error: "certificate mismatch",
+    };
+
+    expect(formatLineEndpoint(line)).toBe("vpn.example.com:443");
+    expect(formatLineListen(line)).toBe("0.0.0.0:443");
+    expect(formatLineDomain(line)).toBe("reality.example.net");
+    expect(filterLineGroups([{ ...groups[0], lines: [line] }], "direct")).toHaveLength(1);
+    expect(filterLineGroups([{ ...groups[0], lines: [line] }], "certificate mismatch")).toHaveLength(1);
+  });
+
+  it("keeps a missing public endpoint distinct from the listen address", () => {
+    const line = {
+      ...groups[0].lines[0],
+      listen_host: "127.0.0.1",
+      listen_port: 8443,
+      domain: "sni-only.example.net",
+    };
+
+    expect(formatLineEndpoint(line)).toBe("-");
+    expect(formatLineListen(line)).toBe("127.0.0.1:8443");
+    expect(formatLineDomain(line)).toBe("sni-only.example.net");
+  });
+
+  it("brackets IPv6 hosts when formatting a port", () => {
+    const line = {
+      ...groups[0].lines[0],
+      public_host: "2001:db8::1",
+      listen_host: "::",
+      listen_port: 443,
+    };
+
+    expect(formatLineEndpoint(line)).toBe("[2001:db8::1]:443");
+    expect(formatLineListen(line)).toBe("[::]:443");
   });
 });

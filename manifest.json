@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.8.0-alpha.2",
+  "version": "0.8.0-alpha.3",
   "publisher": "latticenet",
-  "signature_ed25519": "hE95ypfM32jhF/h/wldTX7eJI5hHg2yp0g43lz1dbvL2nlYiTaODa/jfLILowilggmvqQqJh9ZAV/M9V30ejAQ==",
+  "signature_ed25519": "4fmv4SpK6U8oGaI5rq+a5gbOrbgtjaI47u5BWYubfRYIWOCr/d9rerP4MSvgg10EHkHIh3U3X4E6exM0HgdTAQ==",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "6f4d27390590b2b44426df6832326d0f17f6fdf3b634d8f1dfa64ec2e531f77c"
+    "digest_sha256": "7d18513f4343f53164bd6200b2378a8386c43f08407e89242af7c1ebc2691a73"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -68,16 +68,6 @@
       {
         "section": "extensions",
         "section_title": "Extensions",
-        "title": "Subscriptions",
-        "route": "subscriptions",
-        "icon": "Link",
-        "scopes": [
-          "proxy:read"
-        ]
-      },
-      {
-        "section": "extensions",
-        "section_title": "Extensions",
         "title": "Usage",
         "route": "usage",
         "icon": "Gauge",
@@ -100,11 +90,6 @@
       {
         "route": "profiles",
         "title": "Node Profiles",
-        "kind": "sandbox"
-      },
-      {
-        "route": "subscriptions",
-        "title": "Subscriptions",
         "kind": "sandbox"
       },
       {
@@ -221,17 +206,20 @@
           "scopes": [
             "proxy:read"
           ]
-        }
-      ]
-    },
-    {
-      "service": "latticenet.vpn-core/subscriptions",
-      "methods": [
+        },
         {
-          "name": "query",
+          "name": "settings",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "node:read"
+          ]
+        },
+        {
+          "name": "configure",
+          "effect": "write",
+          "scopes": [
+            "node:admin",
+            "task:run"
           ]
         }
       ]

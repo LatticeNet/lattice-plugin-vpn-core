@@ -26,17 +26,20 @@ describe("BridgeClient", () => {
     expect(posted.filter((message) => (message as { type?: string }).type === "lattice.plugin.ready")).toHaveLength(2);
     const init = {
       type: "lattice.host.init", nonce: client.nonce, version: "1",
-      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.2", pluginRoute: "lines",
+      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.3", pluginRoute: "lines",
       locale: "en", colorScheme: "dark", designTokens: {},
       interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list"] }],
     };
     dispatch(init, {});
     dispatch({ ...init, nonce: "wrong" }, parent);
     dispatch({ ...init, pluginId: "other.plugin" }, parent);
+    dispatch({ ...init, pluginRoute: "subscriptions" }, parent);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(posted.filter((message) => (message as { type?: string }).type === "lattice.plugin.ready")).toHaveLength(3);
     dispatch(init, parent);
     const resolved = await client.init;
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(posted.filter((message) => (message as { type?: string }).type === "lattice.plugin.ready")).toHaveLength(2);
+    expect(posted.filter((message) => (message as { type?: string }).type === "lattice.plugin.ready")).toHaveLength(3);
     expect(canCall(resolved, "latticenet.vpn-core/lines", "list")).toBe(true);
     expect(canCall(resolved, "latticenet.vpn-core/lines", "get")).toBe(false);
     client.dispose();

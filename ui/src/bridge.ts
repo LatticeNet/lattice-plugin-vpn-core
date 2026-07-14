@@ -32,7 +32,7 @@ const TOKEN_NAMES = new Set([
   "--destructive", "--ring",
 ]);
 const EXPECTED_PLUGIN_ID = "latticenet.vpn-core";
-const EXPECTED_ROUTES = new Set(["lines", "users", "profiles", "subscriptions", "usage"]);
+const EXPECTED_ROUTES = new Set(["lines", "users", "profiles", "usage"]);
 const READY_RETRY_MS = 500;
 const READY_ATTEMPT_LIMIT = 16;
 

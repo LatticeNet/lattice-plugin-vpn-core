@@ -12,6 +12,22 @@ type manifestContract struct {
 	ID           string   `json:"id"`
 	Version      string   `json:"version"`
 	Capabilities []string `json:"capabilities"`
+	UI           struct {
+		Nav []struct {
+			Route string `json:"route"`
+		} `json:"nav"`
+		Views []struct {
+			Route string `json:"route"`
+		} `json:"views"`
+	} `json:"ui"`
+	Interfaces []struct {
+		Service string `json:"service"`
+		Methods []struct {
+			Name   string   `json:"name"`
+			Effect string   `json:"effect"`
+			Scopes []string `json:"scopes"`
+		} `json:"methods"`
+	} `json:"interfaces"`
 }
 
 func TestDescribeMatchesManifestContract(t *testing.T) {
@@ -67,6 +83,73 @@ func TestRenderPlanIsDeterministicAndNonMutating(t *testing.T) {
 	if !strings.Contains(plan, "plan->approve->apply") {
 		t.Fatalf("plan must preserve approval pipeline language:\n%s", plan)
 	}
+}
+
+func TestManifestRemovesSubscriptionsSurface(t *testing.T) {
+	raw, err := os.ReadFile("../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest manifestContract
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, item := range manifest.UI.Nav {
+		if item.Route == "subscriptions" {
+			t.Fatal("manifest nav still exposes subscriptions")
+		}
+	}
+	for _, item := range manifest.UI.Views {
+		if item.Route == "subscriptions" {
+			t.Fatal("manifest view still exposes subscriptions")
+		}
+	}
+	for _, item := range manifest.Interfaces {
+		if item.Service == "latticenet.vpn-core/subscriptions" {
+			t.Fatal("manifest interfaces still expose subscriptions")
+		}
+	}
+}
+
+func TestManifestScopesProfileSettingsPerNode(t *testing.T) {
+	raw, err := os.ReadFile("../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest manifestContract
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]struct {
+		effect string
+		scopes []string
+	}{
+		"query":     {effect: "read", scopes: []string{"proxy:read"}},
+		"settings":  {effect: "read", scopes: []string{"node:read"}},
+		"configure": {effect: "write", scopes: []string{"node:admin", "task:run"}},
+	}
+	for _, service := range manifest.Interfaces {
+		if service.Service != "latticenet.vpn-core/profiles" {
+			continue
+		}
+		for _, method := range service.Methods {
+			expected, ok := want[method.Name]
+			if !ok {
+				t.Fatalf("unexpected profiles method %q", method.Name)
+			}
+			if method.Effect != expected.effect || !reflect.DeepEqual(method.Scopes, expected.scopes) {
+				t.Fatalf("profiles.%s contract = effect %q scopes %v", method.Name, method.Effect, method.Scopes)
+			}
+			delete(want, method.Name)
+		}
+		if len(want) != 0 {
+			t.Fatalf("missing profiles methods: %v", want)
+		}
+		return
+	}
+	t.Fatal("profiles service is missing")
 }
 
 func TestUnsupportedActionFailsClosed(t *testing.T) {

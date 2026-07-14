@@ -12,6 +12,10 @@ export interface Line {
   public_host?: string;
   domain?: string;
   outbound_ref?: string;
+  outbound_server?: string;
+  outbound_port?: number;
+  jump_edges?: string[];
+  metadata?: Record<string, string>;
   user_count: number;
   user_known: boolean;
   status?: string;
@@ -81,7 +85,8 @@ export function filterLineGroups(groups: LineGroup[], query: string): LineGroup[
       ...group,
       lines: group.lines.filter((line) => [
         group.node_name, group.node_id, line.name, line.type, line.core,
-        line.source, line.public_host, line.domain, line.status,
+        line.source, line.public_host, line.listen_host, line.domain, line.status,
+        line.outbound_ref, line.outbound_server, line.last_error, line.line_hash_id,
       ].some((value) => value?.toLowerCase().includes(needle))),
     }))
     .filter((group) => group.lines.length > 0);
@@ -91,4 +96,36 @@ export function lineStatus(line: Line): "healthy" | "warning" | "error" {
   if (line.status === "error" || line.last_error) return "error";
   if (line.status === "pending" || line.status === "stale") return "warning";
   return "healthy";
+}
+
+export function formatLineEndpoint(line: Line): string {
+  return formatHostPort(line.public_host, line.listen_port);
+}
+
+export function formatLineListen(line: Line): string {
+  return formatHostPort(line.listen_host, line.listen_port);
+}
+
+export function formatLineDomain(line: Line): string {
+  return line.domain?.trim() || "-";
+}
+
+export function lineOwnership(line: Line): string {
+  return line.managed ? "managed" : "observed";
+}
+
+export function lineErrorText(line: Line): string {
+  return line.last_error?.trim() || "-";
+}
+
+function formatHostPort(host: string | undefined, port: number | undefined): string {
+  const trimmedHost = host?.trim() || "";
+  if (!trimmedHost) return "-";
+  if (typeof port === "number" && Number.isFinite(port) && port > 0) {
+    const formattedHost = trimmedHost.includes(":") && !trimmedHost.startsWith("[")
+      ? `[${trimmedHost}]`
+      : trimmedHost;
+    return `${formattedHost}:${port}`;
+  }
+  return trimmedHost;
 }

@@ -1,6 +1,6 @@
 // Command lattice-plugin-vpn-core is the official LatticeNet vpn-core system
 // plugin: the sing-box proxy manager (inbounds, users, node profiles,
-// subscriptions, usage, on-box discovery, and managed add/remove).
+// usage, on-box discovery, and managed add/remove).
 //
 // It implements the Lattice system-plugin stdio contract: newline-delimited
 // JSON {action,payload} on stdin, {ok,plan,message,result,error} on stdout. The
@@ -23,7 +23,7 @@ import (
 const (
 	pluginID      = "latticenet.vpn-core"
 	pluginName    = "vpn-core (sing-box)"
-	pluginVersion = "0.8.0-alpha.2"
+	pluginVersion = "0.8.0-alpha.3"
 )
 
 // capabilities is the surface this plugin manages. It mirrors the manifest
