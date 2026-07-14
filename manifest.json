@@ -11,7 +11,7 @@
   ],
   "version": "0.8.0-alpha.4",
   "publisher": "latticenet",
-  "signature_ed25519": "KGy43CSTvx+Vc3XGY57+7j2aZjUo9DlOCqF3fCq8oNTBjDN9HTqCNmk3gHvG38mpQBUqJTaq+r3NOqwDVUiLBg==",
+  "signature_ed25519": "sMtHbqaiWgg9e1PdKzR5AUnHtq9ul8mEAR2voC+9wYOzdqbMG0GOEXH0fZwpbc4tyFP1tSRvRsisUgZwSUeVBg==",
   "bundle": {
     "format": "tar+gzip",
     "digest_sha256": "ab3f4400eac96fb70ddc42ad80b2d6f37b83bec69fb40cdfb5e960c4c7e636db"
@@ -117,7 +117,8 @@
             "proxy:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/lines",
@@ -136,7 +137,8 @@
             "proxy:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/users",
@@ -155,7 +157,8 @@
             "proxy:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/users-admin",
@@ -195,7 +198,8 @@
             "proxy:admin"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/profiles",
@@ -222,7 +226,8 @@
             "task:run"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/usage",
@@ -234,7 +239,8 @@
             "proxy:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     }
   ]
 }
