@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.8.0-alpha.4",
+  "version": "0.9.0-alpha.1",
   "publisher": "latticenet",
-  "signature_ed25519": "KGy43CSTvx+Vc3XGY57+7j2aZjUo9DlOCqF3fCq8oNTBjDN9HTqCNmk3gHvG38mpQBUqJTaq+r3NOqwDVUiLBg==",
+  "signature_ed25519": "/KCzihgc/G2cv76QGvSgdQcVPcE1quT6+fXk7jW/ELFEClTXkIylrXNrT9hmUZ1mSydn691hRHvOSlUA6bNjCA==",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "ab3f4400eac96fb70ddc42ad80b2d6f37b83bec69fb40cdfb5e960c4c7e636db"
+    "digest_sha256": "2dbfbaac5c18b59813bd426ac89f3900fb436ff8bb3a21aad7f64f7b04f9d7f4"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -117,7 +117,8 @@
             "proxy:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/lines",
@@ -136,7 +137,8 @@
             "proxy:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/users",
@@ -155,7 +157,8 @@
             "proxy:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/users-admin",
@@ -194,8 +197,30 @@
           "scopes": [
             "proxy:admin"
           ]
+        },
+        {
+          "name": "plan_add",
+          "effect": "plan",
+          "scopes": [
+            "proxy:admin"
+          ]
+        },
+        {
+          "name": "plan_remove",
+          "effect": "plan",
+          "scopes": [
+            "proxy:admin"
+          ]
+        },
+        {
+          "name": "rotate",
+          "effect": "write",
+          "scopes": [
+            "proxy:admin"
+          ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/profiles",
@@ -222,7 +247,8 @@
             "task:run"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/usage",
@@ -234,7 +260,8 @@
             "proxy:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     }
   ]
 }

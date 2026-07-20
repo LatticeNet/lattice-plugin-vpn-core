@@ -1,6 +1,8 @@
 export interface Line {
   id: string;
   line_hash_id: string;
+  line_uuid?: string;
+  downstream_line_uuid?: string;
   node_id: string;
   core: string;
   source: string;
