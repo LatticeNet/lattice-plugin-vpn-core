@@ -17,6 +17,7 @@ export interface Line {
   outbound_server?: string;
   outbound_port?: number;
   jump_edges?: string[];
+  declared_jump_edges?: string[];
   metadata?: Record<string, string>;
   user_count: number;
   user_known: boolean;

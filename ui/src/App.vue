@@ -795,7 +795,7 @@ onBeforeUnmount(() => {
         </ul>
       </section>
       <section class="detail-section"><h3>Error</h3><p :class="{ 'error-text': lineDetail.last_error }">{{ lineErrorText(lineDetail) }}</p></section>
-      <section v-if="lineDetail.jump_edges?.length" class="detail-section"><h3>Relay targets</h3><ul class="detail-list"><li v-for="target in lineDetail.jump_edges" :key="target" class="mono">{{ target }}</li></ul></section>
+      <section v-if="lineDetail.jump_edges?.length" class="detail-section"><h3>Relay targets</h3><ul class="detail-list"><li v-for="target in lineDetail.jump_edges" :key="target" class="mono">{{ target }} <span v-if="lineDetail.declared_jump_edges?.includes(target)" class="badge" data-tone="info">declared</span></li></ul></section>
       <section v-if="lineDetail.metadata && Object.keys(lineDetail.metadata).length" class="detail-section"><h3>Metadata</h3><dl class="detail-pairs"><template v-for="(value, key) in lineDetail.metadata" :key="key"><dt class="mono">{{ key }}</dt><dd>{{ value || '-' }}</dd></template></dl></section>
     </div></section></div>
 
