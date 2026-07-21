@@ -70,6 +70,7 @@ interface ProfilePluginConfig {
   proxy_usage_xray_api?: string;
   proxy_usage_xray_bin?: string;
   proxy_usage_xray_pattern?: string;
+  singbox_stats_api?: string;
 }
 
 interface ProfileSettings {
@@ -544,6 +545,7 @@ const profileForm = reactive<ProfilePluginConfig>({
   proxy_usage_xray_api: "",
   proxy_usage_xray_bin: "",
   proxy_usage_xray_pattern: "",
+  singbox_stats_api: "",
 });
 
 function applyProfileSettings(value: ProfileSettings): void {
@@ -556,6 +558,7 @@ function applyProfileSettings(value: ProfileSettings): void {
     proxy_usage_xray_api: value.saved.proxy_usage_xray_api ?? "",
     proxy_usage_xray_bin: value.saved.proxy_usage_xray_bin ?? "",
     proxy_usage_xray_pattern: value.saved.proxy_usage_xray_pattern ?? "",
+    singbox_stats_api: value.saved.singbox_stats_api ?? "",
   });
 }
 
@@ -817,6 +820,7 @@ onBeforeUnmount(() => {
             <label class="field"><span>Xray API</span><input v-model="profileForm.proxy_usage_xray_api" class="mono" type="text" placeholder="127.0.0.1:10085" autocomplete="off" /></label>
             <label class="field"><span>Xray binary</span><input v-model="profileForm.proxy_usage_xray_bin" class="mono" type="text" placeholder="/usr/local/bin/xray" autocomplete="off" /></label>
             <label class="field field-wide"><span>Xray stat pattern</span><input v-model="profileForm.proxy_usage_xray_pattern" class="mono" type="text" autocomplete="off" /></label>
+            <label class="field field-wide"><span>sing-box stats API</span><input v-model="profileForm.singbox_stats_api" class="mono" type="text" placeholder="127.0.0.1:8080" autocomplete="off" /><small class="field-help">Loopback experimental API (sb stats on) — enables per-user stats (ADR-004).</small></label>
           </div>
           <section v-if="profileReconfigureCommand" class="detail-section"><h3>Generated agent command</h3><textarea class="command-output mono" :value="profileReconfigureCommand" readonly aria-label="Generated agent reconfiguration command" /></section>
         </template>
