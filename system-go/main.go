@@ -23,11 +23,11 @@ import (
 const (
 	pluginID      = "latticenet.vpn-core"
 	pluginName    = "vpn-core (sing-box)"
-	pluginVersion = "0.8.0-alpha.4"
+	pluginVersion = "0.8.0-alpha.5"
 )
 
 // capabilities is the surface this plugin manages. It mirrors the manifest
-// (recognized plugin capabilities only; proxy:read/admin are core RBAC scopes,
+// (recognized plugin capabilities only; vpncore:read/admin are core RBAC scopes,
 // enforced by the in-core engine, not plugin capabilities).
 var capabilities = []string{"node:read", "network:plan", "network:apply", "task:run"}
 

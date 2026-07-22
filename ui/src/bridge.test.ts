@@ -8,11 +8,12 @@ function harness() {
   const parent = { postMessage: (message: unknown) => posted.push(message) };
   const win = {
     parent,
-    location: { hash: "#lattice_nonce=0123456789abcdef0123456789abcdef" },
+    location: { hash: "#lattice_nonce=0123456789abcdef0123456789abcdef&host_origin=https%3A%2F%2Fdash.example" },
     addEventListener: (_name: string, next: (event: MessageEvent) => void) => { listener = next; },
     removeEventListener: vi.fn(),
   } as unknown as Window;
-  const dispatch = (data: unknown, source: unknown = parent) => listener?.({ data, source } as MessageEvent);
+  const dispatch = (data: unknown, source: unknown = parent) =>
+    listener?.({ data, source, origin: "https://dash.example" } as MessageEvent);
   return { win, parent, posted, dispatch };
 }
 
@@ -26,7 +27,7 @@ describe("BridgeClient", () => {
     expect(posted.filter((message) => (message as { type?: string }).type === "lattice.plugin.ready")).toHaveLength(2);
     const init = {
       type: "lattice.host.init", nonce: client.nonce, version: "1",
-      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.4", pluginRoute: "lines",
+      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.5", pluginRoute: "lines",
       locale: "en", colorScheme: "dark", designTokens: {},
       interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list"] }],
     };
@@ -95,5 +96,52 @@ describe("BridgeClient", () => {
     client.dispose();
     await expect(disposed.promise).rejects.toThrow("disconnected");
     vi.useRealTimers();
+  });
+});
+
+describe("BridgeClient host origin pinning", () => {
+  function originHarness(hash: string) {
+    const posted: { message: unknown; target: unknown }[] = [];
+    let listener: ((event: MessageEvent) => void) | undefined;
+    const parent = { postMessage: (message: unknown, target: unknown) => posted.push({ message, target }) };
+    const win = {
+      parent,
+      location: { hash },
+      addEventListener: (_name: string, next: (event: MessageEvent) => void) => { listener = next; },
+      removeEventListener: () => {},
+    } as unknown as Window;
+    const dispatch = (data: unknown, origin = "https://dash.example") =>
+      listener?.({ data, source: parent, origin } as unknown as MessageEvent);
+    return { win, parent, posted, dispatch };
+  }
+
+  it("targets the declared host origin and ignores messages from any other origin", async () => {
+    const { win, posted, dispatch } = originHarness("#lattice_nonce=0123456789abcdef0123456789abcdef&host_origin=https%3A%2F%2Fdash.example");
+    const client = new BridgeClient(win);
+    expect(posted[0].target).toBe("https://dash.example");
+    const init = {
+      type: "lattice.host.init", nonce: client.nonce, version: "1",
+      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.5", pluginRoute: "lines",
+      locale: "en", colorScheme: "dark", designTokens: {},
+      interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list"] }],
+    };
+    dispatch(init, "https://evil.example");
+    let settled = false;
+    void client.init.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+    dispatch(init, "https://dash.example");
+    await expect(client.init).resolves.toMatchObject({ pluginId: "latticenet.vpn-core" });
+    client.dispose();
+  });
+
+  it("rejects a missing host_origin instead of using a wildcard target", () => {
+    const { win } = originHarness("#lattice_nonce=0123456789abcdef0123456789abcdef");
+    expect(() => new BridgeClient(win)).toThrow("Missing plugin host origin");
+  });
+
+  it("rejects a malformed host_origin instead of downgrading", () => {
+    const { win } = originHarness("#lattice_nonce=0123456789abcdef0123456789abcdef&host_origin=javascript%3Aalert(1)");
+    expect(() => new BridgeClient(win)).toThrow("Invalid plugin host origin");
   });
 });

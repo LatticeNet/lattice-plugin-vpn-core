@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.8.0-alpha.4",
+  "version": "0.8.0-alpha.5",
   "publisher": "latticenet",
-  "signature_ed25519": "KGy43CSTvx+Vc3XGY57+7j2aZjUo9DlOCqF3fCq8oNTBjDN9HTqCNmk3gHvG38mpQBUqJTaq+r3NOqwDVUiLBg==",
+  "signature_ed25519": "XL+jgzZWnfSfffLuJPBDFoKoJjQfVaLGRyMuKCq7zH7yKc9UcnQGMAKVwh9S0qdgEVSctwRqESX/MU+GTawxBg==",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "ab3f4400eac96fb70ddc42ad80b2d6f37b83bec69fb40cdfb5e960c4c7e636db"
+    "digest_sha256": "662354b0c15d461514f6c49262cd4e6b4e541cba77ce89092a9fcdc93fe74a32"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -29,7 +29,7 @@
     "bridge_version": "1"
   },
   "compatibility": {
-    "server": "\u003e=0.2.1",
+    "server": "\u003e=0.2.2-alpha.2",
     "dashboard_host": "\u003e=1",
     "runtime_protocol": "\u003e=1"
   },
@@ -42,7 +42,7 @@
         "route": "lines",
         "icon": "Radar",
         "scopes": [
-          "proxy:read"
+          "vpncore:read"
         ]
       },
       {
@@ -52,7 +52,7 @@
         "route": "users",
         "icon": "Users",
         "scopes": [
-          "proxy:read"
+          "vpncore:read"
         ]
       },
       {
@@ -62,7 +62,7 @@
         "route": "profiles",
         "icon": "ServerCog",
         "scopes": [
-          "proxy:read"
+          "vpncore:read"
         ]
       },
       {
@@ -72,7 +72,7 @@
         "route": "usage",
         "icon": "Gauge",
         "scopes": [
-          "proxy:read"
+          "vpncore:read"
         ]
       }
     ],
@@ -107,17 +107,18 @@
           "name": "export",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
           "name": "list",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/lines",
@@ -126,17 +127,32 @@
           "name": "list",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
           "name": "get",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
+          ]
+        },
+        {
+          "name": "sync_metadata",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "reattach",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/users",
@@ -145,17 +161,18 @@
           "name": "list",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
           "name": "get",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/users-admin",
@@ -164,38 +181,67 @@
           "name": "create",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "update",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "delete",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "bind",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "unbind",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "plan_add",
+          "effect": "plan",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "plan_remove",
+          "effect": "plan",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "plan_update",
+          "effect": "plan",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "rotate",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/profiles",
@@ -204,7 +250,7 @@
           "name": "query",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
@@ -222,7 +268,8 @@
             "task:run"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     },
     {
       "service": "latticenet.vpn-core/usage",
@@ -231,10 +278,11 @@
           "name": "query",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         }
-      ]
+      ],
+      "backing": "core"
     }
   ]
 }

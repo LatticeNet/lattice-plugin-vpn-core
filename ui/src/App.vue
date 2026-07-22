@@ -70,6 +70,7 @@ interface ProfilePluginConfig {
   proxy_usage_xray_api?: string;
   proxy_usage_xray_bin?: string;
   proxy_usage_xray_pattern?: string;
+  singbox_stats_api?: string;
 }
 
 interface ProfileSettings {
@@ -186,6 +187,11 @@ const showUserActions = computed(() => canUpdateUser.value || canDeleteUser.valu
 const canViewLineDetails = computed(() => canCall(init.value, SERVICES.lines, "get"));
 const canReadProfileSettings = computed(() => canCall(init.value, SERVICES.profiles, "settings"));
 const canConfigureProfile = computed(() => canCall(init.value, SERVICES.profiles, "configure"));
+const canPlanLineUsers = computed(() => ["plan_add", "plan_update", "plan_remove"]
+  .every((method) => canCall(init.value, SERVICES.admin, method)));
+const canRotateCredentials = computed(() => canCall(init.value, SERVICES.admin, "rotate"));
+const canSyncMetadata = computed(() => canCall(init.value, SERVICES.lines, "sync_metadata"));
+const canReattachLine = computed(() => canCall(init.value, SERVICES.lines, "reattach"));
 
 async function pluginCall<T>(service: string, method: string, payload: unknown = {}): Promise<T> {
   if (!bridge || !canCall(init.value, service, method)) throw new Error(`Method ${service}.${method} is not available for this session`);
@@ -391,6 +397,9 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   lineDetail.value = line;
   lineDetailNodeName.value = group.node_name || group.node_id;
   lineDetailError.value = "";
+  lineApprovals.value = [];
+  lineUsersError.value = "";
+  lineUserAdd.value = "";
   lineDetailOpen.value = true;
   lineDetailBusy.value = true;
   try {
@@ -400,8 +409,14 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
     lineDetailError.value = safeErrorMessage(cause, "Line details are unavailable");
   } finally {
     lineDetailBusy.value = false;
-    await resize();
   }
+  // Best effort: the on-node user section lists bound identities.
+  try {
+    await ensureUsersLoaded();
+  } catch {
+    users.value = [];
+  }
+  await resize();
 }
 
 function closeLineDetails(): void {
@@ -411,6 +426,141 @@ function closeLineDetails(): void {
   lineDetail.value = undefined;
   lineDetailNodeName.value = "";
 }
+
+// ── On-node line users (design-15 D3, managed + adopted tracks) ───────────────
+// Every action queues a reviewed plan; nothing reaches the node until approval.
+const lineUsersBusy = ref(false);
+const lineUsersError = ref("");
+const lineUserAdd = ref("");
+const lineApprovals = ref<{ id: string; summary: string }[]>([]);
+
+const lineDetailBoundUsers = computed(() => {
+  const line = lineDetail.value;
+  if (!line) return [] as VpnUser[];
+  return users.value.filter((user) => user.bindings.some((binding) => binding.line_hash_id === line.line_hash_id && binding.enabled));
+});
+const lineDetailBindableUsers = computed(() => {
+  const line = lineDetail.value;
+  if (!line) return [] as VpnUser[];
+  return users.value.filter((user) => user.enabled && !user.bindings.some((binding) => binding.line_hash_id === line.line_hash_id));
+});
+
+async function ensureUsersLoaded(): Promise<void> {
+  if (users.value.length || !canCall(init.value, SERVICES.users, "list")) return;
+  const result = await pluginCall<{ users: VpnUser[] }>(SERVICES.users, "list");
+  users.value = result.users ?? [];
+}
+
+interface LinePlanResult {
+  approval?: { id: string; plan?: string };
+}
+
+function recordLineApproval(result: LinePlanResult, fallback: string): void {
+  let summary = fallback;
+  try {
+    summary = JSON.parse(result.approval?.plan ?? "{}").summary ?? fallback;
+  } catch {
+    summary = fallback;
+  }
+  if (result.approval?.id) lineApprovals.value = [{ id: result.approval.id, summary }, ...lineApprovals.value];
+}
+
+async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", userId: string): Promise<void> {
+  const line = lineDetail.value;
+  if (!line || lineUsersBusy.value) return;
+  lineUsersBusy.value = true;
+  lineUsersError.value = "";
+  try {
+    const result = await pluginCall<LinePlanResult>(SERVICES.admin, op, { user_id: userId, line_hash_id: line.line_hash_id });
+    recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
+    notice.value = "On-node action queued — approve it in the Approvals console, then rediscover";
+    await loadCurrent(true);
+  } catch (cause) {
+    lineUsersError.value = safeErrorMessage(cause, "The on-node action could not be planned");
+  } finally {
+    lineUsersBusy.value = false;
+    await resize();
+  }
+}
+
+async function bindAndApplyToLine(): Promise<void> {
+  const line = lineDetail.value;
+  if (!line || !lineUserAdd.value || lineUsersBusy.value) return;
+  const userId = lineUserAdd.value;
+  await planLineUser("plan_add", userId);
+  lineUserAdd.value = "";
+}
+
+const syncBusy = ref(false);
+const reattachUUID = ref("");
+const reattachBusy = ref(false);
+
+async function syncSidecar(): Promise<void> {
+  const line = lineDetail.value;
+  if (!line || syncBusy.value) return;
+  syncBusy.value = true;
+  lineUsersError.value = "";
+  try {
+    const result = await pluginCall<LinePlanResult>(SERVICES.lines, "sync_metadata", { node_id: line.node_id });
+    recordLineApproval(result, "queue sidecar sync");
+    notice.value = "Sidecar sync queued — approve it in the Approvals console";
+  } catch (cause) {
+    lineUsersError.value = safeErrorMessage(cause, "Sidecar sync could not be queued");
+  } finally {
+    syncBusy.value = false;
+    await resize();
+  }
+}
+
+async function reattachLineUUID(): Promise<void> {
+  const line = lineDetail.value;
+  const next = reattachUUID.value.trim();
+  if (!line || !next || reattachBusy.value) return;
+  reattachBusy.value = true;
+  lineUsersError.value = "";
+  try {
+    await pluginCall(SERVICES.lines, "reattach", { line_hash_id: line.line_hash_id, line_uuid: next });
+    notice.value = "Line identity reattached — approve the queued sidecar sync before treating it as converged";
+    reattachUUID.value = "";
+    await loadCurrent(true);
+    const refreshed = await pluginCall<{ line: Line }>(SERVICES.lines, "get", { line_hash_id: line.line_hash_id });
+    if (refreshed.line) lineDetail.value = refreshed.line;
+  } catch (cause) {
+    lineUsersError.value = safeErrorMessage(cause, "Line identity could not be reattached");
+  } finally {
+    reattachBusy.value = false;
+    await resize();
+  }
+}
+
+// ── Credential rotation (one-time reveal) ────────────────────────────────────
+const rotateUser = ref<VpnUser>();
+const rotateProtocol = ref("");
+const rotateBusy = ref(false);
+const rotateRevealed = ref<{ email: string; protocol: string; secret: string }>();
+
+function openRotate(user: VpnUser): void {
+  rotateUser.value = user;
+  rotateProtocol.value = user.credentials[0]?.protocol ?? "";
+}
+
+async function rotateCredential(): Promise<void> {
+  if (!rotateUser.value || !rotateProtocol.value || rotateBusy.value) return;
+  rotateBusy.value = true;
+  try {
+    const result = await pluginCall<{ protocol: string; revealed_credential: string }>(
+      SERVICES.admin, "rotate", { user_id: rotateUser.value.id, protocol: rotateProtocol.value });
+    rotateRevealed.value = { email: rotateUser.value.email, protocol: result.protocol, secret: result.revealed_credential };
+    rotateUser.value = undefined;
+    notice.value = `${result.protocol} credential rotated — re-apply it to its lines to take effect on nodes`;
+    await loadCurrent(true);
+  } catch (cause) {
+    error.value = safeErrorMessage(cause, "Credential could not be rotated");
+  } finally {
+    rotateBusy.value = false;
+  }
+}
+
 
 const profileSettingsOpen = ref(false);
 const profileSettingsBusy = ref(false);
@@ -426,6 +576,7 @@ const profileForm = reactive<ProfilePluginConfig>({
   proxy_usage_xray_api: "",
   proxy_usage_xray_bin: "",
   proxy_usage_xray_pattern: "",
+  singbox_stats_api: "",
 });
 
 function applyProfileSettings(value: ProfileSettings): void {
@@ -438,6 +589,7 @@ function applyProfileSettings(value: ProfileSettings): void {
     proxy_usage_xray_api: value.saved.proxy_usage_xray_api ?? "",
     proxy_usage_xray_bin: value.saved.proxy_usage_xray_bin ?? "",
     proxy_usage_xray_pattern: value.saved.proxy_usage_xray_pattern ?? "",
+    singbox_stats_api: value.saved.singbox_stats_api ?? "",
   });
 }
 
@@ -584,6 +736,7 @@ onBeforeUnmount(() => {
           <td>{{ user.bindings.length }}</td><td>{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'Unlimited' }}</td><td>{{ formatDate(user.expires_at) }}</td>
           <td v-if="showUserActions" class="actions-cell"><div class="icon-actions">
             <button v-if="canUpdateUser" class="icon-button bordered" type="button" aria-label="Edit identity" title="Edit identity" @click="openEditUser(user)"><Pencil :size="14" /></button>
+            <button v-if="canRotateCredentials && user.credentials.length" class="icon-button bordered" type="button" aria-label="Rotate a credential" title="Rotate a credential" @click="openRotate(user)"><KeyRound :size="14" /></button>
             <button v-if="canBindUser || canUnbindUser" class="icon-button bordered" type="button" aria-label="Manage line bindings" title="Manage line bindings" @click="bindingUser = user"><Link2 :size="14" /></button>
             <button v-if="canDeleteUser" class="icon-button bordered destructive" type="button" aria-label="Delete identity" title="Delete identity" @click="deleteTarget = user"><Trash2 :size="14" /></button>
           </div></td>
@@ -631,6 +784,14 @@ onBeforeUnmount(() => {
 
     <div v-if="deleteTarget" class="modal-backdrop" @mousedown.self="deleteTarget = undefined"><section class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes plugin-owned credentials and line bindings.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong>?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>
 
+    <div v-if="rotateUser" class="modal-backdrop" @mousedown.self="rotateUser = undefined"><section class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>Rotate credential</h2><p>{{ rotateUser.email }} — the old secret stops working once the new one is applied to its lines.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
+      <label class="field"><span>Protocol credential</span><select v-model="rotateProtocol"><option v-for="credential in rotateUser.credentials" :key="credential.protocol" :value="credential.protocol">{{ credential.protocol }}</option></select></label>
+      <footer><button class="button button-secondary" type="button" @click="rotateUser = undefined">Cancel</button><button class="button button-primary" type="button" :disabled="rotateBusy || !rotateProtocol" @click="rotateCredential"><LoaderCircle v-if="rotateBusy" class="spin" :size="15" /> Rotate</button></footer></section></div>
+
+    <div v-if="rotateRevealed" class="modal-backdrop"><section class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>New {{ rotateRevealed.protocol }} credential</h2><p>{{ rotateRevealed.email }} — shown once and never retrievable again.</p></div></header>
+      <label class="field field-wide"><span>Secret (copy now)</span><textarea class="command-output mono" :value="rotateRevealed.secret" readonly rows="2" @focus="($event.target as HTMLTextAreaElement).select()" /></label>
+      <footer><button class="button button-primary" type="button" @click="rotateRevealed = undefined">I have saved it</button></footer></section></div>
+
     <div v-if="lineDetailOpen && lineDetail" class="modal-backdrop" @mousedown.self="closeLineDetails()"><section class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="line-detail-title"><header><div><h2 id="line-detail-title">Line details</h2><p>{{ lineDetailNodeName }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeLineDetails()"><X :size="17" /></button></header><div class="detail-body">
       <div v-if="lineDetailError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineDetailError }}</span></div>
       <div class="detail-grid">
@@ -644,8 +805,33 @@ onBeforeUnmount(() => {
         <div><span>Status</span><strong>{{ lineDetail.status || (lineDetail.last_error ? 'error' : 'ok') }}</strong><small>{{ lineDetail.user_known ? `${lineDetail.user_count} users` : 'user count unavailable' }}</small></div>
       </div>
       <div v-if="lineDetailBusy" class="loading-state loading-inline"><LoaderCircle class="spin" :size="18" /> Refreshing line details</div>
+      <section class="detail-section"><h3>Line identity</h3><dl class="detail-pairs"><dt class="mono">line_uuid</dt><dd class="mono">{{ lineDetail.line_uuid || 'pending allocation' }}</dd><template v-if="lineDetail.downstream_line_uuid"><dt class="mono">downstream_line_uuid</dt><dd class="mono">{{ lineDetail.downstream_line_uuid }}</dd></template></dl>
+        <div v-if="canSyncMetadata && !lineDetail.managed" class="icon-actions"><button class="button button-secondary button-compact" type="button" :disabled="syncBusy" title="Queue a reviewed sidecar apply for this node" @click="syncSidecar"><LoaderCircle v-if="syncBusy" class="spin" :size="13" /> Sync sidecar to node</button></div>
+        <div v-if="canReattachLine" class="binding-add"><input v-model="reattachUUID" class="mono" type="text" autocomplete="off" spellcheck="false" placeholder="Existing UUIDv4 to reattach" /><button class="button button-secondary button-compact" type="button" :disabled="reattachBusy || !reattachUUID.trim()" @click="reattachLineUUID"><LoaderCircle v-if="reattachBusy" class="spin" :size="13" /> Reattach identity</button></div>
+      </section>
+      <section v-if="canPlanLineUsers" class="detail-section"><h3>On-node users</h3>
+        <p class="field-help">Actions queue a reviewed {{ lineDetail.managed ? 'whole-config render and reload' : 'sb user add/del' }}. Nothing changes on the node until approved; successful apply then reconciles runtime discovery.</p>
+        <div v-if="lineUsersError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineUsersError }}</span></div>
+        <div class="binding-list">
+          <div v-for="user in lineDetailBoundUsers" :key="user.id">
+            <span>{{ user.email }}<small v-if="user.name"> ({{ user.name }})</small></span>
+            <span class="icon-actions">
+              <button class="button button-secondary button-compact" type="button" :disabled="lineUsersBusy" title="Queue a reviewed user update for this line" @click="planLineUser('plan_update', user.id)">Update</button>
+              <button class="button button-secondary button-compact destructive" type="button" :disabled="lineUsersBusy" title="Queue sb user del for this line" @click="planLineUser('plan_remove', user.id)">Remove</button>
+            </span>
+          </div>
+          <p v-if="!lineDetailBoundUsers.length" class="empty-inline">No identities bound to this line yet.</p>
+        </div>
+        <div v-if="lineDetailBindableUsers.length" class="binding-add">
+          <select v-model="lineUserAdd"><option value="">Select an identity to add</option><option v-for="user in lineDetailBindableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select>
+          <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Queue add</button>
+        </div>
+        <ul v-if="lineApprovals.length" class="detail-list">
+          <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span> — {{ item.summary }} <em>(pending approval)</em></li>
+        </ul>
+      </section>
       <section class="detail-section"><h3>Error</h3><p :class="{ 'error-text': lineDetail.last_error }">{{ lineErrorText(lineDetail) }}</p></section>
-      <section v-if="lineDetail.jump_edges?.length" class="detail-section"><h3>Relay targets</h3><ul class="detail-list"><li v-for="target in lineDetail.jump_edges" :key="target" class="mono">{{ target }}</li></ul></section>
+      <section v-if="lineDetail.jump_edges?.length" class="detail-section"><h3>Relay targets</h3><ul class="detail-list"><li v-for="target in lineDetail.jump_edges" :key="target" class="mono">{{ target }} <span v-if="lineDetail.declared_jump_edges?.includes(target)" class="badge" data-tone="info">declared</span></li></ul></section>
       <section v-if="lineDetail.metadata && Object.keys(lineDetail.metadata).length" class="detail-section"><h3>Metadata</h3><dl class="detail-pairs"><template v-for="(value, key) in lineDetail.metadata" :key="key"><dt class="mono">{{ key }}</dt><dd>{{ value || '-' }}</dd></template></dl></section>
     </div></section></div>
 
@@ -667,6 +853,7 @@ onBeforeUnmount(() => {
             <label class="field"><span>Xray API</span><input v-model="profileForm.proxy_usage_xray_api" class="mono" type="text" placeholder="127.0.0.1:10085" autocomplete="off" /></label>
             <label class="field"><span>Xray binary</span><input v-model="profileForm.proxy_usage_xray_bin" class="mono" type="text" placeholder="/usr/local/bin/xray" autocomplete="off" /></label>
             <label class="field field-wide"><span>Xray stat pattern</span><input v-model="profileForm.proxy_usage_xray_pattern" class="mono" type="text" autocomplete="off" /></label>
+            <label class="field field-wide"><span>sing-box stats API</span><input v-model="profileForm.singbox_stats_api" class="mono" type="text" placeholder="127.0.0.1:8080" autocomplete="off" /><small class="field-help">Loopback experimental API (sb stats on) — enables per-user stats (ADR-004).</small></label>
           </div>
           <section v-if="profileReconfigureCommand" class="detail-section"><h3>Generated agent command</h3><textarea class="command-output mono" :value="profileReconfigureCommand" readonly aria-label="Generated agent reconfiguration command" /></section>
         </template>

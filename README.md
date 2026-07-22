@@ -4,7 +4,7 @@ Official LatticeNet sing-box management plugin. This repository owns the complet
 plugin bundle: signed manifest, Linux runtime, sandboxed operator UI, deterministic
 packer, tests, and release workflow inputs.
 
-Current prerelease: `v0.8.0-alpha.4`.
+Current prerelease: `v0.8.0-alpha.5`.
 
 ## Ownership boundary
 
@@ -32,9 +32,9 @@ call may use an in-core service.
 - The iframe runs with `sandbox="allow-scripts"`; it receives no same-origin or
   top-navigation capability.
 - Every call is constrained to a service and method declared in `manifest.json`.
-- Fleet-wide Lines, Users, profiles, and usage reads require `proxy:read`.
+- Fleet-wide Lines, Users, profiles, and usage reads require `vpncore:read`.
   Per-node profile settings additionally require exact-node `node:read`.
-- Identity mutations require `proxy:admin`. Saving sing-box node integration
+- Identity mutations require `vpncore:admin`. Saving sing-box node integration
   settings requires exact-node `node:admin` plus `task:run`.
 - Credential secrets are write-only. Read models expose `has_secret`, never UUIDs
   or passwords.
@@ -43,6 +43,25 @@ call may use an in-core service.
   does not queue or execute a host task.
 - Host mutation still uses plan, approval, bounded agent task, and audit paths.
 - A node-restricted access token cannot open these fleet-global plugin views.
+
+## Scope migration and rollback
+
+The `>=0.2.2-alpha.2` server floor provides directional runtime compatibility:
+
+| Existing grant | vpn-core | Sub-Store | Native proxy APIs |
+| --- | --- | --- | --- |
+| `proxy:read/admin` | matching read/admin allowed | matching read/admin allowed | allowed |
+| `vpncore:read/admin` | allowed | denied | matching read/admin allowed |
+| `substore:read/admin` | denied | allowed | denied |
+
+Read never implies admin, and `prefix:*` follows the same directions. Delegation
+is directed: legacy proxy grants may delegate equal-strength canonical scopes
+for migration; canonical scopes cannot delegate proxy scopes or each other.
+
+Roll out the compatible server first, then the matching Dashboard, then this
+canonical-scope manifest. Roll back in reverse: restore the plugin manifests to
+legacy `proxy:*` declarations first, then the Dashboard, and remove server
+compatibility last only after canonical grants have been migrated or removed.
 
 ## Local verification
 

@@ -1,6 +1,8 @@
 export interface Line {
   id: string;
   line_hash_id: string;
+  line_uuid?: string;
+  downstream_line_uuid?: string;
   node_id: string;
   core: string;
   source: string;
@@ -15,6 +17,7 @@ export interface Line {
   outbound_server?: string;
   outbound_port?: number;
   jump_edges?: string[];
+  declared_jump_edges?: string[];
   metadata?: Record<string, string>;
   user_count: number;
   user_known: boolean;
