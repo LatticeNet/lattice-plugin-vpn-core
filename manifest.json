@@ -11,10 +11,10 @@
   ],
   "version": "0.9.0-alpha.1",
   "publisher": "latticenet",
-  "signature_ed25519": "OfQv70x/Qz7f1rqjhCQrSGNGP9WtDcz3htZ+CMrmOYCR53zPdcmmYENsl3POtPvBC8Np40yOr0Mn0TkPdmweBQ==",
+  "signature_ed25519": "rf9Wn9eN3yq/EUcSqNj0KrEuGYDYOrtEFDTknanhq81Dm+m6CHudDdrclJ499NzonGQ55WqsBqXYfLKFG5phCg==",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "805339996b84c7e3b10f61636cf701d97f96d470def741ca5f106554b42a448c"
+    "digest_sha256": "601a070f46b58af203f8e2c1ae20378e68c8ebd618246c47d015fb5e45d5df6d"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -135,6 +135,13 @@
           "effect": "read",
           "scopes": [
             "proxy:read"
+          ]
+        },
+        {
+          "name": "sync_metadata",
+          "effect": "write",
+          "scopes": [
+            "proxy:admin"
           ]
         }
       ],

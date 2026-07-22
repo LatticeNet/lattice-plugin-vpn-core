@@ -189,6 +189,7 @@ const canReadProfileSettings = computed(() => canCall(init.value, SERVICES.profi
 const canConfigureProfile = computed(() => canCall(init.value, SERVICES.profiles, "configure"));
 const canPlanLineUsers = computed(() => canCall(init.value, SERVICES.admin, "plan_add") && canCall(init.value, SERVICES.admin, "plan_remove"));
 const canRotateCredentials = computed(() => canCall(init.value, SERVICES.admin, "rotate"));
+const canSyncMetadata = computed(() => canCall(init.value, SERVICES.lines, "sync_metadata"));
 
 async function pluginCall<T>(service: string, method: string, payload: unknown = {}): Promise<T> {
   if (!bridge || !canCall(init.value, service, method)) throw new Error(`Method ${service}.${method} is not available for this session`);
@@ -502,6 +503,25 @@ async function bindAndApplyToLine(): Promise<void> {
   lineUserAdd.value = "";
 }
 
+const syncBusy = ref(false);
+
+async function syncSidecar(): Promise<void> {
+  const line = lineDetail.value;
+  if (!line || syncBusy.value) return;
+  syncBusy.value = true;
+  lineUsersError.value = "";
+  try {
+    const result = await pluginCall<LinePlanResult>(SERVICES.lines, "sync_metadata", { node_id: line.node_id });
+    recordLineApproval(result, "queue sidecar sync");
+    notice.value = "Sidecar sync queued — approve it in the Approvals console";
+  } catch (cause) {
+    lineUsersError.value = safeErrorMessage(cause, "Sidecar sync could not be queued");
+  } finally {
+    syncBusy.value = false;
+    await resize();
+  }
+}
+
 // ── Credential rotation (one-time reveal) ────────────────────────────────────
 const rotateUser = ref<VpnUser>();
 const rotateProtocol = ref("");
@@ -774,7 +794,9 @@ onBeforeUnmount(() => {
         <div><span>Status</span><strong>{{ lineDetail.status || (lineDetail.last_error ? 'error' : 'ok') }}</strong><small>{{ lineDetail.user_known ? `${lineDetail.user_count} users` : 'user count unavailable' }}</small></div>
       </div>
       <div v-if="lineDetailBusy" class="loading-state loading-inline"><LoaderCircle class="spin" :size="18" /> Refreshing line details</div>
-      <section class="detail-section"><h3>Line identity</h3><dl class="detail-pairs"><dt class="mono">line_uuid</dt><dd class="mono">{{ lineDetail.line_uuid || 'pending allocation' }}</dd><template v-if="lineDetail.downstream_line_uuid"><dt class="mono">downstream_line_uuid</dt><dd class="mono">{{ lineDetail.downstream_line_uuid }}</dd></template></dl></section>
+      <section class="detail-section"><h3>Line identity</h3><dl class="detail-pairs"><dt class="mono">line_uuid</dt><dd class="mono">{{ lineDetail.line_uuid || 'pending allocation' }}</dd><template v-if="lineDetail.downstream_line_uuid"><dt class="mono">downstream_line_uuid</dt><dd class="mono">{{ lineDetail.downstream_line_uuid }}</dd></template></dl>
+        <div v-if="canSyncMetadata && !lineDetail.managed" class="icon-actions"><button class="button button-secondary button-compact" type="button" :disabled="syncBusy" title="Queue a reviewed sidecar apply for this node" @click="syncSidecar"><LoaderCircle v-if="syncBusy" class="spin" :size="13" /> Sync sidecar to node</button></div>
+      </section>
       <section v-if="lineDetail.managed" class="detail-section"><h3>On-node users</h3><p class="field-help">Managed lines are updated through the whole-config render; per-line on-node writes arrive in a later slice.</p></section>
       <section v-else-if="canPlanLineUsers" class="detail-section"><h3>On-node users</h3>
         <p class="field-help">Actions queue a reviewed on-node change (sb user add/del). Nothing changes on the node until approved in the Approvals console — then rediscover.</p>
