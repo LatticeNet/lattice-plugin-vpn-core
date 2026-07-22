@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.9.0-alpha.1",
+  "version": "0.8.0-alpha.5",
   "publisher": "latticenet",
-  "signature_ed25519": "VugbzAu39g6J3cGdPdiqfDgfk4a/EhwdsI2Air/znTwbIbIjTAECy+nKIGgHJTt/ZEeysnnrfz1gRCapVXMUBg==",
+  "signature_ed25519": "XL+jgzZWnfSfffLuJPBDFoKoJjQfVaLGRyMuKCq7zH7yKc9UcnQGMAKVwh9S0qdgEVSctwRqESX/MU+GTawxBg==",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "5c4cfaa35003aea67602293a2d0846c694f6493cf167472ad4558dc39558c7df"
+    "digest_sha256": "662354b0c15d461514f6c49262cd4e6b4e541cba77ce89092a9fcdc93fe74a32"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -29,7 +29,7 @@
     "bridge_version": "1"
   },
   "compatibility": {
-    "server": "\u003e=0.2.1",
+    "server": "\u003e=0.2.2-alpha.2",
     "dashboard_host": "\u003e=1",
     "runtime_protocol": "\u003e=1"
   },
@@ -42,7 +42,7 @@
         "route": "lines",
         "icon": "Radar",
         "scopes": [
-          "proxy:read"
+          "vpncore:read"
         ]
       },
       {
@@ -52,7 +52,7 @@
         "route": "users",
         "icon": "Users",
         "scopes": [
-          "proxy:read"
+          "vpncore:read"
         ]
       },
       {
@@ -62,7 +62,7 @@
         "route": "profiles",
         "icon": "ServerCog",
         "scopes": [
-          "proxy:read"
+          "vpncore:read"
         ]
       },
       {
@@ -72,7 +72,7 @@
         "route": "usage",
         "icon": "Gauge",
         "scopes": [
-          "proxy:read"
+          "vpncore:read"
         ]
       }
     ],
@@ -107,14 +107,14 @@
           "name": "export",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
           "name": "list",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         }
       ],
@@ -127,21 +127,28 @@
           "name": "list",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
           "name": "get",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
           "name": "sync_metadata",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "reattach",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
           ]
         }
       ],
@@ -154,14 +161,14 @@
           "name": "list",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
           "name": "get",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         }
       ],
@@ -174,56 +181,63 @@
           "name": "create",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "update",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "delete",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "bind",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "unbind",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "plan_add",
           "effect": "plan",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         },
         {
           "name": "plan_remove",
           "effect": "plan",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "plan_update",
+          "effect": "plan",
+          "scopes": [
+            "vpncore:admin"
           ]
         },
         {
           "name": "rotate",
           "effect": "write",
           "scopes": [
-            "proxy:admin"
+            "vpncore:admin"
           ]
         }
       ],
@@ -236,7 +250,7 @@
           "name": "query",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         },
         {
@@ -264,7 +278,7 @@
           "name": "query",
           "effect": "read",
           "scopes": [
-            "proxy:read"
+            "vpncore:read"
           ]
         }
       ],

@@ -126,7 +126,7 @@ func TestManifestScopesProfileSettingsPerNode(t *testing.T) {
 		effect string
 		scopes []string
 	}{
-		"query":     {effect: "read", scopes: []string{"proxy:read"}},
+		"query":     {effect: "read", scopes: []string{"vpncore:read"}},
 		"settings":  {effect: "read", scopes: []string{"node:read"}},
 		"configure": {effect: "write", scopes: []string{"node:admin", "task:run"}},
 	}

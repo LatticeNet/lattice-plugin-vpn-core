@@ -8,11 +8,12 @@ function harness() {
   const parent = { postMessage: (message: unknown) => posted.push(message) };
   const win = {
     parent,
-    location: { hash: "#lattice_nonce=0123456789abcdef0123456789abcdef" },
+    location: { hash: "#lattice_nonce=0123456789abcdef0123456789abcdef&host_origin=https%3A%2F%2Fdash.example" },
     addEventListener: (_name: string, next: (event: MessageEvent) => void) => { listener = next; },
     removeEventListener: vi.fn(),
   } as unknown as Window;
-  const dispatch = (data: unknown, source: unknown = parent) => listener?.({ data, source } as MessageEvent);
+  const dispatch = (data: unknown, source: unknown = parent) =>
+    listener?.({ data, source, origin: "https://dash.example" } as MessageEvent);
   return { win, parent, posted, dispatch };
 }
 
@@ -26,7 +27,7 @@ describe("BridgeClient", () => {
     expect(posted.filter((message) => (message as { type?: string }).type === "lattice.plugin.ready")).toHaveLength(2);
     const init = {
       type: "lattice.host.init", nonce: client.nonce, version: "1",
-      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.4", pluginRoute: "lines",
+      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.5", pluginRoute: "lines",
       locale: "en", colorScheme: "dark", designTokens: {},
       interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list"] }],
     };
@@ -120,7 +121,7 @@ describe("BridgeClient host origin pinning", () => {
     expect(posted[0].target).toBe("https://dash.example");
     const init = {
       type: "lattice.host.init", nonce: client.nonce, version: "1",
-      pluginId: "latticenet.vpn-core", pluginVersion: "0.9.0-alpha.1", pluginRoute: "lines",
+      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.5", pluginRoute: "lines",
       locale: "en", colorScheme: "dark", designTokens: {},
       interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list"] }],
     };
@@ -134,18 +135,9 @@ describe("BridgeClient host origin pinning", () => {
     client.dispose();
   });
 
-  it("keeps legacy nonce-only behavior when the host sends no host_origin", () => {
-    const { win, posted, dispatch } = originHarness("#lattice_nonce=0123456789abcdef0123456789abcdef");
-    const client = new BridgeClient(win);
-    expect(posted[0].target).toBe("*");
-    const init = {
-      type: "lattice.host.init", nonce: client.nonce, version: "1",
-      pluginId: "latticenet.vpn-core", pluginVersion: "0.9.0-alpha.1", pluginRoute: "lines",
-      locale: "en", colorScheme: "dark", designTokens: {},
-      interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list"] }],
-    };
-    dispatch(init, "https://anything.example");
-    return expect(client.init).resolves.toMatchObject({ pluginId: "latticenet.vpn-core" });
+  it("rejects a missing host_origin instead of using a wildcard target", () => {
+    const { win } = originHarness("#lattice_nonce=0123456789abcdef0123456789abcdef");
+    expect(() => new BridgeClient(win)).toThrow("Missing plugin host origin");
   });
 
   it("rejects a malformed host_origin instead of downgrading", () => {

@@ -187,9 +187,11 @@ const showUserActions = computed(() => canUpdateUser.value || canDeleteUser.valu
 const canViewLineDetails = computed(() => canCall(init.value, SERVICES.lines, "get"));
 const canReadProfileSettings = computed(() => canCall(init.value, SERVICES.profiles, "settings"));
 const canConfigureProfile = computed(() => canCall(init.value, SERVICES.profiles, "configure"));
-const canPlanLineUsers = computed(() => canCall(init.value, SERVICES.admin, "plan_add") && canCall(init.value, SERVICES.admin, "plan_remove"));
+const canPlanLineUsers = computed(() => ["plan_add", "plan_update", "plan_remove"]
+  .every((method) => canCall(init.value, SERVICES.admin, method)));
 const canRotateCredentials = computed(() => canCall(init.value, SERVICES.admin, "rotate"));
 const canSyncMetadata = computed(() => canCall(init.value, SERVICES.lines, "sync_metadata"));
+const canReattachLine = computed(() => canCall(init.value, SERVICES.lines, "reattach"));
 
 async function pluginCall<T>(service: string, method: string, payload: unknown = {}): Promise<T> {
   if (!bridge || !canCall(init.value, service, method)) throw new Error(`Method ${service}.${method} is not available for this session`);
@@ -425,9 +427,8 @@ function closeLineDetails(): void {
   lineDetailNodeName.value = "";
 }
 
-// ── On-node line users (design-15 D3, adopted track) ─────────────────────────
-// Every action queues a reviewed plan (`sb user add/del`); nothing reaches the
-// node until the operator approves it in the host Approvals console.
+// ── On-node line users (design-15 D3, managed + adopted tracks) ───────────────
+// Every action queues a reviewed plan; nothing reaches the node until approval.
 const lineUsersBusy = ref(false);
 const lineUsersError = ref("");
 const lineUserAdd = ref("");
@@ -464,14 +465,14 @@ function recordLineApproval(result: LinePlanResult, fallback: string): void {
   if (result.approval?.id) lineApprovals.value = [{ id: result.approval.id, summary }, ...lineApprovals.value];
 }
 
-async function planLineUser(op: "plan_add" | "plan_remove", userId: string): Promise<void> {
+async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", userId: string): Promise<void> {
   const line = lineDetail.value;
   if (!line || lineUsersBusy.value) return;
   lineUsersBusy.value = true;
   lineUsersError.value = "";
   try {
     const result = await pluginCall<LinePlanResult>(SERVICES.admin, op, { user_id: userId, line_hash_id: line.line_hash_id });
-    recordLineApproval(result, op === "plan_add" ? "queue user add" : "queue user remove");
+    recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
     notice.value = "On-node action queued — approve it in the Approvals console, then rediscover";
     await loadCurrent(true);
   } catch (cause) {
@@ -485,25 +486,14 @@ async function planLineUser(op: "plan_add" | "plan_remove", userId: string): Pro
 async function bindAndApplyToLine(): Promise<void> {
   const line = lineDetail.value;
   if (!line || !lineUserAdd.value || lineUsersBusy.value) return;
-  lineUsersBusy.value = true;
-  lineUsersError.value = "";
-  try {
-    if (canBindUser.value) {
-      await pluginCall(SERVICES.admin, "bind", { user_id: lineUserAdd.value, line_hash_id: line.line_hash_id });
-    }
-  } catch (cause) {
-    lineUsersError.value = safeErrorMessage(cause, "The user could not be bound to this line");
-    lineUsersBusy.value = false;
-    return;
-  }
-  // planLineUser manages its own busy state; hand the selection over to it.
-  lineUsersBusy.value = false;
   const userId = lineUserAdd.value;
   await planLineUser("plan_add", userId);
   lineUserAdd.value = "";
 }
 
 const syncBusy = ref(false);
+const reattachUUID = ref("");
+const reattachBusy = ref(false);
 
 async function syncSidecar(): Promise<void> {
   const line = lineDetail.value;
@@ -518,6 +508,27 @@ async function syncSidecar(): Promise<void> {
     lineUsersError.value = safeErrorMessage(cause, "Sidecar sync could not be queued");
   } finally {
     syncBusy.value = false;
+    await resize();
+  }
+}
+
+async function reattachLineUUID(): Promise<void> {
+  const line = lineDetail.value;
+  const next = reattachUUID.value.trim();
+  if (!line || !next || reattachBusy.value) return;
+  reattachBusy.value = true;
+  lineUsersError.value = "";
+  try {
+    await pluginCall(SERVICES.lines, "reattach", { line_hash_id: line.line_hash_id, line_uuid: next });
+    notice.value = "Line identity reattached — approve the queued sidecar sync before treating it as converged";
+    reattachUUID.value = "";
+    await loadCurrent(true);
+    const refreshed = await pluginCall<{ line: Line }>(SERVICES.lines, "get", { line_hash_id: line.line_hash_id });
+    if (refreshed.line) lineDetail.value = refreshed.line;
+  } catch (cause) {
+    lineUsersError.value = safeErrorMessage(cause, "Line identity could not be reattached");
+  } finally {
+    reattachBusy.value = false;
     await resize();
   }
 }
@@ -796,16 +807,16 @@ onBeforeUnmount(() => {
       <div v-if="lineDetailBusy" class="loading-state loading-inline"><LoaderCircle class="spin" :size="18" /> Refreshing line details</div>
       <section class="detail-section"><h3>Line identity</h3><dl class="detail-pairs"><dt class="mono">line_uuid</dt><dd class="mono">{{ lineDetail.line_uuid || 'pending allocation' }}</dd><template v-if="lineDetail.downstream_line_uuid"><dt class="mono">downstream_line_uuid</dt><dd class="mono">{{ lineDetail.downstream_line_uuid }}</dd></template></dl>
         <div v-if="canSyncMetadata && !lineDetail.managed" class="icon-actions"><button class="button button-secondary button-compact" type="button" :disabled="syncBusy" title="Queue a reviewed sidecar apply for this node" @click="syncSidecar"><LoaderCircle v-if="syncBusy" class="spin" :size="13" /> Sync sidecar to node</button></div>
+        <div v-if="canReattachLine" class="binding-add"><input v-model="reattachUUID" class="mono" type="text" autocomplete="off" spellcheck="false" placeholder="Existing UUIDv4 to reattach" /><button class="button button-secondary button-compact" type="button" :disabled="reattachBusy || !reattachUUID.trim()" @click="reattachLineUUID"><LoaderCircle v-if="reattachBusy" class="spin" :size="13" /> Reattach identity</button></div>
       </section>
-      <section v-if="lineDetail.managed" class="detail-section"><h3>On-node users</h3><p class="field-help">Managed lines are updated through the whole-config render; per-line on-node writes arrive in a later slice.</p></section>
-      <section v-else-if="canPlanLineUsers" class="detail-section"><h3>On-node users</h3>
-        <p class="field-help">Actions queue a reviewed on-node change (sb user add/del). Nothing changes on the node until approved in the Approvals console — then rediscover.</p>
+      <section v-if="canPlanLineUsers" class="detail-section"><h3>On-node users</h3>
+        <p class="field-help">Actions queue a reviewed {{ lineDetail.managed ? 'whole-config render and reload' : 'sb user add/del' }}. Nothing changes on the node until approved; successful apply then reconciles runtime discovery.</p>
         <div v-if="lineUsersError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineUsersError }}</span></div>
         <div class="binding-list">
           <div v-for="user in lineDetailBoundUsers" :key="user.id">
             <span>{{ user.email }}<small v-if="user.name"> ({{ user.name }})</small></span>
             <span class="icon-actions">
-              <button class="button button-secondary button-compact" type="button" :disabled="lineUsersBusy" title="Queue sb user add for this line" @click="planLineUser('plan_add', user.id)">Apply</button>
+              <button class="button button-secondary button-compact" type="button" :disabled="lineUsersBusy" title="Queue a reviewed user update for this line" @click="planLineUser('plan_update', user.id)">Update</button>
               <button class="button button-secondary button-compact destructive" type="button" :disabled="lineUsersBusy" title="Queue sb user del for this line" @click="planLineUser('plan_remove', user.id)">Remove</button>
             </span>
           </div>
@@ -813,7 +824,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="lineDetailBindableUsers.length" class="binding-add">
           <select v-model="lineUserAdd"><option value="">Select an identity to add</option><option v-for="user in lineDetailBindableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select>
-          <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Bind &amp; queue add</button>
+          <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Queue add</button>
         </div>
         <ul v-if="lineApprovals.length" class="detail-list">
           <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span> — {{ item.summary }} <em>(pending approval)</em></li>
