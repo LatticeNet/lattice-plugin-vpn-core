@@ -19,7 +19,7 @@ import {
   X,
 } from "@lucide/vue";
 
-import { BridgeClient, canCall, type HostInit } from "./bridge";
+import { BridgeClient, canCall, type HostInit } from "@latticenet/plugin-bridge";
 import {
   filterLineGroups,
   formatBytes,
@@ -136,7 +136,7 @@ const usage = ref<UsageResult>({ by_user: [], by_node: [], collectors: [], per_l
 
 let bridge: BridgeClient | undefined;
 try {
-  bridge = new BridgeClient(window);
+  bridge = new BridgeClient({ window, expectedPluginId: "latticenet.vpn-core", expectedRoutes: ["lines", "users", "profiles", "usage"], idPrefix: "vpn-core" });
   bridge.init.then(async (value) => {
     init.value = value;
     await loadCurrent();
