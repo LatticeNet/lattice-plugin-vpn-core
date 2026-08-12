@@ -11,10 +11,10 @@
   ],
   "version": "0.8.0-alpha.6",
   "publisher": "latticenet",
-  "signature_ed25519": "XL+jgzZWnfSfffLuJPBDFoKoJjQfVaLGRyMuKCq7zH7yKc9UcnQGMAKVwh9S0qdgEVSctwRqESX/MU+GTawxBg==",
+  "signature_ed25519": "0IEa9L4EcBn5EEWlgMTDl9V4IhV9BW+nAQqP9q5ufRj401CMmStEiK0RPocCAWXnJ96XdfyhodIFbah1qG5FDw==",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "662354b0c15d461514f6c49262cd4e6b4e541cba77ce89092a9fcdc93fe74a32"
+    "digest_sha256": "dbb3d9d78a55ad8193e7e7baf36d68ac18063c7e39fc18bc2ee87ac39d65f69f"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -29,9 +29,9 @@
     "bridge_version": "1"
   },
   "compatibility": {
-    "server": ">=0.2.2-alpha.2",
-    "dashboard_host": ">=1",
-    "runtime_protocol": ">=1"
+    "server": "\u003e=0.2.2-alpha.2",
+    "dashboard_host": "\u003e=1",
+    "runtime_protocol": "\u003e=1"
   },
   "ui": {
     "nav": [
