@@ -27,7 +27,7 @@ describe("BridgeClient", () => {
     expect(posted.filter((message) => (message as { type?: string }).type === "lattice.plugin.ready")).toHaveLength(2);
     const init = {
       type: "lattice.host.init", nonce: client.nonce, version: "1",
-      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.6", pluginRoute: "lines",
+      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.8", pluginRoute: "lines",
       locale: "en", colorScheme: "dark", designTokens: {},
       interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list"] }],
     };
@@ -121,7 +121,7 @@ describe("BridgeClient host origin pinning", () => {
     expect(posted[0].target).toBe("https://dash.example");
     const init = {
       type: "lattice.host.init", nonce: client.nonce, version: "1",
-      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.6", pluginRoute: "lines",
+      pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.8", pluginRoute: "lines",
       locale: "en", colorScheme: "dark", designTokens: {},
       interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list"] }],
     };
