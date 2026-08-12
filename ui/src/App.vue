@@ -29,9 +29,15 @@ import {
   lineErrorText,
   lineOwnership,
   lineStatus,
+  overlayCoverage,
+  overlayTone,
+  rolloutSummaryLine,
   safeErrorMessage,
+  unresolvedOverlayDefs,
   type Line,
   type LineGroup,
+  type ManagedLineDef,
+  type RolloutResult,
   type VpnUser,
 } from "./vpnModel";
 
@@ -133,6 +139,7 @@ const lines = ref<LineGroup[]>([]);
 const users = ref<VpnUser[]>([]);
 const profiles = ref<Profile[]>([]);
 const usage = ref<UsageResult>({ by_user: [], by_node: [], collectors: [], per_line: false });
+const managedDefs = ref<ManagedLineDef[]>([]);
 
 let bridge: BridgeClient | undefined;
 try {
@@ -192,6 +199,12 @@ const canPlanLineUsers = computed(() => ["plan_add", "plan_update", "plan_remove
 const canRotateCredentials = computed(() => canCall(init.value, SERVICES.admin, "rotate"));
 const canSyncMetadata = computed(() => canCall(init.value, SERVICES.lines, "sync_metadata"));
 const canReattachLine = computed(() => canCall(init.value, SERVICES.lines, "reattach"));
+const canReadManaged = computed(() => canCall(init.value, SERVICES.lines, "managed"));
+const canRollout = computed(() => canCall(init.value, SERVICES.lines, "rollout"));
+const overlayStats = computed(() => overlayCoverage(lines.value));
+const unresolvedDefs = computed(() => unresolvedOverlayDefs(managedDefs.value, lines.value));
+const rolloutableUsers = computed(() => users.value.filter((user) =>
+  user.enabled && user.credentials.some((cred) => cred.protocol === "vless" && cred.has_secret)));
 
 async function pluginCall<T>(service: string, method: string, payload: unknown = {}): Promise<T> {
   if (!bridge || !canCall(init.value, service, method)) throw new Error(`Method ${service}.${method} is not available for this session`);
@@ -206,8 +219,21 @@ async function loadCurrent(background = false): Promise<void> {
   try {
     switch (route.value) {
       case "lines": {
-        const result = await pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list");
-        lines.value = result.groups ?? [];
+        const calls: Promise<void>[] = [
+          pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list")
+            .then((result) => { lines.value = result.groups ?? []; }),
+        ];
+        if (canReadManaged.value) {
+          calls.push(pluginCall<{ managed_lines: ManagedLineDef[] }>(SERVICES.lines, "managed")
+            .then((result) => { managedDefs.value = result.managed_lines ?? []; }));
+        } else {
+          managedDefs.value = [];
+        }
+        if (canRollout.value) {
+          calls.push(pluginCall<{ users: VpnUser[] }>(SERVICES.users, "list")
+            .then((result) => { users.value = result.users ?? []; }));
+        }
+        await Promise.all(calls);
         break;
       }
       case "users": {
@@ -233,6 +259,43 @@ async function loadCurrent(background = false): Promise<void> {
   } finally {
     loading.value = false;
     refreshing.value = false;
+    await resize();
+  }
+}
+
+// design-17 S3: the managed-line rollout. The modal collects the account and
+// candidate port; the compile only files approvals — nothing touches a node
+// until the operator approves the batch (the result panel says exactly that).
+const rolloutOpen = ref(false);
+const rolloutBusy = ref(false);
+const rolloutError = ref("");
+const rolloutResult = ref<RolloutResult>();
+const rolloutUserId = ref("");
+const rolloutPort = ref(24443);
+
+function openRollout(): void {
+  rolloutUserId.value = rolloutableUsers.value[0]?.id ?? "";
+  rolloutPort.value = 24443;
+  rolloutError.value = "";
+  rolloutResult.value = undefined;
+  rolloutOpen.value = true;
+}
+
+async function runRollout(): Promise<void> {
+  if (!rolloutUserId.value || rolloutBusy.value) return;
+  rolloutBusy.value = true;
+  rolloutError.value = "";
+  try {
+    const result = await pluginCall<RolloutResult>(SERVICES.lines, "rollout", {
+      user_id: rolloutUserId.value,
+      candidate_port: rolloutPort.value || undefined,
+    });
+    rolloutResult.value = result;
+    await loadCurrent(true);
+  } catch (cause) {
+    rolloutError.value = safeErrorMessage(cause, "Rollout could not be planned");
+  } finally {
+    rolloutBusy.value = false;
     await resize();
   }
 }
@@ -694,8 +757,21 @@ onBeforeUnmount(() => {
         <div><span>Healthy</span><strong>{{ healthyLines }}</strong></div>
         <div><span>Managed</span><strong>{{ managedLines }}</strong></div>
         <div><span>Nodes</span><strong>{{ lines.length }}</strong></div>
+        <div v-if="canReadManaged"><span>Lattice-managed</span><strong>{{ overlayStats.covered }} / {{ overlayStats.total }} nodes</strong></div>
       </section>
-      <section class="toolbar"><input v-model="search" class="search-input" type="search" placeholder="Search node, line, status, outbound or error" /></section>
+      <section class="toolbar">
+        <input v-model="search" class="search-input" type="search" placeholder="Search node, line, status, outbound or error" />
+        <button v-if="canRollout" class="button button-primary" type="button" @click="openRollout"><Plus :size="15" /> Roll out managed lines</button>
+      </section>
+      <section v-if="unresolvedDefs.length" class="data-panel overlay-strip" aria-label="Managed line rollout status">
+        <div v-for="def in unresolvedDefs" :key="def.line_uuid" class="overlay-def">
+          <span class="badge" :data-tone="overlayTone(def.status)">{{ def.status }}</span>
+          <strong>{{ def.node_id }}</strong>
+          <span class="mono">{{ def.tag }} · :{{ def.port }}</span>
+          <span v-if="def.last_error" class="error-text">{{ def.last_error }}</span>
+          <span v-else-if="def.status === 'planned'" class="muted">awaiting approval</span>
+        </div>
+      </section>
       <section v-if="visibleLines.length" class="data-panel">
         <div class="table-wrap"><table><thead><tr><th>Node</th><th>Line</th><th>Core</th><th>Source</th><th>Ownership</th><th>Endpoint</th><th>Listen</th><th>Reality SNI</th><th>Users</th><th>Outbound ref</th><th>Status</th><th>Error</th><th v-if="canViewLineDetails" class="actions-cell">Actions</th></tr></thead>
           <tbody><tr v-for="{ group, line } in visibleLines" :key="line.line_hash_id">
@@ -703,7 +779,7 @@ onBeforeUnmount(() => {
             <td><strong>{{ line.name }}</strong><small>{{ line.type || 'unknown' }} / {{ line.line_hash_id }}</small></td>
             <td><span class="badge">{{ line.core || 'unknown' }}</span></td>
             <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ line.source }}</span></td>
-            <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ lineOwnership(line) }}</span></td>
+            <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ lineOwnership(line) }}</span><span v-if="line.overlay" class="badge" :data-tone="overlayTone(line.overlay_status)" :title="line.overlay_user ? `Bound account: ${line.overlay_user}` : undefined">lattice-managed</span></td>
             <td class="mono">{{ formatLineEndpoint(line) }}</td>
             <td class="mono">{{ formatLineListen(line) }}</td>
             <td class="mono">{{ formatLineDomain(line) }}</td>
@@ -780,6 +856,24 @@ onBeforeUnmount(() => {
       <template v-if="!editingUser"><label class="field"><span>Protocol</span><select v-model="userForm.protocol"><option v-for="protocol in ['vless','vmess','trojan','shadowsocks','hysteria2','tuic','anytls']" :key="protocol" :value="protocol">{{ protocol }}</option></select></label><label class="field"><span>{{ ['vless','vmess','tuic'].includes(userForm.protocol) ? 'UUID' : 'Password' }}</span><input v-model="userForm.secret" type="password" autocomplete="new-password" /></label><label class="field field-wide"><span>Flow override</span><input v-model="userForm.flow" type="text" placeholder="Optional" /></label></template>
       <label class="field field-wide"><span>Comment</span><textarea v-model="userForm.comment" rows="3" /></label></div><footer><button class="button button-secondary" type="button" @click="userDialogOpen = false">Cancel</button><button class="button button-primary" type="button" :disabled="savingUser || !userForm.email.trim()" @click="saveUser"><LoaderCircle v-if="savingUser" class="spin" :size="15" />{{ editingUser ? 'Save changes' : 'Create identity' }}</button></footer></section></div>
 
+    <div v-if="rolloutOpen" class="modal-backdrop" @mousedown.self="rolloutOpen = false"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="rollout-title"><header><div><h2 id="rollout-title">Roll out managed lines</h2><p>One lattice-owned VLESS+REALITY line per node, bound to one account. This only files an approval batch — nothing changes on any node until you approve it.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rolloutOpen = false"><X :size="17" /></button></header>
+      <template v-if="!rolloutResult">
+        <div class="form-grid">
+          <label>Account to bind<select v-model="rolloutUserId"><option value="" disabled>Select an account</option><option v-for="user in rolloutableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select></label>
+          <label>Candidate port<input v-model.number="rolloutPort" type="number" min="1" max="65535" /><small>Used on every node when free; taken ports plan upward per node.</small></label>
+        </div>
+        <p v-if="rolloutError" class="alert" role="alert">{{ rolloutError }}</p>
+        <footer><button class="button button-primary" type="button" :disabled="!rolloutUserId || rolloutBusy" @click="runRollout"><LoaderCircle v-if="rolloutBusy" class="spin" :size="15" /> Plan the rollout</button></footer>
+      </template>
+      <template v-else>
+        <p class="alert alert-success" aria-live="polite">{{ rolloutSummaryLine(rolloutResult) }}</p>
+        <ul v-if="rolloutResult.skipped?.length" class="detail-list">
+          <li v-for="item in rolloutResult.skipped" :key="item.node_id"><strong>{{ item.node_id }}</strong> — {{ item.reason }}</li>
+        </ul>
+        <p class="muted">Next: Operations → Approvals — one event card covers the whole batch.</p>
+        <footer><button class="button button-secondary" type="button" @click="rolloutOpen = false">Done</button></footer>
+      </template>
+    </section></div>
     <div v-if="bindingUser" class="modal-backdrop" @mousedown.self="bindingUser = undefined"><section class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div v-if="canBindUser" class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button v-if="canUnbindUser" class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines bound to this identity.</p><p v-if="!canBindUser && !canUnbindUser" class="empty-inline">This session cannot change bindings.</p></div></section></div>
 
     <div v-if="deleteTarget" class="modal-backdrop" @mousedown.self="deleteTarget = undefined"><section class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes plugin-owned credentials and line bindings.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong>?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>

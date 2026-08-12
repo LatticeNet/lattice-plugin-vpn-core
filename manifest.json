@@ -9,7 +9,7 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.8.0-alpha.5",
+  "version": "0.8.0-alpha.6",
   "publisher": "latticenet",
   "signature_ed25519": "XL+jgzZWnfSfffLuJPBDFoKoJjQfVaLGRyMuKCq7zH7yKc9UcnQGMAKVwh9S0qdgEVSctwRqESX/MU+GTawxBg==",
   "bundle": {
@@ -29,9 +29,9 @@
     "bridge_version": "1"
   },
   "compatibility": {
-    "server": "\u003e=0.2.2-alpha.2",
-    "dashboard_host": "\u003e=1",
-    "runtime_protocol": "\u003e=1"
+    "server": ">=0.2.2-alpha.2",
+    "dashboard_host": ">=1",
+    "runtime_protocol": ">=1"
   },
   "ui": {
     "nav": [
@@ -147,6 +147,20 @@
         {
           "name": "reattach",
           "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "managed",
+          "effect": "read",
+          "scopes": [
+            "vpncore:read"
+          ]
+        },
+        {
+          "name": "rollout",
+          "effect": "plan",
           "scopes": [
             "vpncore:admin"
           ]
