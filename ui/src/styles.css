@@ -147,3 +147,11 @@ td small { display: block; max-width: 380px; overflow: hidden; margin-top: 2px; 
   .toolbar .button { width: 100%; }
   .binding-add { grid-template-columns: 1fr; }
 }
+
+/* design-17 S3: managed-line overlay surface — semantic tones only. */
+.badge[data-tone="success"] { color: #147a4b; border-color: #93d3b2; background: #eef9f2; }
+.badge[data-tone="error"] { color: var(--destructive, #b52b2b); border-color: #e3a8a8; background: #fdf1f1; }
+.overlay-strip { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.overlay-def { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; flex-wrap: wrap; }
+.overlay-def .muted, .modal .muted { color: var(--muted, #667); font-size: 12px; }
+.modal footer { padding: 0 17px 17px; display: flex; justify-content: flex-end; gap: 8px; }
