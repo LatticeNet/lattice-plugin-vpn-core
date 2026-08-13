@@ -56,6 +56,22 @@ describe("normalizeChainTopology", () => {
       line("inferred-source", { jump_edges: ["target"] }), line("target"),
     ), []);
     expect(result.edges.map((edge) => edge.kind)).toEqual(["discovered_declared", "discovered_inferred"]);
+    expect(result.rows.find((row) => row.sourceLineUUID === "declared-source")?.discoveredTargets).toEqual([
+      expect.objectContaining({ kind: "discovered_declared", target: expect.objectContaining({ lineUUID: "target", resolved: true }) }),
+    ]);
+    expect(result.rows.find((row) => row.sourceLineUUID === "inferred-source")?.discoveredTargets).toEqual([
+      expect.objectContaining({ kind: "discovered_inferred", target: expect.objectContaining({ lineUUID: "target", resolved: true }) }),
+    ]);
+  });
+
+  it("keeps unresolved discovery-only targets in canonical rows", () => {
+    const result = normalizeChainTopology(groups(
+      line("source", { jump_edges: ["missing"], declared_jump_edges: ["missing"] }),
+    ), []);
+    expect(result.rows[0].discoveredTargets).toEqual([
+      expect.objectContaining({ kind: "discovered_declared", target: expect.objectContaining({ lineUUID: "missing", resolved: false }) }),
+    ]);
+    expect(result.graph.edges).toEqual([]);
   });
 
   it("retains unresolved targets in the table while excluding them from the bounded graph", () => {
@@ -73,6 +89,7 @@ describe("normalizeChainTopology", () => {
     expect(result.rows).toHaveLength(10_000);
     expect(result.graph.nodes).toHaveLength(100);
     expect(result.graph.truncated).toBe(true);
+    expect(result.work).toEqual({ scannedLines: 10_000, scannedChains: 0, scannedDiscoveryEdges: 0 });
     expect(pageTopologyRows(result.rows, 2).rows).toHaveLength(100);
     expect(pageTopologyRows(result.rows, 100).rows).toHaveLength(100);
     expect(pageTopologyRows(result.rows, 101).page).toBe(100);

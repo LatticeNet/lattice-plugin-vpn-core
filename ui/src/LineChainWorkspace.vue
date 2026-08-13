@@ -83,7 +83,7 @@ function edgeLabel(kind: TopologyEdgeKind): string {
       <p v-if="topology.graph.truncated" class="graph-cap-notice" role="status">Visualization capped at 100 of {{ topology.graph.totalNodes }} lines. Use the complete paginated table below.</p>
       <svg class="topology-graph" :viewBox="`0 0 864 ${graphHeight}`" role="img" aria-labelledby="graph-title graph-desc">
         <title id="graph-title">Bounded line topology visualization</title>
-        <desc id="graph-desc">Secondary visualization of the same committed and observed edges listed in the table.</desc>
+        <desc id="graph-desc">Secondary visualization of the same committed, observed, declared, and inferred evidence listed in the canonical table.</desc>
         <g v-for="edge in topology.graph.edges" :key="edge.id" class="graph-edge" :data-kind="edge.kind">
           <line v-if="pointFor(edge.from) && edge.to && pointFor(edge.to)" :x1="pointFor(edge.from)!.x" :y1="pointFor(edge.from)!.y" :x2="pointFor(edge.to)!.x" :y2="pointFor(edge.to)!.y" />
           <title>{{ edgeLabel(edge.kind) }}: {{ edge.from }} to {{ edge.to }}</title>
@@ -99,7 +99,7 @@ function edgeLabel(kind: TopologyEdgeKind): string {
     <div class="table-wrap topology-table-wrap">
       <table class="topology-table">
         <caption class="sr-only">Canonical line topology state</caption>
-        <thead><tr><th>Source</th><th>Committed baseline</th><th>Proposal (not an edge)</th><th>Observed evidence</th><th>Status</th><th>Error</th></tr></thead>
+        <thead><tr><th>Source</th><th>Committed baseline</th><th>Proposal (not an edge)</th><th>Observed evidence</th><th>Discovery evidence</th><th>Status</th><th>Error</th></tr></thead>
         <tbody>
           <tr v-for="row in pageData.rows" :key="row.sourceLineUUID">
             <td><strong>{{ row.sourceLabel }}</strong><small class="mono">{{ row.sourceLineUUID }}</small></td>
@@ -110,6 +110,15 @@ function edgeLabel(kind: TopologyEdgeKind): string {
             </td>
             <td><template v-if="row.proposal"><strong>{{ row.proposal.operation }} · {{ row.proposal.status }}</strong><small class="mono">{{ row.proposal.targetLineUUID || 'removal' }} · {{ row.proposal.approvalID }}</small></template><span v-else>-</span></td>
             <td><template v-if="row.observedTarget"><strong>{{ row.observedTarget.label }}</strong><small class="mono">{{ row.observedTarget.lineUUID }}<span v-if="!row.observedTarget.resolved"> · unresolved</span></small></template><span v-else>-</span></td>
+            <td>
+              <ul v-if="row.discoveredTargets.length" class="topology-evidence-list" aria-label="Discovered topology evidence">
+                <li v-for="item in row.discoveredTargets" :key="`${item.kind}:${item.target.lineUUID}`">
+                  <strong>{{ item.kind === 'discovered_declared' ? 'declared' : 'inferred' }}</strong>
+                  <small class="mono">{{ item.target.lineUUID }}<span v-if="!item.target.resolved"> · unresolved</span></small>
+                </li>
+              </ul>
+              <span v-else>-</span>
+            </td>
             <td><span class="status-dot" :data-tone="row.chain ? lineChainTone(row.chain) : 'neutral'">{{ row.status }}</span></td>
             <td :class="{ 'error-text': row.lastError }">{{ row.lastError || '-' }}</td>
           </tr>

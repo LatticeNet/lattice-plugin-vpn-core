@@ -84,6 +84,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .graph-edge[data-kind="discovered_declared"] line { stroke: #7559b6; stroke-dasharray: none; }
 .topology-table { min-width: 980px; }
 .topology-table td { vertical-align: top; }
+.topology-evidence-list { margin: 0; padding: 0; list-style: none; }
+.topology-evidence-list li + li { margin-top: 4px; }
 .topology-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border, #d9dde2); color: var(--muted-foreground, #65707b); font-size: 11px; }
 .panel-header { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--border, #d9dde2); }
 .panel-header h2 { font-size: 13px; }

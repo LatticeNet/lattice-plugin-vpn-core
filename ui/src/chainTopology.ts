@@ -37,6 +37,7 @@ export interface TopologyRow {
   proposal?: TopologyProposal;
   observedTargetUUID?: string;
   observedTarget?: TopologyTarget;
+  discoveredTargets: Array<{ kind: "discovered_declared" | "discovered_inferred"; target: TopologyTarget }>;
   lastError?: string;
   chain: LineChain | null;
 }
@@ -60,22 +61,42 @@ export interface ChainTopology {
   rows: TopologyRow[];
   edges: TopologyEdge[];
   graph: TopologyGraph;
+  work: { scannedLines: number; scannedChains: number; scannedDiscoveryEdges: number };
 }
 
 export function normalizeChainTopology(groups: readonly LineGroup[], chains: readonly LineChain[], graphLimit = GRAPH_NODE_LIMIT): ChainTopology {
   const lineByUUID = new Map<string, { line: Line; nodeName?: string }>();
+  const sourceOrder: string[] = [];
+  const graphNodes: TopologyTarget[] = [];
+  const boundedUUIDs = new Set<string>();
+  const boundedLimit = Math.max(0, graphLimit);
+  let scannedLines = 0;
   for (const group of groups) {
     for (const line of group.lines) {
+      scannedLines++;
       const uuid = line.line_uuid?.trim();
-      if (uuid && !lineByUUID.has(uuid)) lineByUUID.set(uuid, { line, nodeName: group.node_name });
+      if (uuid && !lineByUUID.has(uuid)) {
+        lineByUUID.set(uuid, { line, nodeName: group.node_name });
+        sourceOrder.push(uuid);
+        if (graphNodes.length < boundedLimit) {
+          graphNodes.push({ lineUUID: uuid, label: line.name || uuid, nodeID: line.node_id, resolved: true });
+          boundedUUIDs.add(uuid);
+        }
+      }
     }
   }
-  const chainBySource = new Map(chains.map((value) => [value.source_line_uuid, value]));
-  const sources = new Set([...lineByUUID.keys(), ...chainBySource.keys()]);
+  const chainBySource = new Map<string, LineChain>();
+  for (const chain of chains) {
+    if (!chainBySource.has(chain.source_line_uuid)) {
+      chainBySource.set(chain.source_line_uuid, chain);
+      if (!lineByUUID.has(chain.source_line_uuid)) sourceOrder.push(chain.source_line_uuid);
+    }
+  }
   const rows: TopologyRow[] = [];
   const edges: TopologyEdge[] = [];
+  let scannedDiscoveryEdges = 0;
 
-  for (const sourceUUID of [...sources].sort()) {
+  for (const sourceUUID of sourceOrder) {
     const source = lineByUUID.get(sourceUUID);
     const currentChain = chainBySource.get(sourceUUID) ?? null;
     const row: TopologyRow = {
@@ -94,6 +115,7 @@ export function normalizeChainTopology(groups: readonly LineGroup[], chains: rea
         isEdge: false,
       } : undefined,
       observedTargetUUID: currentChain?.observed_downstream_line_uuid,
+      discoveredTargets: [],
       lastError: currentChain?.last_error || currentChain?.attempt?.error,
       chain: currentChain,
     };
@@ -113,24 +135,26 @@ export function normalizeChainTopology(groups: readonly LineGroup[], chains: rea
     } else {
       const declared = new Set(source?.line.declared_jump_edges ?? []);
       for (const target of source?.line.jump_edges ?? []) {
-        edges.push(edge(sourceUUID, target, declared.has(target) ? "discovered_declared" : "discovered_inferred", lineByUUID));
+        scannedDiscoveryEdges++;
+        const kind = declared.has(target) ? "discovered_declared" : "discovered_inferred";
+        const discoveredEdge = edge(sourceUUID, target, kind, lineByUUID);
+        edges.push(discoveredEdge);
+        row.discoveredTargets.push({ kind, target: targetFor(target, lineByUUID) });
       }
     }
     rows.push(row);
   }
 
-  const allNodes = [...lineByUUID.keys()].sort().map((uuid) => targetFor(uuid, lineByUUID));
-  const boundedNodes = allNodes.slice(0, Math.max(0, graphLimit));
-  const boundedUUIDs = new Set(boundedNodes.map((node) => node.lineUUID));
   return {
     rows,
     edges,
     graph: {
-      nodes: boundedNodes,
+      nodes: graphNodes,
       edges: edges.filter((value) => boundedUUIDs.has(value.from) && !!value.to && boundedUUIDs.has(value.to) && value.targetResolved),
-      truncated: allNodes.length > boundedNodes.length,
-      totalNodes: allNodes.length,
+      truncated: lineByUUID.size > graphNodes.length,
+      totalNodes: lineByUUID.size,
     },
+    work: { scannedLines, scannedChains: chains.length, scannedDiscoveryEdges },
   };
 }
 
