@@ -1,4 +1,4 @@
-# vpn-core 0.8.0-alpha.9 signature handoff
+# vpn-core 0.8.0-alpha.10 signature handoff
 
 This implementation lane produces deterministic, unsigned release inputs only.
 It does not invoke `pluginsign`, create a tag, publish an artifact, or mutate a
@@ -6,7 +6,7 @@ running Lattice installation.
 
 The authorized signer must verify:
 
-1. `manifest.json` version is exactly `0.8.0-alpha.9` and
+1. `manifest.json` version is exactly `0.8.0-alpha.10` and
    `signature_ed25519` is empty before signing.
 2. Go, UI package, and UI lockfile versions match the manifest.
 3. Both Linux binaries and the complete `ui/dist` tree are packed with
@@ -16,7 +16,7 @@ The authorized signer must verify:
 5. The canonical manifest is signed only after that digest is fixed.
 
 Compatibility inputs: server floor `0.2.2-alpha.19`, dashboard host bridge `1`,
-node-agent `0.3.4-alpha.1`, and plugin `0.8.0-alpha.9`.
+node-agent `0.3.4-alpha.1`, and plugin `0.8.0-alpha.10`.
 
 Verified complete-bundle SHA-256:
-`b9edd1985e8bd726e71f7c729924fef488f78affd68e5102cf41365ab72e7036`.
+`ef643f63117cca32de4be527c6d00ca7a5bc5576e2c40703226922d7a2c2382d`.

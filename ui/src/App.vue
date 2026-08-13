@@ -20,6 +20,8 @@ import {
 } from "@lucide/vue";
 
 import { BridgeClient, canCall, type HostInit } from "./bridge";
+import LineChainWorkspace from "./LineChainWorkspace.vue";
+import { LineWorkspaceLoader } from "./lineWorkspace";
 import {
   filterLineGroups,
   formatBytes,
@@ -27,7 +29,6 @@ import {
   formatLineEndpoint,
   formatLineListen,
   lineErrorText,
-  lineChainTone,
   lineOwnership,
   lineStatus,
   overlayCoverage,
@@ -196,6 +197,8 @@ const hasUserMutations = computed(() => [
 const showUserActions = computed(() => canUpdateUser.value || canDeleteUser.value || canBindUser.value || canUnbindUser.value);
 const canViewLineDetails = computed(() => canCall(init.value, SERVICES.lines, "get"));
 const canReadChains = computed(() => canCall(init.value, SERVICES.lines, "chains"));
+const canPlanChain = computed(() => canCall(init.value, SERVICES.lines, "plan_chain"));
+const canPlanRemoveChain = computed(() => canCall(init.value, SERVICES.lines, "plan_remove_chain"));
 const canReadProfileSettings = computed(() => canCall(init.value, SERVICES.profiles, "settings"));
 const canConfigureProfile = computed(() => canCall(init.value, SERVICES.profiles, "configure"));
 const canPlanLineUsers = computed(() => ["plan_add", "plan_update", "plan_remove"]
@@ -215,6 +218,49 @@ async function pluginCall<T>(service: string, method: string, payload: unknown =
   return bridge.call<T>(service, method, payload).promise;
 }
 
+let lineWorkspaceLoader: LineWorkspaceLoader | undefined;
+const busyChainSources = ref<ReadonlySet<string>>(new Set());
+
+function setChainBusy(sourceLineUUID: string, busy: boolean): void {
+  const next = new Set(busyChainSources.value);
+  if (busy) next.add(sourceLineUUID);
+  else next.delete(sourceLineUUID);
+  busyChainSources.value = next;
+}
+
+async function planLineChain(sourceLineUUID: string, targetLineUUID: string): Promise<void> {
+  if (!canPlanChain.value || busyChainSources.value.has(sourceLineUUID)) return;
+  setChainBusy(sourceLineUUID, true);
+  try {
+    const result = await pluginCall<{ approval?: { id?: string }; preview?: { summary?: string } }>(SERVICES.lines, "plan_chain", {
+      source_line_uuid: sourceLineUUID,
+      target_line_uuid: targetLineUUID,
+    });
+    notice.value = `Approval ${result.approval?.id || "created"} planned. ${result.preview?.summary || "Review it in Operations → Approvals; no topology was changed."}`;
+    await loadCurrent(true);
+  } catch (cause) {
+    error.value = safeErrorMessage(cause, "Line chain could not be planned");
+  } finally {
+    setChainBusy(sourceLineUUID, false);
+  }
+}
+
+async function planLineChainRemoval(sourceLineUUID: string): Promise<void> {
+  if (!canPlanRemoveChain.value || busyChainSources.value.has(sourceLineUUID)) return;
+  setChainBusy(sourceLineUUID, true);
+  try {
+    const result = await pluginCall<{ approval?: { id?: string }; preview?: { summary?: string } }>(SERVICES.lines, "plan_remove_chain", {
+      source_line_uuid: sourceLineUUID,
+    });
+    notice.value = `Approval ${result.approval?.id || "created"} planned. ${result.preview?.summary || "Review it in Operations → Approvals; the current edge remains until execution is observed."}`;
+    await loadCurrent(true);
+  } catch (cause) {
+    error.value = safeErrorMessage(cause, "Line chain removal could not be planned");
+  } finally {
+    setChainBusy(sourceLineUUID, false);
+  }
+}
+
 async function loadCurrent(background = false): Promise<void> {
   if (!init.value) return;
   if (background) refreshing.value = true;
@@ -223,21 +269,24 @@ async function loadCurrent(background = false): Promise<void> {
   try {
     switch (route.value) {
       case "lines": {
-        const calls: Promise<void>[] = [
-          pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list")
-            .then((result) => { lines.value = result.groups ?? []; }),
-        ];
+        const calls: Promise<void>[] = [];
+        if (canReadChains.value) {
+          lineWorkspaceLoader ??= new LineWorkspaceLoader(pluginCall);
+          calls.push(lineWorkspaceLoader.refresh().then((snapshot) => {
+            if (!snapshot) throw new Error(lineWorkspaceLoader?.error || "Line topology unavailable");
+            lines.value = [...snapshot.groups];
+            chains.value = [...snapshot.chains];
+            if (lineWorkspaceLoader?.error) error.value = `Refresh failed; showing last known topology. ${lineWorkspaceLoader.error}`;
+          }));
+        } else {
+          calls.push(pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list")
+            .then((result) => { lines.value = result.groups ?? []; chains.value = []; }));
+        }
         if (canReadManaged.value) {
           calls.push(pluginCall<{ managed_lines: ManagedLineDef[] }>(SERVICES.lines, "managed")
             .then((result) => { managedDefs.value = result.managed_lines ?? []; }));
         } else {
           managedDefs.value = [];
-        }
-        if (canReadChains.value) {
-          calls.push(pluginCall<{ chains: LineChain[] }>(SERVICES.lines, "chains")
-            .then((result) => { chains.value = result.chains ?? []; }));
-        } else {
-          chains.value = [];
         }
         if (canRollout.value) {
           calls.push(pluginCall<{ users: VpnUser[] }>(SERVICES.users, "list")
@@ -782,19 +831,7 @@ onBeforeUnmount(() => {
           <span v-else-if="def.status === 'planned'" class="muted">awaiting approval</span>
         </div>
       </section>
-      <section v-if="canReadChains" class="data-panel chain-panel">
-        <div class="panel-header"><div><h2>Line chains</h2><p>Desired, attempted, and observed reconciliation remain distinct.</p></div><span class="count">{{ chains.length }}</span></div>
-        <div v-if="chains.length" class="table-wrap"><table><thead><tr><th>Source UUID</th><th>Current target</th><th>Attempt</th><th>Status</th><th>Observed downstream</th><th>Error</th></tr></thead>
-          <tbody><tr v-for="chain in chains" :key="chain.source_line_uuid">
-            <td class="mono">{{ chain.source_line_uuid }}</td>
-            <td class="mono">{{ chain.current?.target_line_uuid || '-' }}</td>
-            <td>{{ chain.attempt?.operation || '-' }}<small v-if="chain.attempt?.approval_id" class="mono">{{ chain.attempt.approval_id }}</small></td>
-            <td><span class="status-dot" :data-tone="lineChainTone(chain)">{{ chain.status }}</span></td>
-            <td class="mono">{{ chain.observed_downstream_line_uuid || '-' }}</td>
-            <td :class="{ 'error-text': chain.last_error || chain.attempt?.error }">{{ chain.attempt?.error || chain.last_error || '-' }}</td>
-          </tr></tbody></table></div>
-        <p v-else class="empty-inline chain-empty">No desired line chains.</p>
-      </section>
+      <LineChainWorkspace v-if="canReadChains" :groups="lines" :chains="chains" :can-plan="canPlanChain" :can-remove="canPlanRemoveChain" :busy-sources="busyChainSources" @plan="planLineChain" @remove="planLineChainRemoval" />
       <section v-if="visibleLines.length" class="data-panel">
         <div class="table-wrap"><table><thead><tr><th>Node</th><th>Line</th><th>Core</th><th>Source</th><th>Ownership</th><th>Endpoint</th><th>Listen</th><th>Reality SNI</th><th>Users</th><th>Outbound ref</th><th>Status</th><th>Error</th><th v-if="canViewLineDetails" class="actions-cell">Actions</th></tr></thead>
           <tbody><tr v-for="{ group, line } in visibleLines" :key="line.line_hash_id">

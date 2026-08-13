@@ -207,7 +207,7 @@ func TestManifestDeclaresLineChainContract(t *testing.T) {
 	t.Fatal("lines service is missing")
 }
 
-func TestVersionContractIsAlpha9AndUnsignedForHandoff(t *testing.T) {
+func TestVersionContractIsAlpha10AndUnsignedForHandoff(t *testing.T) {
 	raw, err := os.ReadFile("../manifest.json")
 	if err != nil {
 		t.Fatal(err)
@@ -219,14 +219,14 @@ func TestVersionContractIsAlpha9AndUnsignedForHandoff(t *testing.T) {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Version != "0.8.0-alpha.9" {
+	if manifest.Version != "0.8.0-alpha.10" {
 		t.Fatalf("manifest version = %q", manifest.Version)
 	}
 	if pluginVersion != manifest.Version {
 		t.Fatalf("version drift: manifest=%q go=%q", manifest.Version, pluginVersion)
 	}
 	if manifest.Signature != "" {
-		t.Fatal("implementation handoff must fail closed until an authorized signer supplies alpha.9 signature")
+		t.Fatal("implementation handoff must fail closed until an authorized signer supplies alpha.10 signature")
 	}
 }
 

@@ -61,6 +61,7 @@ export interface LineChainAttempt {
 
 export interface LineChain {
   source_line_uuid: string;
+  source_node_id?: string;
   status: LineChainStatus;
   current?: LineChainSnapshot | null;
   attempt?: LineChainAttempt | null;

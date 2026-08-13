@@ -18,6 +18,18 @@ function harness() {
 }
 
 describe("BridgeClient", () => {
+  it("gates chain reads and each planning method independently", () => {
+    const init = {
+      version: "1", pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0-alpha.10",
+      pluginRoute: "lines", locale: "en", colorScheme: "light", designTokens: {},
+      interfaces: [{ service: "latticenet.vpn-core/lines", methods: ["list", "chains", "plan_chain"] }],
+    };
+    expect(canCall(init, "latticenet.vpn-core/lines", "chains")).toBe(true);
+    expect(canCall(init, "latticenet.vpn-core/lines", "plan_chain")).toBe(true);
+    expect(canCall(init, "latticenet.vpn-core/lines", "plan_remove_chain")).toBe(false);
+    expect(canCall(init, "latticenet.vpn-core/users", "plan_chain")).toBe(false);
+  });
+
   it("propagates the fragment nonce and accepts init only from the parent", async () => {
     vi.useFakeTimers();
     const { win, parent, posted, dispatch } = harness();

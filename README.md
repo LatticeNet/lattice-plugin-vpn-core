@@ -4,7 +4,7 @@ Official LatticeNet sing-box management plugin. This repository owns the complet
 plugin bundle: signed manifest, Linux runtime, sandboxed operator UI, deterministic
 packer, tests, and release workflow inputs.
 
-Current implementation candidate: `v0.8.0-alpha.9` (unsigned until the authorized release handoff).
+Current implementation candidate: `v0.8.0-alpha.10` (unsigned until the authorized release handoff).
 
 ## Ownership boundary
 
