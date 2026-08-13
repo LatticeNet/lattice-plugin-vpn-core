@@ -1,11 +1,22 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestSDKHandlerPreservesCoreBackedHostBoundary(t *testing.T) {
+	resp := handleSDKRequest(context.Background(), request{
+		Action:  "call",
+		Payload: callPayloadRaw(t, "latticenet.vpn-core/lines", "chains"),
+	}, nil)
+	if !refusedAsUnknown(resp) {
+		t.Fatalf("core-backed chain call was served by plugin runtime: %+v", resp)
+	}
+}
 
 // A manifest declares which methods a plugin exposes and who serves each one.
 // Hold the artifact to that claim so interface ownership cannot drift silently.
@@ -47,13 +58,17 @@ func refusedAsUnknown(resp response) bool {
 		strings.Contains(resp.Error, "unsupported method")
 }
 
-func callPayloadRaw(t *testing.T, service, method string) map[string]any {
+func callPayloadRaw(t *testing.T, service, method string) json.RawMessage {
 	t.Helper()
-	return map[string]any{
+	raw, err := json.Marshal(map[string]any{
 		"service": service,
 		"method":  method,
 		"payload": map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	return raw
 }
 
 type manifestInterface struct {

@@ -86,10 +86,10 @@ func TestRenderPlanIsDeterministicAndNonMutating(t *testing.T) {
 }
 
 func TestPlanActionUsesRequestPayload(t *testing.T) {
-	resp := handle(request{Action: "plan", Payload: map[string]any{
+	resp := handle(request{Action: "plan", Payload: mustJSON(map[string]any{
 		"node_id": "node-a",
 		"mode":    "dry-run",
-	}})
+	})})
 	if !resp.OK {
 		t.Fatalf("plan ok = false: %q", resp.Error)
 	}
@@ -239,4 +239,12 @@ func TestUnsupportedActionFailsClosed(t *testing.T) {
 	if !strings.Contains(resp.Error, `unsupported action "apply"`) {
 		t.Fatalf("unexpected error: %q", resp.Error)
 	}
+}
+
+func mustJSON(value any) json.RawMessage {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
