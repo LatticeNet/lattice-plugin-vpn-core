@@ -63,6 +63,8 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .stack { display: flex; flex-direction: column; gap: 14px; }
 .data-panel { overflow: hidden; border: 1px solid var(--border, #d9dde2); border-radius: 7px; background: var(--card, #fff); }
+.chain-panel { margin-bottom: 14px; }
+.chain-empty { padding: 14px; }
 .panel-header { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--border, #d9dde2); }
 .panel-header h2 { font-size: 13px; }
 .table-wrap { width: 100%; overflow-x: auto; }
