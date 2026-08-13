@@ -47,17 +47,13 @@ func refusedAsUnknown(resp response) bool {
 		strings.Contains(resp.Error, "unsupported method")
 }
 
-func callPayloadRaw(t *testing.T, service, method string) json.RawMessage {
+func callPayloadRaw(t *testing.T, service, method string) map[string]any {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{
+	return map[string]any{
 		"service": service,
 		"method":  method,
 		"payload": map[string]any{},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-	return raw
 }
 
 type manifestInterface struct {

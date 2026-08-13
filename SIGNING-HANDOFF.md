@@ -19,4 +19,4 @@ Compatibility inputs: server floor `0.2.2-alpha.19`, dashboard host bridge `1`,
 node-agent `0.3.4-alpha.1`, and plugin `0.8.0-alpha.9`.
 
 Verified complete-bundle SHA-256:
-`3794c089e7cbf07309862fb08cb9fff917a5f30e939d6e27ba674336f54fe1bd`.
+`959a8e5b4a5f4210b29d9489ae809ae81a180fc525d0e1ce69dc063b2e0a0870`.
