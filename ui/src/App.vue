@@ -27,10 +27,12 @@ import {
   formatLineEndpoint,
   formatLineListen,
   lineErrorText,
+  lineChainTone,
   lineOwnership,
   lineStatus,
   safeErrorMessage,
   type Line,
+  type LineChain,
   type LineGroup,
   type VpnUser,
 } from "./vpnModel";
@@ -130,6 +132,7 @@ const loading = ref(true);
 const refreshing = ref(false);
 const search = ref("");
 const lines = ref<LineGroup[]>([]);
+const chains = ref<LineChain[]>([]);
 const users = ref<VpnUser[]>([]);
 const profiles = ref<Profile[]>([]);
 const usage = ref<UsageResult>({ by_user: [], by_node: [], collectors: [], per_line: false });
@@ -185,6 +188,7 @@ const hasUserMutations = computed(() => [
 ].some(Boolean));
 const showUserActions = computed(() => canUpdateUser.value || canDeleteUser.value || canBindUser.value || canUnbindUser.value);
 const canViewLineDetails = computed(() => canCall(init.value, SERVICES.lines, "get"));
+const canReadChains = computed(() => canCall(init.value, SERVICES.lines, "chains"));
 const canReadProfileSettings = computed(() => canCall(init.value, SERVICES.profiles, "settings"));
 const canConfigureProfile = computed(() => canCall(init.value, SERVICES.profiles, "configure"));
 const canPlanLineUsers = computed(() => ["plan_add", "plan_update", "plan_remove"]
@@ -206,8 +210,14 @@ async function loadCurrent(background = false): Promise<void> {
   try {
     switch (route.value) {
       case "lines": {
-        const result = await pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list");
+        const [result, chainResult] = await Promise.all([
+          pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list"),
+          canReadChains.value
+            ? pluginCall<{ chains: LineChain[] }>(SERVICES.lines, "chains")
+            : Promise.resolve({ chains: [] }),
+        ]);
         lines.value = result.groups ?? [];
+        chains.value = chainResult.chains ?? [];
         break;
       }
       case "users": {
@@ -696,6 +706,19 @@ onBeforeUnmount(() => {
         <div><span>Nodes</span><strong>{{ lines.length }}</strong></div>
       </section>
       <section class="toolbar"><input v-model="search" class="search-input" type="search" placeholder="Search node, line, status, outbound or error" /></section>
+      <section v-if="canReadChains" class="data-panel chain-panel">
+        <div class="panel-header"><div><h2>Line chains</h2><p>Desired, attempted, and observed reconciliation remain distinct.</p></div><span class="count">{{ chains.length }}</span></div>
+        <div v-if="chains.length" class="table-wrap"><table><thead><tr><th>Source UUID</th><th>Current target</th><th>Attempt</th><th>Status</th><th>Observed downstream</th><th>Error</th></tr></thead>
+          <tbody><tr v-for="chain in chains" :key="chain.source_line_uuid">
+            <td class="mono">{{ chain.source_line_uuid }}</td>
+            <td class="mono">{{ chain.current?.target_line_uuid || '-' }}</td>
+            <td>{{ chain.attempt?.operation || '-' }}<small v-if="chain.attempt?.approval_id" class="mono">{{ chain.attempt.approval_id }}</small></td>
+            <td><span class="status-dot" :data-tone="lineChainTone(chain)">{{ chain.status }}</span></td>
+            <td class="mono">{{ chain.observed_downstream_line_uuid || '-' }}</td>
+            <td :class="{ 'error-text': chain.last_error || chain.attempt?.error }">{{ chain.attempt?.error || chain.last_error || '-' }}</td>
+          </tr></tbody></table></div>
+        <p v-else class="empty-inline chain-empty">No desired line chains.</p>
+      </section>
       <section v-if="visibleLines.length" class="data-panel">
         <div class="table-wrap"><table><thead><tr><th>Node</th><th>Line</th><th>Core</th><th>Source</th><th>Ownership</th><th>Endpoint</th><th>Listen</th><th>Reality SNI</th><th>Users</th><th>Outbound ref</th><th>Status</th><th>Error</th><th v-if="canViewLineDetails" class="actions-cell">Actions</th></tr></thead>
           <tbody><tr v-for="{ group, line } in visibleLines" :key="line.line_hash_id">

@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.8.0-alpha.7",
+  "version": "0.8.0-alpha.9",
   "publisher": "latticenet",
-  "signature_ed25519": "Fvsi/LwsmYq5vrML4ZVssS31RGEaujQTaEP8OjeY9QZK4lpeXIoxqmUIL+fLqe0SEL2fWde8Q/DTiLmKaif1AA==",
+  "signature_ed25519": "",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "89e4d4846586242bfc3d2ee6cc2904e1ee760b1c65aefa8cd9389dca1fdfb760"
+    "digest_sha256": "3794c089e7cbf07309862fb08cb9fff917a5f30e939d6e27ba674336f54fe1bd"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -29,7 +29,7 @@
     "bridge_version": "1"
   },
   "compatibility": {
-    "server": "\u003e=0.2.2-alpha.2",
+    "server": "\u003e=0.2.2-alpha.19",
     "dashboard_host": "\u003e=1",
     "runtime_protocol": "\u003e=1"
   },
@@ -147,6 +147,27 @@
         {
           "name": "reattach",
           "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "chains",
+          "effect": "read",
+          "scopes": [
+            "vpncore:read"
+          ]
+        },
+        {
+          "name": "plan_chain",
+          "effect": "plan",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "plan_remove_chain",
+          "effect": "plan",
           "scopes": [
             "vpncore:admin"
           ]

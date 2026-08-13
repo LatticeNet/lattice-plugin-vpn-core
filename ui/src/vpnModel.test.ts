@@ -7,7 +7,9 @@ import {
   formatLineEndpoint,
   formatLineListen,
   lineStatus,
+  lineChainTone,
   type LineGroup,
+  type LineChain,
 } from "./vpnModel";
 
 const groups: LineGroup[] = [{
@@ -74,5 +76,13 @@ describe("vpnModel", () => {
 
     expect(formatLineEndpoint(line)).toBe("[2001:db8::1]:443");
     expect(formatLineListen(line)).toBe("[::]:443");
+  });
+
+  it("keeps chain reconciliation states operator-visible", () => {
+    const base: LineChain = { source_line_uuid: "source", status: "converged" };
+    expect(lineChainTone(base)).toBe("healthy");
+    expect(lineChainTone({ ...base, status: "applying" })).toBe("warning");
+    expect(lineChainTone({ ...base, status: "drifted" })).toBe("error");
+    expect(lineChainTone({ ...base, status: "failed" })).toBe("error");
   });
 });

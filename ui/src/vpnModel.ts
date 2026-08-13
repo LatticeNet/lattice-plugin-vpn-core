@@ -31,6 +31,47 @@ export interface LineGroup {
   lines: Line[];
 }
 
+export type LineChainStatus =
+  | "planned"
+  | "applying"
+  | "applied_unobserved"
+  | "converged"
+  | "drifted"
+  | "failed";
+
+export interface LineChainSnapshot {
+  target_line_uuid?: string;
+  target_node_id?: string;
+  artifact_digest?: string;
+  status: LineChainStatus;
+}
+
+export interface LineChainAttempt {
+  operation: "set" | "replace" | "remove";
+  candidate_target_line_uuid?: string;
+  approval_id: string;
+  candidate_artifact_digest?: string;
+  status: "planned" | "applying" | "failed";
+  error_code?: string;
+  error?: string;
+}
+
+export interface LineChain {
+  source_line_uuid: string;
+  status: LineChainStatus;
+  current?: LineChainSnapshot | null;
+  attempt?: LineChainAttempt | null;
+  observed_outbound_tag?: string;
+  observed_downstream_line_uuid?: string;
+  last_error?: string;
+}
+
+export function lineChainTone(chain: LineChain): "healthy" | "warning" | "error" {
+  if (chain.status === "converged") return "healthy";
+  if (chain.status === "failed" || chain.status === "drifted") return "error";
+  return "warning";
+}
+
 export interface VpnCredentialView {
   protocol: string;
   flow?: string;
