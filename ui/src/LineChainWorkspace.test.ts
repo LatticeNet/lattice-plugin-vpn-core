@@ -3,7 +3,7 @@ import { renderToString } from "@vue/server-renderer";
 import { describe, expect, it } from "vitest";
 
 import LineChainWorkspace from "./LineChainWorkspace.vue";
-import type { Line, LineGroup } from "./vpnModel";
+import type { Line, LineChain, LineGroup } from "./vpnModel";
 
 function line(uuid: string, jumpEdges: string[], declaredEdges: string[]): Line {
   return {
@@ -14,6 +14,28 @@ function line(uuid: string, jumpEdges: string[], declaredEdges: string[]): Line 
 }
 
 describe("LineChainWorkspace canonical table", () => {
+  it("renders the authoritative chain source node in the real canonical table", async () => {
+    const groups: LineGroup[] = [{
+      node_id: "discovered-node",
+      lines: [line("source", [], [])],
+    }];
+    const chains: LineChain[] = [{
+      source_line_uuid: "source",
+      source_node_id: "authoritative-node",
+      status: "converged",
+      current: null,
+      attempt: null,
+    }];
+
+    const html = await renderToString(createSSRApp({
+      render: () => h(LineChainWorkspace, {
+        groups, chains, canPlan: false, canRemove: false, busySources: new Set<string>(),
+      }),
+    }));
+
+    expect(html).toContain('Source node: </span><span class="mono">authoritative-node</span>');
+  });
+
   it("renders declared, inferred, and unresolved discovery evidence with screen-reader parity", async () => {
     const groups: LineGroup[] = [{
       node_id: "node-a",

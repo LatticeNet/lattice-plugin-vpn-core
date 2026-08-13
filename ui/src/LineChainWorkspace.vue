@@ -102,7 +102,11 @@ function edgeLabel(kind: TopologyEdgeKind): string {
         <thead><tr><th>Source</th><th>Committed baseline</th><th>Proposal (not an edge)</th><th>Observed evidence</th><th>Discovery evidence</th><th>Status</th><th>Error</th></tr></thead>
         <tbody>
           <tr v-for="row in pageData.rows" :key="row.sourceLineUUID">
-            <td><strong>{{ row.sourceLabel }}</strong><small class="mono">{{ row.sourceLineUUID }}</small></td>
+            <td>
+              <strong>{{ row.sourceLabel }}</strong>
+              <small class="mono">{{ row.sourceLineUUID }}</small>
+              <small><span>Source node: </span><span class="mono">{{ row.sourceNodeID || 'unknown' }}</span></small>
+            </td>
             <td>
               <template v-if="row.currentTarget"><strong>{{ row.currentTarget.label }}</strong><small class="mono">{{ row.currentTarget.lineUUID }}<span v-if="!row.currentTarget.resolved"> · unresolved</span></small></template>
               <span v-else-if="row.removalTombstone" class="badge" data-tone="info">committed removal</span>
