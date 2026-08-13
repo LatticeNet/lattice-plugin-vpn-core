@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -227,6 +228,34 @@ func TestVersionContractIsAlpha10AndUnsignedForHandoff(t *testing.T) {
 	}
 	if manifest.Signature != "" {
 		t.Fatal("implementation handoff must fail closed until an authorized signer supplies alpha.10 signature")
+	}
+}
+
+func TestSigningHandoffMatchesManifestVersionAndBundleDigest(t *testing.T) {
+	raw, err := os.ReadFile("../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Version string `json:"version"`
+		Bundle  struct {
+			Digest string `json:"digest_sha256"`
+		} `json:"bundle"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	handoffRaw, err := os.ReadFile("../SIGNING-HANDOFF.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff := string(handoffRaw)
+	if !strings.Contains(handoff, "# vpn-core "+manifest.Version+" signature handoff") {
+		t.Fatalf("signing handoff does not name manifest version %q", manifest.Version)
+	}
+	digests := regexp.MustCompile("`[0-9a-f]{64}`").FindAllString(handoff, -1)
+	if len(digests) != 1 || strings.Trim(digests[0], "`") != manifest.Bundle.Digest {
+		t.Fatalf("signing handoff digests = %v, manifest bundle digest = %q", digests, manifest.Bundle.Digest)
 	}
 }
 
