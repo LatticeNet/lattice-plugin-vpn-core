@@ -64,7 +64,23 @@ export interface ChainTopology {
   work: { scannedLines: number; scannedChains: number; scannedDiscoveryEdges: number };
 }
 
-export function normalizeChainTopology(groups: readonly LineGroup[], chains: readonly LineChain[], graphLimit = GRAPH_NODE_LIMIT): ChainTopology {
+export interface ChainTopologyWorkCounters {
+  scannedLines: number;
+  scannedChains: number;
+  scannedDeclaredEdges: number;
+  scannedDiscoveryEdges: number;
+  scannedRowSources: number;
+  constructedAuthoritativeEdges: number;
+  constructedDiscoveryEdges: number;
+  filteredGraphEdges: number;
+}
+
+export function normalizeChainTopology(
+  groups: readonly LineGroup[],
+  chains: readonly LineChain[],
+  graphLimit = GRAPH_NODE_LIMIT,
+  workCounters?: ChainTopologyWorkCounters,
+): ChainTopology {
   const lineByUUID = new Map<string, { line: Line; nodeName?: string }>();
   const sourceOrder: string[] = [];
   const graphNodes: TopologyTarget[] = [];
@@ -86,7 +102,9 @@ export function normalizeChainTopology(groups: readonly LineGroup[], chains: rea
     }
   }
   const chainBySource = new Map<string, LineChain>();
+  let scannedChains = 0;
   for (const chain of chains) {
+    scannedChains++;
     if (!chainBySource.has(chain.source_line_uuid)) {
       chainBySource.set(chain.source_line_uuid, chain);
       if (!lineByUUID.has(chain.source_line_uuid)) sourceOrder.push(chain.source_line_uuid);
@@ -94,9 +112,14 @@ export function normalizeChainTopology(groups: readonly LineGroup[], chains: rea
   }
   const rows: TopologyRow[] = [];
   const edges: TopologyEdge[] = [];
+  let scannedDeclaredEdges = 0;
   let scannedDiscoveryEdges = 0;
+  let scannedRowSources = 0;
+  let constructedAuthoritativeEdges = 0;
+  let constructedDiscoveryEdges = 0;
 
   for (const sourceUUID of sourceOrder) {
+    scannedRowSources++;
     const source = lineByUUID.get(sourceUUID);
     const currentChain = chainBySource.get(sourceUUID) ?? null;
     const row: TopologyRow = {
@@ -128,21 +151,55 @@ export function normalizeChainTopology(groups: readonly LineGroup[], chains: rea
     if (currentChain) {
       if (currentChain.status === "converged" && currentUUID && observedUUID === currentUUID) {
         edges.push(edge(sourceUUID, currentUUID, "verified", lineByUUID));
+        constructedAuthoritativeEdges++;
       } else {
-        if (currentUUID) edges.push(edge(sourceUUID, currentUUID, "committed", lineByUUID));
-        if (observedUUID) edges.push(edge(sourceUUID, observedUUID, "observed", lineByUUID));
+        if (currentUUID) {
+          edges.push(edge(sourceUUID, currentUUID, "committed", lineByUUID));
+          constructedAuthoritativeEdges++;
+        }
+        if (observedUUID) {
+          edges.push(edge(sourceUUID, observedUUID, "observed", lineByUUID));
+          constructedAuthoritativeEdges++;
+        }
       }
     } else {
-      const declared = new Set(source?.line.declared_jump_edges ?? []);
+      const declared = new Set<string>();
+      for (const target of source?.line.declared_jump_edges ?? []) {
+        scannedDeclaredEdges++;
+        declared.add(target);
+      }
       for (const target of source?.line.jump_edges ?? []) {
         scannedDiscoveryEdges++;
         const kind = declared.has(target) ? "discovered_declared" : "discovered_inferred";
         const discoveredEdge = edge(sourceUUID, target, kind, lineByUUID);
         edges.push(discoveredEdge);
+        constructedDiscoveryEdges++;
         row.discoveredTargets.push({ kind, target: targetFor(target, lineByUUID) });
       }
     }
     rows.push(row);
+  }
+
+  const graphEdges: TopologyEdge[] = [];
+  let filteredGraphEdges = 0;
+  for (const value of edges) {
+    filteredGraphEdges++;
+    if (boundedUUIDs.has(value.from) && !!value.to && boundedUUIDs.has(value.to) && value.targetResolved) {
+      graphEdges.push(value);
+    }
+  }
+
+  if (workCounters) {
+    Object.assign(workCounters, {
+      scannedLines,
+      scannedChains,
+      scannedDeclaredEdges,
+      scannedDiscoveryEdges,
+      scannedRowSources,
+      constructedAuthoritativeEdges,
+      constructedDiscoveryEdges,
+      filteredGraphEdges,
+    });
   }
 
   return {
@@ -150,11 +207,11 @@ export function normalizeChainTopology(groups: readonly LineGroup[], chains: rea
     edges,
     graph: {
       nodes: graphNodes,
-      edges: edges.filter((value) => boundedUUIDs.has(value.from) && !!value.to && boundedUUIDs.has(value.to) && value.targetResolved),
+      edges: graphEdges,
       truncated: lineByUUID.size > graphNodes.length,
       totalNodes: lineByUUID.size,
     },
-    work: { scannedLines, scannedChains: chains.length, scannedDiscoveryEdges },
+    work: { scannedLines, scannedChains, scannedDiscoveryEdges },
   };
 }
 

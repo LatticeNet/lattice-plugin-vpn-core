@@ -71,6 +71,33 @@ describe("LineWorkspaceLoader", () => {
     expect(loader.error).toBe("");
   });
 
+  it("does not let an older success clear a newer published error or publish stale state", async () => {
+    const deferred: Array<{ resolve: (value: unknown) => void; reject: (reason: Error) => void }> = [];
+    let overlap = false;
+    const loader = new LineWorkspaceLoader((_service, method) => {
+      if (!overlap) return Promise.resolve(method === "list" ? { groups: [{ node_id: "seed", lines: [] }] } : { chains: [] });
+      return new Promise((resolve, reject) => deferred.push({ resolve, reject }));
+    });
+    const seed = await loader.refresh();
+    overlap = true;
+    const older = loader.refresh();
+    const newer = loader.refresh();
+
+    deferred[2].resolve({ groups: [{ node_id: "new", lines: [] }] });
+    deferred[3].reject(new Error("new refresh failed"));
+    await expect(newer).resolves.toBe(seed);
+    expect(loader.error).toBe("new refresh failed");
+    expect(loader.snapshot).toBe(seed);
+
+    deferred[0].resolve({ groups: [{ node_id: "old", lines: [] }] });
+    deferred[1].resolve({ chains: [] });
+    await expect(older).resolves.toBe(seed);
+    expect(loader.error).toBe("new refresh failed");
+    expect(loader.snapshot).toBe(seed);
+    expect(loader.snapshot).toMatchObject({ generation: 1, groups: [{ node_id: "seed" }] });
+    expect(loader.availability).toBe("available");
+  });
+
   it("retains last-good data and rejects a mixed refresh generation", async () => {
     let failChains = false;
     const call = vi.fn(async (_service: string, method: string) => {
