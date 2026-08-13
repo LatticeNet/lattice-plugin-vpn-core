@@ -18,6 +18,9 @@ export interface Line {
   outbound_port?: number;
   jump_edges?: string[];
   declared_jump_edges?: string[];
+  overlay?: boolean;
+  overlay_status?: string;
+  overlay_user?: string;
   metadata?: Record<string, string>;
   user_count: number;
   user_known: boolean;
@@ -172,4 +175,85 @@ function formatHostPort(host: string | undefined, port: number | undefined): str
     return `${formattedHost}:${port}`;
   }
   return trimmedHost;
+}
+
+// design-17 S3: the managed-line overlay surface. A definition is the
+// server-owned plan/apply record; a line carries overlay=true once the
+// rediscovered inbound joins its definition (server read-model join).
+export interface ManagedLineDef {
+  line_uuid: string;
+  node_id: string;
+  line_hash_id: string;
+  tag: string;
+  port: number;
+  sni: string;
+  user_id: string;
+  user_name: string;
+  status: "planned" | "applied" | "failed" | string;
+  approval_id: string;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RolloutPlanned {
+  node_id: string;
+  approval_id: string;
+  line_uuid: string;
+  tag: string;
+  port: number;
+  sni: string;
+}
+
+export interface RolloutSkipped {
+  node_id: string;
+  reason: string;
+}
+
+export interface RolloutResult {
+  ok: boolean;
+  planned: RolloutPlanned[];
+  skipped: RolloutSkipped[];
+}
+
+// overlayTone maps the definition status to the badge's semantic tones.
+export function overlayTone(status: string | undefined): "success" | "warning" | "error" | "info" {
+  switch (status) {
+    case "applied": return "success";
+    case "planned": return "warning";
+    case "failed": return "error";
+    default: return "info";
+  }
+}
+
+// overlayCoverage counts node groups that have an applied overlay line —
+// the fleet-coverage headline ("N of M nodes carry the managed line").
+export function overlayCoverage(groups: LineGroup[]): { covered: number; total: number } {
+  let covered = 0;
+  for (const group of groups) {
+    if (group.lines.some((line) => line.overlay && line.overlay_status === "applied")) covered++;
+  }
+  return { covered, total: groups.length };
+}
+
+// unresolvedOverlayDefs are definitions with no visible line yet — planned
+// (awaiting approval/apply) or failed. They surface in their own strip
+// because there is no line row to hang the badge on.
+export function unresolvedOverlayDefs(defs: ManagedLineDef[], groups: LineGroup[]): ManagedLineDef[] {
+  const visible = new Set<string>();
+  for (const group of groups) {
+    for (const line of group.lines) {
+      if (line.overlay) visible.add(line.line_hash_id);
+    }
+  }
+  return defs.filter((def) => !visible.has(def.line_hash_id));
+}
+
+// rolloutSummaryLine is the one honest sentence the result panel leads with.
+export function rolloutSummaryLine(result: RolloutResult): string {
+  const planned = result.planned?.length ?? 0;
+  const skipped = result.skipped?.length ?? 0;
+  if (planned === 0 && skipped === 0) return "No eligible nodes — every node is already planned or applied.";
+  if (skipped === 0) return `Planned for ${planned} node${planned === 1 ? "" : "s"} — review and approve the batch to apply.`;
+  return `Planned for ${planned} node${planned === 1 ? "" : "s"}, skipped ${skipped} (reasons below) — approve the batch to apply.`;
 }

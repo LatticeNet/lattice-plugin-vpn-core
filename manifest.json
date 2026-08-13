@@ -14,7 +14,7 @@
   "signature_ed25519": "",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "3794c089e7cbf07309862fb08cb9fff917a5f30e939d6e27ba674336f54fe1bd"
+    "digest_sha256": "959a8e5b4a5f4210b29d9489ae809ae81a180fc525d0e1ce69dc063b2e0a0870"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -29,9 +29,9 @@
     "bridge_version": "1"
   },
   "compatibility": {
-    "server": "\u003e=0.2.2-alpha.19",
-    "dashboard_host": "\u003e=1",
-    "runtime_protocol": "\u003e=1"
+    "server": ">=0.2.2-alpha.19",
+    "dashboard_host": ">=1",
+    "runtime_protocol": ">=1"
   },
   "ui": {
     "nav": [
@@ -147,6 +147,20 @@
         {
           "name": "reattach",
           "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "managed",
+          "effect": "read",
+          "scopes": [
+            "vpncore:read"
+          ]
+        },
+        {
+          "name": "rollout",
+          "effect": "plan",
           "scopes": [
             "vpncore:admin"
           ]

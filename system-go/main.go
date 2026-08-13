@@ -12,13 +12,12 @@
 package main
 
 import (
-	"context"
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
-
-	latticeplugin "github.com/LatticeNet/lattice-sdk/plugin"
 )
 
 const (
@@ -32,20 +31,35 @@ const (
 // enforced by the in-core engine, not plugin capabilities).
 var capabilities = []string{"node:read", "network:plan", "network:apply", "task:run"}
 
-type request = latticeplugin.Request
-type response = latticeplugin.Response
+type request struct {
+	Action  string         `json:"action"`
+	Payload map[string]any `json:"payload"`
+}
+
+type response struct {
+	OK      bool            `json:"ok"`
+	Plan    string          `json:"plan,omitempty"`
+	Message string          `json:"message,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
 
 func main() {
-	_ = latticeplugin.Serve(context.Background(), latticeplugin.HandlerFunc(
-		func(_ context.Context, req latticeplugin.Request, _ *latticeplugin.HostClient) latticeplugin.Response {
-			return handle(req)
-		},
-	))
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for scanner.Scan() {
+		var req request
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			write(response{OK: false, Error: "invalid request: " + err.Error()})
+			continue
+		}
+		write(handle(req))
+	}
 }
 
 func handle(req request) response {
 	switch req.Action {
-	case latticeplugin.ActionDescribe:
+	case "describe":
 		body, _ := json.Marshal(map[string]any{
 			"id":           pluginID,
 			"name":         pluginName,
@@ -60,32 +74,14 @@ func handle(req request) response {
 			},
 			"engine": "lattice-server (core); this plugin is the official front",
 		})
-		return latticeplugin.RawResultResponse(body, "vpn-core capability surface")
-	case latticeplugin.ActionHealth:
-		return latticeplugin.MessageResponse("vpn-core plugin healthy")
-	case latticeplugin.ActionPlan:
-		payload, err := payloadMap(req.Payload)
-		if err != nil {
-			return latticeplugin.ErrorResponse(err)
-		}
-		return latticeplugin.PlanResponse(renderPlan(payload), "vpn-core dry-run plan")
+		return response{OK: true, Result: body, Message: "vpn-core capability surface"}
+	case "health":
+		return response{OK: true, Message: "vpn-core plugin healthy"}
+	case "plan":
+		return response{OK: true, Plan: renderPlan(req.Payload), Message: "vpn-core dry-run plan"}
 	default:
-		return latticeplugin.ErrorResponse(fmt.Errorf("unsupported action %q", req.Action))
+		return response{OK: false, Error: fmt.Sprintf("unsupported action %q", req.Action)}
 	}
-}
-
-func payloadMap(raw json.RawMessage) (map[string]any, error) {
-	if len(raw) == 0 {
-		return map[string]any{}, nil
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("invalid payload: %w", err)
-	}
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	return payload, nil
 }
 
 // renderPlan summarizes, as an auditable dry-run, what a vpn-core apply would do
@@ -104,3 +100,5 @@ func renderPlan(payload map[string]any) string {
 	lines = append(lines, "# apply executes via the core plan->approve->apply pipeline + node agent.")
 	return strings.Join(lines, "\n")
 }
+
+func write(resp response) { _ = json.NewEncoder(os.Stdout).Encode(resp) }
