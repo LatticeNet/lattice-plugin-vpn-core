@@ -207,6 +207,45 @@ func TestManifestDeclaresLineChainContract(t *testing.T) {
 	t.Fatal("lines service is missing")
 }
 
+func TestManifestDeclaresSubscriptionSourceContract(t *testing.T) {
+	raw, err := os.ReadFile("../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest manifestContract
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]struct {
+		effect string
+		scopes []string
+	}{
+		"graph_options": {effect: "read", scopes: []string{"vpncore:read"}},
+		"compose":       {effect: "read", scopes: []string{"vpncore:read"}},
+	}
+	for _, service := range manifest.Interfaces {
+		if service.Service != "latticenet.vpn-core/subscription-sources" {
+			continue
+		}
+		for _, method := range service.Methods {
+			expected, ok := want[method.Name]
+			if !ok {
+				t.Fatalf("unexpected subscription-sources method %q", method.Name)
+			}
+			if method.Effect != expected.effect || !reflect.DeepEqual(method.Scopes, expected.scopes) {
+				t.Fatalf("subscription-sources.%s contract = effect %q scopes %v", method.Name, method.Effect, method.Scopes)
+			}
+			delete(want, method.Name)
+		}
+		if len(want) != 0 {
+			t.Fatalf("missing subscription-sources methods: %v", want)
+		}
+		return
+	}
+	t.Fatal("subscription-sources service is missing")
+}
+
 func TestVersionContractIsAlpha10AndUnsignedForHandoff(t *testing.T) {
 	raw, err := os.ReadFile("../manifest.json")
 	if err != nil {

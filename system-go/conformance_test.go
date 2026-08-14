@@ -9,12 +9,21 @@ import (
 )
 
 func TestSDKHandlerPreservesCoreBackedHostBoundary(t *testing.T) {
-	resp := handleSDKRequest(context.Background(), request{
-		Action:  "call",
-		Payload: callPayloadRaw(t, "latticenet.vpn-core/lines", "chains"),
-	}, nil)
-	if !refusedAsUnknown(resp) {
-		t.Fatalf("core-backed chain call was served by plugin runtime: %+v", resp)
+	for _, call := range []struct {
+		service string
+		method  string
+	}{
+		{service: "latticenet.vpn-core/lines", method: "chains"},
+		{service: "latticenet.vpn-core/subscription-sources", method: "graph_options"},
+		{service: "latticenet.vpn-core/subscription-sources", method: "compose"},
+	} {
+		resp := handleSDKRequest(context.Background(), request{
+			Action:  "call",
+			Payload: callPayloadRaw(t, call.service, call.method),
+		}, nil)
+		if !refusedAsUnknown(resp) {
+			t.Fatalf("core-backed %s/%s call was served by plugin runtime: %+v", call.service, call.method, resp)
+		}
 	}
 }
 

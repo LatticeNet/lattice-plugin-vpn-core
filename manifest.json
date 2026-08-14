@@ -121,6 +121,26 @@
       "backing": "core"
     },
     {
+      "service": "latticenet.vpn-core/subscription-sources",
+      "methods": [
+        {
+          "name": "graph_options",
+          "effect": "read",
+          "scopes": [
+            "vpncore:read"
+          ]
+        },
+        {
+          "name": "compose",
+          "effect": "read",
+          "scopes": [
+            "vpncore:read"
+          ]
+        }
+      ],
+      "backing": "core"
+    },
+    {
       "service": "latticenet.vpn-core/lines",
       "methods": [
         {
