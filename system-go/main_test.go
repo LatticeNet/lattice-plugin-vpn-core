@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -165,6 +166,97 @@ func TestManifestScopesProfileSettingsPerNode(t *testing.T) {
 		return
 	}
 	t.Fatal("profiles service is missing")
+}
+
+func TestManifestDeclaresLineChainContract(t *testing.T) {
+	raw, err := os.ReadFile("../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest manifestContract
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]struct {
+		effect string
+		scopes []string
+	}{
+		"chains":            {effect: "read", scopes: []string{"vpncore:read"}},
+		"plan_chain":        {effect: "plan", scopes: []string{"vpncore:admin"}},
+		"plan_remove_chain": {effect: "plan", scopes: []string{"vpncore:admin"}},
+	}
+	for _, service := range manifest.Interfaces {
+		if service.Service != "latticenet.vpn-core/lines" {
+			continue
+		}
+		for _, method := range service.Methods {
+			expected, ok := want[method.Name]
+			if !ok {
+				continue
+			}
+			if method.Effect != expected.effect || !reflect.DeepEqual(method.Scopes, expected.scopes) {
+				t.Fatalf("lines.%s contract = effect %q scopes %v", method.Name, method.Effect, method.Scopes)
+			}
+			delete(want, method.Name)
+		}
+		if len(want) != 0 {
+			t.Fatalf("missing line-chain methods: %v", want)
+		}
+		return
+	}
+	t.Fatal("lines service is missing")
+}
+
+func TestVersionContractIsAlpha10AndUnsignedForHandoff(t *testing.T) {
+	raw, err := os.ReadFile("../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Version   string `json:"version"`
+		Signature string `json:"signature_ed25519"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != "0.8.0-alpha.10" {
+		t.Fatalf("manifest version = %q", manifest.Version)
+	}
+	if pluginVersion != manifest.Version {
+		t.Fatalf("version drift: manifest=%q go=%q", manifest.Version, pluginVersion)
+	}
+	if manifest.Signature != "" {
+		t.Fatal("implementation handoff must fail closed until an authorized signer supplies alpha.10 signature")
+	}
+}
+
+func TestSigningHandoffMatchesManifestVersionAndBundleDigest(t *testing.T) {
+	raw, err := os.ReadFile("../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Version string `json:"version"`
+		Bundle  struct {
+			Digest string `json:"digest_sha256"`
+		} `json:"bundle"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	handoffRaw, err := os.ReadFile("../SIGNING-HANDOFF.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff := string(handoffRaw)
+	if !strings.Contains(handoff, "# vpn-core "+manifest.Version+" signature handoff") {
+		t.Fatalf("signing handoff does not name manifest version %q", manifest.Version)
+	}
+	digests := regexp.MustCompile("`[0-9a-f]{64}`").FindAllString(handoff, -1)
+	if len(digests) != 1 || strings.Trim(digests[0], "`") != manifest.Bundle.Digest {
+		t.Fatalf("signing handoff digests = %v, manifest bundle digest = %q", digests, manifest.Bundle.Digest)
+	}
 }
 
 func TestUnsupportedActionFailsClosed(t *testing.T) {

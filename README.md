@@ -4,7 +4,7 @@ Official LatticeNet sing-box management plugin. This repository owns the complet
 plugin bundle: signed manifest, Linux runtime, sandboxed operator UI, deterministic
 packer, tests, and release workflow inputs.
 
-Current prerelease: `v0.8.0-alpha.5`.
+Current implementation candidate: `v0.8.0-alpha.10` (unsigned until the authorized release handoff).
 
 ## Ownership boundary
 
@@ -38,6 +38,10 @@ call may use an in-core service.
   settings requires exact-node `node:admin` plus `task:run`.
 - Credential secrets are write-only. Read models expose `has_secret`, never UUIDs
   or passwords.
+- Line-chain reads expose desired/reconciliation state through
+  `latticenet.vpn-core/lines.chains`; planning uses `plan_chain` and
+  `plan_remove_chain`. Those external names intentionally differ from the
+  internal `network/lines.chain_*_apply` approval bindings.
 - Saving plugin-owned launch settings preserves every generic agent setting,
   records an audit event, and returns a reviewable reconfiguration command. It
   does not queue or execute a host task.
@@ -90,4 +94,7 @@ ui/assets/*
 `tools/pluginpack/cmd/pluginpack` writes a deterministic `tar+gzip` artifact and
 prints its SHA-256 digest. Put that digest in `manifest.json`, then sign the
 canonical manifest with the trusted LatticeNet Ed25519 seed using
-`lattice-server/cmd/pluginsign`. Never commit the signing seed.
+`lattice-server/cmd/pluginsign`. The implementation branch deliberately leaves
+`signature_ed25519` empty so an obsolete signature cannot appear valid. Never
+commit the signing seed; signing, tagging, publishing, and release promotion are
+separate authorized operations.

@@ -7,7 +7,9 @@ import {
   formatLineEndpoint,
   formatLineListen,
   lineStatus,
+  lineChainTone,
   type LineGroup,
+  type LineChain,
 } from "./vpnModel";
 
 const groups: LineGroup[] = [{
@@ -74,5 +76,52 @@ describe("vpnModel", () => {
 
     expect(formatLineEndpoint(line)).toBe("[2001:db8::1]:443");
     expect(formatLineListen(line)).toBe("[::]:443");
+  });
+
+  it("keeps chain reconciliation states operator-visible", () => {
+    const base: LineChain = { source_line_uuid: "source", status: "converged" };
+    expect(lineChainTone(base)).toBe("healthy");
+    expect(lineChainTone({ ...base, status: "applying" })).toBe("warning");
+    expect(lineChainTone({ ...base, status: "drifted" })).toBe("error");
+    expect(lineChainTone({ ...base, status: "failed" })).toBe("error");
+  });
+});
+
+import { overlayCoverage, overlayTone, rolloutSummaryLine, unresolvedOverlayDefs, type Line, type ManagedLineDef } from "./vpnModel";
+
+describe("managed-line overlay model", () => {
+  const def = (over: Partial<ManagedLineDef>): ManagedLineDef => ({
+    line_uuid: "uuid", node_id: "node-a", line_hash_id: "line_x", tag: "lattice-mng-24443",
+    port: 24443, sni: "www.microsoft.com", user_id: "u1", user_name: "u_ab",
+    status: "planned", approval_id: "ap1", created_at: "", updated_at: "", ...over,
+  });
+  const groupWith = (line: Partial<Line>): LineGroup => ({
+    node_id: "node-a",
+    lines: [{ id: "l", line_hash_id: "line_x", node_id: "node-a", core: "sing-box", source: "discovered", managed: false, name: "lattice-mng-24443", user_count: 1, user_known: true, ...line } as Line],
+  });
+
+  it("maps statuses to semantic tones", () => {
+    expect(overlayTone("applied")).toBe("success");
+    expect(overlayTone("planned")).toBe("warning");
+    expect(overlayTone("failed")).toBe("error");
+    expect(overlayTone(undefined)).toBe("info");
+  });
+
+  it("counts only applied overlay lines as coverage", () => {
+    const groups = [groupWith({ overlay: true, overlay_status: "applied" }), groupWith({})];
+    expect(overlayCoverage(groups)).toEqual({ covered: 1, total: 2 });
+    expect(overlayCoverage([groupWith({ overlay: true, overlay_status: "planned" })]).covered).toBe(0);
+  });
+
+  it("surfaces only defs without a visible line", () => {
+    const defs = [def({}), def({ line_uuid: "u2", line_hash_id: "line_y", status: "failed" })];
+    expect(unresolvedOverlayDefs(defs, [groupWith({ overlay: true })]).map((d) => d.line_uuid)).toEqual(["u2"]);
+    expect(unresolvedOverlayDefs(defs, [])).toHaveLength(2);
+  });
+
+  it("summarizes the rollout honestly", () => {
+    expect(rolloutSummaryLine({ ok: true, planned: [{} as never, {} as never], skipped: [] })).toContain("2 nodes");
+    expect(rolloutSummaryLine({ ok: true, planned: [], skipped: [{ node_id: "n", reason: "x" }] })).toContain("skipped 1");
+    expect(rolloutSummaryLine({ ok: true, planned: [], skipped: [] })).toContain("No eligible nodes");
   });
 });

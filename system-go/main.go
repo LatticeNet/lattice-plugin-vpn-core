@@ -24,7 +24,7 @@ import (
 const (
 	pluginID      = "latticenet.vpn-core"
 	pluginName    = "vpn-core (sing-box)"
-	pluginVersion = "0.8.0-alpha.7"
+	pluginVersion = "0.8.0-alpha.10"
 )
 
 // capabilities is the surface this plugin manages. It mirrors the manifest
@@ -36,11 +36,11 @@ type request = latticeplugin.Request
 type response = latticeplugin.Response
 
 func main() {
-	_ = latticeplugin.Serve(context.Background(), latticeplugin.HandlerFunc(
-		func(_ context.Context, req latticeplugin.Request, _ *latticeplugin.HostClient) latticeplugin.Response {
-			return handle(req)
-		},
-	))
+	_ = latticeplugin.Serve(context.Background(), latticeplugin.HandlerFunc(handleSDKRequest))
+}
+
+func handleSDKRequest(_ context.Context, req latticeplugin.Request, _ *latticeplugin.HostClient) latticeplugin.Response {
+	return handle(req)
 }
 
 func handle(req request) response {
