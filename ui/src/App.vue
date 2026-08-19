@@ -38,6 +38,7 @@ import {
   safeErrorMessage,
   sortLineRows,
   unresolvedOverlayDefs,
+  quotaBytesFromInput,
   type Line,
   type LineRow,
   type LineSortKey,
@@ -460,12 +461,15 @@ async function saveUser(): Promise<void> {
   savingUser.value = true;
   error.value = "";
   try {
-    const quota = Number(userForm.quotaGiB);
     const payload: Record<string, unknown> = {
       email: userForm.email.trim(), name: userForm.name.trim(), enabled: userForm.enabled,
-      quota_bytes: Number.isFinite(quota) && quota > 0 ? Math.round(quota * 1024 * 1024 * 1024) : 0,
       group: userForm.group.trim(), comment: userForm.comment.trim(),
     };
+    // Blank means "leave it alone", the way the expiry field below already
+    // behaves. Sending 0 for a box the operator never touched is how renaming
+    // a quota'd account made it unlimited.
+    const quota = quotaBytesFromInput(userForm.quotaGiB);
+    if (quota !== undefined) payload.quota_bytes = quota;
     const expiresAt = parseDateTimeLocal(userForm.expiresAt);
     if (expiresAt) payload.expires_at = expiresAt;
     if (editingUser.value) {

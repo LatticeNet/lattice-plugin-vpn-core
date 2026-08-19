@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  quotaBytesFromInput,
   filterLineGroups,
   formatBytes,
   formatLineDomain,
@@ -162,5 +163,28 @@ describe("sortLineRows", () => {
     const result = sortLineRows(rows, "", "asc");
     expect(result).not.toBe(rows);
     expect(result.map((value) => value.line.name)).toEqual(["b", "a"]);
+  });
+});
+
+describe("quotaBytesFromInput", () => {
+  it("leaves the stored quota alone when the box is blank", () => {
+    expect(quotaBytesFromInput("")).toBeUndefined();
+    expect(quotaBytesFromInput("   ")).toBeUndefined();
+  });
+
+  it("leaves it alone when the box cannot be read as a number", () => {
+    // Number("abc") is NaN, and NaN serialises to null, which the server used
+    // to take as zero. Neither is an instruction to remove the limit.
+    expect(quotaBytesFromInput("abc")).toBeUndefined();
+    expect(quotaBytesFromInput("-4")).toBeUndefined();
+  });
+
+  it("keeps a zero the operator actually typed, so a quota stays removable", () => {
+    expect(quotaBytesFromInput("0")).toBe(0);
+  });
+
+  it("converts GiB to bytes", () => {
+    expect(quotaBytesFromInput("5")).toBe(5 * 1024 * 1024 * 1024);
+    expect(quotaBytesFromInput("1.5")).toBe(Math.round(1.5 * 1024 * 1024 * 1024));
   });
 });
