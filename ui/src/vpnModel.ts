@@ -307,6 +307,41 @@ export function sortLineRows(rows: readonly LineRow[], key: LineSortKey | "", di
 }
 
 /**
+ * One page of a list, with the requested page clamped into range.
+ *
+ * The slice is always taken after sorting and filtering, never before: a page
+ * is a window onto the whole set, so `total` is what a header may report and
+ * the order is the order the operator asked for. A pager that sorts its own
+ * page is worse than no pager, because it looks right.
+ */
+export interface Page<T> {
+  rows: T[];
+  page: number;
+  pages: number;
+  /** 1-based inclusive bounds of the slice. Both 0 when the set is empty. */
+  from: number;
+  to: number;
+  /** Size of the whole set the page was cut from, not of the page. */
+  total: number;
+}
+
+export function pageRows<T>(rows: readonly T[], requestedPage: number, pageSize: number): Page<T> {
+  const size = Math.max(1, Math.trunc(pageSize) || 1);
+  const pages = Math.max(1, Math.ceil(rows.length / size));
+  const page = Math.min(Math.max(1, Math.trunc(requestedPage) || 1), pages);
+  const start = (page - 1) * size;
+  const slice = rows.slice(start, start + size);
+  return {
+    rows: slice,
+    page,
+    pages,
+    from: slice.length ? start + 1 : 0,
+    to: start + slice.length,
+    total: rows.length,
+  };
+}
+
+/**
  * A quota box read as "how many GiB", or `undefined` for "do not change it".
  *
  * Blank is not zero. The field is prefilled from the stored record and then the

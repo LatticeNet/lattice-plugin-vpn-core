@@ -34,6 +34,7 @@ import {
   lineStatus,
   overlayCoverage,
   overlayTone,
+  pageRows,
   rolloutSummaryLine,
   safeErrorMessage,
   sortLineRows,
@@ -187,12 +188,32 @@ const matchedLines = computed<LineRow[]>(() => visibleLineGroups.value.flatMap((
   line,
 }))));
 
-// ── line table ordering ──────────────────────────────────────────────────
+// ── line table ordering and paging ───────────────────────────────────────
 // 111 rows in server order is a list. The header sorts; the sort is stable and
 // survives a background refresh because it is derived, not stored on the rows.
 const sortKey = ref<LineSortKey | "">("");
 const sortDirection = ref<SortDirection>("asc");
+/** The whole matching set, sorted. Everything the page reports counts this. */
 const visibleLines = computed(() => sortLineRows(matchedLines.value, sortKey.value, sortDirection.value));
+
+/**
+ * Why the fleet table pages at all.
+ *
+ * Printing 111 rows of this weight in one patch left the renderer unable to
+ * present a single animation frame for thirty seconds: the DOM and layout were
+ * done inside a second, and then nothing reached the screen. A page of 50 is
+ * the same table at a size the compositor can actually put up.
+ *
+ * The slice is cut from `visibleLines`, which is already searched and sorted,
+ * so the search, the header sort and every count on this page speak for all
+ * 111 rows and not for the fifty on screen.
+ */
+const LINE_PAGE_SIZE = 50;
+const linePage = ref(1);
+const linePageData = computed(() => pageRows(visibleLines.value, linePage.value, LINE_PAGE_SIZE));
+// A new search or a new sort order makes the current page meaningless, so it
+// goes back to the first one rather than stranding the operator mid-list.
+watch([search, sortKey, sortDirection], () => { linePage.value = 1; });
 
 const LINE_COLUMNS: Array<{ key: LineSortKey | ""; label: string; numeric?: boolean }> = [
   { key: "node", label: "Node" },
@@ -1008,10 +1029,10 @@ onBeforeUnmount(() => {
           <span v-else-if="def.status === 'planned'" class="muted">awaiting approval</span>
         </div>
       </section>
-      <section class="data-panel">
+      <section class="data-panel fleet-panel">
         <header class="panel-header">
           <div><h2>Fleet lines</h2><p>Every inbound the control plane can see, whether Lattice owns it or only observes it.</p></div>
-          <span class="count">{{ visibleLines.length }} shown</span>
+          <span class="count">{{ visibleLines.length }} {{ visibleLines.length === 1 ? 'line' : 'lines' }}</span>
         </header>
         <div v-if="visibleLines.length" class="table-wrap"><table>
           <thead><tr>
@@ -1023,7 +1044,7 @@ onBeforeUnmount(() => {
             </th>
             <th v-if="canViewLineDetails" class="actions-cell">Actions</th>
           </tr></thead>
-          <tbody><tr v-for="{ group, line } in visibleLines" :key="line.line_hash_id">
+          <tbody><tr v-for="{ group, line } in linePageData.rows" :key="line.line_hash_id">
             <td><strong :title="group.node_name || group.node_id">{{ group.node_name || group.node_id }}</strong><small :title="group.node_id">{{ group.node_id }}</small></td>
             <td><strong :title="line.name">{{ line.name }}</strong><small :title="`${line.type || 'unknown'} / ${line.line_hash_id}`">{{ line.type || 'unknown' }} / {{ line.line_hash_id }}</small></td>
             <td><span class="badge">{{ line.core || 'unknown' }}</span></td>
@@ -1052,6 +1073,12 @@ onBeforeUnmount(() => {
             <li>The node has no inbound configured at all.</li>
           </ol>
         </div>
+        <footer v-if="linePageData.pages > 1" class="table-pagination" aria-label="Fleet lines pagination">
+          <span>Rows {{ linePageData.from }} to {{ linePageData.to }} of {{ linePageData.total }}, searched and sorted across every one of them</span>
+          <button class="button button-secondary button-compact" type="button" :disabled="linePageData.page === 1" @click="linePage = linePageData.page - 1">Previous</button>
+          <span>Page {{ linePageData.page }} of {{ linePageData.pages }}</span>
+          <button class="button button-secondary button-compact" type="button" :disabled="linePageData.page === linePageData.pages" @click="linePage = linePageData.page + 1">Next</button>
+        </footer>
       </section>
       <LineChainWorkspace v-if="canReadChains" :groups="lines" :chains="chains" :can-plan="canPlanChain" :can-remove="canPlanRemoveChain" :busy-sources="busyChainSources" @plan="planLineChain" @remove="planLineChainRemoval" />
     </template>

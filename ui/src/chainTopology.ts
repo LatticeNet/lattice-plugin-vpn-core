@@ -1,4 +1,4 @@
-import type { Line, LineChain, LineChainAttempt, LineGroup } from "./vpnModel";
+import { pageRows, type Line, type LineChain, type LineChainAttempt, type LineGroup } from "./vpnModel";
 
 export const GRAPH_NODE_LIMIT = 100;
 export const TABLE_PAGE_SIZE = 100;
@@ -242,9 +242,8 @@ export function normalizeChainTopology(
 }
 
 export function pageTopologyRows(rows: readonly TopologyRow[], requestedPage: number, pageSize = TABLE_PAGE_SIZE): { rows: TopologyRow[]; page: number; pages: number } {
-  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
-  const page = Math.min(Math.max(1, Math.trunc(requestedPage) || 1), pages);
-  return { rows: rows.slice((page - 1) * pageSize, page * pageSize), page, pages };
+  const { rows: slice, page, pages } = pageRows(rows, requestedPage, pageSize);
+  return { rows: slice, page, pages };
 }
 
 function targetFor(uuid: string, lines: Map<string, { line: Line; nodeName?: string }>): TopologyTarget {
