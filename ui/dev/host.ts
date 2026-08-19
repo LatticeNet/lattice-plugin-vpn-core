@@ -2,11 +2,16 @@
  * A stand-in for the dashboard host, for looking at the plugin in a browser.
  *
  * This is deliberately not a mock of the UI: it runs the real plugin build in a
- * real iframe and speaks the real bridge protocol at it, including the one
- * thing that breaks overlays in production. The host sizes the frame to the
- * height the plugin reports, so the frame is taller than the window and the
- * frame is NOT a viewport. Reproducing that here is the whole point: an overlay
- * that looks centred in a standalone page lands below the fold in the console.
+ * real iframe and speaks the real bridge protocol at it, including the frame
+ * model production actually uses. The pane fills the console's main region and
+ * the iframe fills the pane, so the frame IS the plugin's viewport: the plugin
+ * document scrolls inside it, there is one scrollbar, and `100vh`,
+ * `position: fixed` and `position: sticky` resolve against the visible window.
+ *
+ * The host accepts `lattice.plugin.resize` for protocol compatibility and does
+ * not wire it to layout, exactly as PluginFrameHost.vue does. The reported
+ * number is printed in the bar so a plugin that still tries to drive its own
+ * frame height is visible here rather than only in production.
  */
 
 import { handlers, type Scenario } from "./fixtures";
@@ -49,7 +54,7 @@ let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
 let dark = params.get("theme") !== "light";
 let width = params.get("width") ?? "1440";
-/** Deliberately short, so the frame is taller than the window like production. */
+/** The height of the console's main region. The frame gets exactly this. */
 let windowHeight = Number(params.get("frame") ?? 760);
 
 const shell = document.createElement("div");
@@ -80,6 +85,7 @@ function tokens(): Record<string, string> {
 function applyChrome(): void {
   wrap.style.width = `${width}px`;
   viewport.style.height = `${windowHeight}px`;
+  reported.textContent = `frame ${width} x ${windowHeight}`;
   document.documentElement.dataset.theme = dark ? "dark" : "light";
   (document.getElementById("theme") as HTMLButtonElement).textContent = dark ? "light" : "dark";
 }
@@ -108,11 +114,11 @@ window.addEventListener("message", (event) => {
       });
       return;
     case "lattice.plugin.resize": {
+      // Accepted and ignored, like the real host. The frame height never
+      // depends on anything the plugin says. Reported only so a plugin still
+      // trying to drive its own frame is visible.
       const height = Math.max(120, Number(data.height) || 0);
-      // The host trusts the plugin's own height. That is exactly why `vh` and
-      // `position: fixed` are wrong inside the frame.
-      frame.style.height = `${height}px`;
-      reported.textContent = `frame ${height}px in a ${windowHeight}px window`;
+      reported.textContent = `plugin reported ${height}px (ignored; frame is ${windowHeight}px)`;
       return;
     }
     case "lattice.plugin.call": {
