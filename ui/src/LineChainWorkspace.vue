@@ -42,10 +42,9 @@ const targetUUID = ref("");
 const topology = computed(() => normalizeChainTopology(props.groups, props.chains));
 const summary = computed(() => summarizeTopology(topology.value));
 const filteredRows = computed(() => filterTopologyRows(topology.value.rows, filter.value));
-/* 25, not the module default of 100. The frame has no scrollport of its own, so
- * every row this panel prints is height the operator has to scroll past to
- * reach the fleet table below it. 100 rows of a fleet with no chains is five
- * thousand pixels of dashes. */
+/* 25, not the module default of 100. Every row this panel prints is height the
+ * operator has to scroll past to reach the fleet table below it, and 100 rows
+ * of a fleet with no chains is five thousand pixels of dashes. */
 const PAGE_SIZE = 25;
 const pageData = computed(() => pageTopologyRows(filteredRows.value, page.value, PAGE_SIZE));
 

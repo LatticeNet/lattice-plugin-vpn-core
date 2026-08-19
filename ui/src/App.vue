@@ -381,7 +381,6 @@ async function loadCurrent(background = false): Promise<void> {
   } finally {
     loading.value = false;
     refreshing.value = false;
-    await resize();
   }
 }
 
@@ -430,7 +429,6 @@ async function runRollout(): Promise<void> {
     rolloutError.value = safeErrorMessage(cause, "Rollout could not be planned");
   } finally {
     rolloutBusy.value = false;
-    await resize();
   }
 }
 
@@ -631,7 +629,6 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
     // failed. Keep whatever was already loaded and say the list is unavailable.
     usersUnavailable.value = true;
   }
-  await resize();
 }
 
 function closeLineDetails(): void {
@@ -694,7 +691,6 @@ async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", user
     lineUsersError.value = safeErrorMessage(cause, "The on-node action could not be planned");
   } finally {
     lineUsersBusy.value = false;
-    await resize();
   }
 }
 
@@ -723,7 +719,6 @@ async function syncSidecar(): Promise<void> {
     lineUsersError.value = safeErrorMessage(cause, "Sidecar sync could not be queued");
   } finally {
     syncBusy.value = false;
-    await resize();
   }
 }
 
@@ -744,7 +739,6 @@ async function reattachLineUUID(): Promise<void> {
     lineUsersError.value = safeErrorMessage(cause, "Line identity could not be reattached");
   } finally {
     reattachBusy.value = false;
-    await resize();
   }
 }
 
@@ -821,7 +815,6 @@ async function openProfileSettings(profile: Profile): Promise<void> {
     profileSettingsError.value = safeErrorMessage(cause, "Node settings are unavailable");
   } finally {
     profileSettingsBusy.value = false;
-    await resize();
   }
 }
 
@@ -855,20 +848,12 @@ async function saveProfileSettings(): Promise<void> {
     profileSettingsError.value = safeErrorMessage(cause, "Node settings could not be saved");
   } finally {
     profileSettingsSaving.value = false;
-    await resize();
   }
 }
 
-async function resize(): Promise<void> {
-  await nextTick();
-  bridge?.resize(document.documentElement.scrollHeight);
-}
-
 // ── overlays ─────────────────────────────────────────────────────────────
-// The frame is not a viewport: the host sizes it to this document, so a fixed,
-// "centred" sheet lands wherever the middle of a 2400px frame happens to be,
-// which on a 1500px window is far below the fold. Overlays are absolute and
-// anchored to the click, in document coordinates. See src/overlayAnchor.ts.
+// The frame is a viewport, so an overlay is centred against the window in CSS
+// and the document-coordinate anchor in src/overlayAnchor.ts is inert.
 // Whether the current route has anything to show. An empty screen after a
 // failed call is not an empty fleet, and telling the operator to go configure
 // discovery when the request 503'd sends them after the wrong problem.
@@ -933,20 +918,18 @@ watch(openOverlayKey, async (key) => {
   // Escape only reaches a focused element, and a dialog the operator cannot
   // dismiss with Escape is the worst one to get wrong.
   panel.focus();
-  await resize();
 });
 
-let observer: ResizeObserver | undefined;
+// Nothing here measures this document's height. The host frame is a viewport
+// the host sizes itself, so a page that reported its own height was running a
+// full synchronous layout of an 8800px document on every body resize and
+// throwing the answer away.
 onMounted(() => {
-  observer = new ResizeObserver(() => { void resize(); });
-  observer.observe(document.body);
   document.addEventListener("pointerdown", recordAnchor, true);
   window.addEventListener("keydown", onKeydown);
-  void resize();
 });
 
 onBeforeUnmount(() => {
-  observer?.disconnect();
   document.removeEventListener("pointerdown", recordAnchor, true);
   window.removeEventListener("keydown", onKeydown);
   bridge?.dispose();
