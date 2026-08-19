@@ -10,9 +10,11 @@ import {
   lineStatus,
   lineChainTone,
   sortLineRows,
+  usageByLine,
   type LineGroup,
   type LineChain,
   type LineRow,
+  type UsageRow,
 } from "./vpnModel";
 
 const groups: LineGroup[] = [{
@@ -186,5 +188,72 @@ describe("quotaBytesFromInput", () => {
   it("converts GiB to bytes", () => {
     expect(quotaBytesFromInput("5")).toBe(5 * 1024 * 1024 * 1024);
     expect(quotaBytesFromInput("1.5")).toBe(Math.round(1.5 * 1024 * 1024 * 1024));
+  });
+});
+
+describe("usageByLine", () => {
+  const usageLine = (hash: string, name: string, node: string): Line => ({
+    id: hash, line_hash_id: hash, line_uuid: `${hash}-uuid`, node_id: node,
+    core: "sing-box", source: "discovery", managed: false, name,
+    user_count: 0, user_known: false,
+  });
+  const fleet: LineGroup[] = [{
+    node_id: "node-lax", node_name: "lax-exit-01",
+    lines: [usageLine("line_a", "VLESS-REALITY-443", "node-lax"), usageLine("line_b", "Trojan-8443", "node-lax")],
+  }];
+  const row = (over: Partial<UsageRow>): UsageRow => ({ node_id: "node-lax", node_name: "lax-exit-01", user_id: "u1", bytes: 0, ...over });
+
+  it("returns an empty breakdown for no rows", () => {
+    expect(usageByLine([], fleet)).toEqual({ lines: [], attributedBytes: 0, unattributedBytes: 0, unattributedNodes: [] });
+  });
+
+  it("folds rows onto their line, names it, and counts distinct identities", () => {
+    const result = usageByLine([
+      row({ line_hash_id: "line_a", user_id: "u1", bytes: 100 }),
+      row({ line_hash_id: "line_a", user_id: "u2", bytes: 50 }),
+      row({ line_hash_id: "line_a", user_id: "u1", bytes: 25 }),
+      row({ line_hash_id: "line_b", user_id: "u1", bytes: 400 }),
+    ], fleet);
+
+    expect(result.lines).toEqual([
+      { lineHashID: "line_b", label: "Trojan-8443", nodeID: "node-lax", nodeName: "lax-exit-01", resolved: true, bytes: 400, users: 1 },
+      { lineHashID: "line_a", label: "VLESS-REALITY-443", nodeID: "node-lax", nodeName: "lax-exit-01", resolved: true, bytes: 175, users: 2 },
+    ]);
+    expect(result.attributedBytes).toBe(575);
+    expect(result.unattributedBytes).toBe(0);
+  });
+
+  it("keeps the same hash on two nodes as two rows", () => {
+    const result = usageByLine([
+      row({ line_hash_id: "line_a", bytes: 10 }),
+      row({ node_id: "node-fra", node_name: "fra-exit-01", line_hash_id: "line_a", bytes: 20 }),
+    ], fleet);
+    expect(result.lines.map((entry) => [entry.nodeID, entry.bytes])).toEqual([["node-fra", 20], ["node-lax", 10]]);
+  });
+
+  /* Silently dropping these would make a partial picture look complete. */
+  it("counts bytes that no collector attributed to a line and names the nodes", () => {
+    const result = usageByLine([
+      row({ line_hash_id: "line_a", bytes: 100 }),
+      row({ bytes: 900 }),
+      row({ node_id: "node-fra", node_name: "fra-exit-01", bytes: 5 }),
+      row({ node_id: "node-syd", node_name: "syd-relay-01", bytes: 0 }),
+    ], fleet);
+    expect(result.attributedBytes).toBe(100);
+    expect(result.unattributedBytes).toBe(905);
+    expect(result.unattributedNodes).toEqual(["fra-exit-01", "lax-exit-01"]);
+  });
+
+  it("keeps a hash the fleet listing no longer knows and marks it unresolved", () => {
+    const result = usageByLine([row({ line_hash_id: "line_gone", bytes: 7 })], fleet);
+    expect(result.lines).toEqual([
+      { lineHashID: "line_gone", label: "line_gone", nodeID: "node-lax", nodeName: "lax-exit-01", resolved: false, bytes: 7, users: 1 },
+    ]);
+  });
+
+  it("treats a non-finite byte count as zero rather than poisoning the total", () => {
+    const result = usageByLine([row({ line_hash_id: "line_a", bytes: Number.NaN }), row({ line_hash_id: "line_a", bytes: 5 })], fleet);
+    expect(result.lines[0].bytes).toBe(5);
+    expect(result.attributedBytes).toBe(5);
   });
 });
