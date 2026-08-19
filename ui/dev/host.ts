@@ -49,7 +49,99 @@ const LIGHT: Record<string, string> = {
   "--destructive": "#c43838", "--ring": "#1769aa",
 };
 
+/* Render timing, so "the table is slow" is a number rather than an impression.
+ * `measureRender()` remounts the frame, stamps the moment the fleet listing is
+ * answered, and then watches the frame every animation frame:
+ *   paintedMs  the first frame in which a fleet row has a layout box, which is
+ *              the earliest the operator can see any of the table
+ *   settledMs  the first frame after which three consecutive frames each came
+ *              in under 32ms, which is when the page is usable again
+ * Both are measured from the answer, not from navigation, so module load and
+ * the harness's own latency are excluded. */
+interface Measure {
+  dataAt: number;
+  /** DOM built and laid out: the rows have a box. Timer driven, so this lands
+   *  even while the renderer is too busy to deliver an animation frame. */
+  layoutMs: number;
+  /** A frame was actually presented after that layout existed. This is the
+   *  number the operator feels: nothing is on screen until it lands. */
+  paintedMs: number;
+  /** Three consecutive animation frames under 32ms, so the page is usable
+   *  again. -1 when that never happened inside the deadline. */
+  settledMs: number;
+  rows: number;
+  worstGapMs: number;
+  resolve: (value: Measure) => void;
+}
+const SETTLE_DEADLINE_MS = 30_000;
+const POLL_MS = 25;
+let measuring: Measure | undefined;
+let poll: ReturnType<typeof setInterval> | undefined;
+
+function fleetRows(): NodeListOf<HTMLElement> | undefined {
+  const body = frame.contentDocument?.querySelector(".fleet-panel table tbody");
+  return body?.querySelectorAll("tr") as NodeListOf<HTMLElement> | undefined;
+}
+
+function finish(): void {
+  const done = measuring;
+  measuring = undefined;
+  if (poll !== undefined) clearInterval(poll);
+  poll = undefined;
+  done?.resolve(done);
+}
+
+function watchRender(): void {
+  // Timers keep running when the compositor cannot keep up, so the deadline and
+  // the layout stamp are driven from one; only the frame signals need rAF.
+  poll = setInterval(() => {
+    if (!measuring) return;
+    const rows = fleetRows();
+    if (!measuring.layoutMs && rows?.length && rows[0].offsetHeight > 0) {
+      measuring.layoutMs = Math.round(performance.now() - measuring.dataAt);
+      measuring.rows = rows.length;
+    }
+    if (performance.now() - measuring.dataAt > SETTLE_DEADLINE_MS) {
+      if (!measuring.settledMs) measuring.settledMs = -1;
+      finish();
+    }
+  }, POLL_MS);
+
+  let last = 0;
+  let quick = 0;
+  const step = (ts: number): void => {
+    if (!measuring) return;
+    const gap = last ? ts - last : 0;
+    last = ts;
+    if (gap > measuring.worstGapMs) measuring.worstGapMs = Math.round(gap);
+    if (measuring.layoutMs) {
+      if (!measuring.paintedMs) measuring.paintedMs = Math.round(performance.now() - measuring.dataAt);
+      quick = gap > 0 && gap < 32 ? quick + 1 : 0;
+      if (quick >= 3) {
+        measuring.settledMs = Math.round(performance.now() - measuring.dataAt);
+        return finish();
+      }
+    }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function armMeasure(resolve: (value: Measure) => void): void {
+  if (poll !== undefined) clearInterval(poll);
+  measuring = { dataAt: 0, layoutMs: 0, paintedMs: 0, settledMs: 0, rows: 0, worstGapMs: 0, resolve };
+}
+
+/* Remount and measure. Useful for a quick A/B, but note that back to back
+ * remounts of a heavy document measure the remounts as much as the page. */
+(window as unknown as { measureRender: () => Promise<Measure> }).measureRender = () =>
+  new Promise<Measure>((resolve) => {
+    armMeasure(resolve);
+    reload();
+  });
+
 const params = new URLSearchParams(location.search);
+let frameEpoch = 0;
 let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
 let dark = params.get("theme") !== "light";
@@ -94,7 +186,11 @@ function reload(): void {
   const query = new URLSearchParams({ route, scenario, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
   history.replaceState(null, "", `?${query}`);
   applyChrome();
-  frame.src = `/index.html#lattice_nonce=${NONCE}&host_origin=${encodeURIComponent(location.origin)}`;
+  // The epoch matters: assigning an identical src, fragment and all, is a
+  // same-document navigation, so the frame would keep running and the route or
+  // data the operator just picked would never reach a fresh plugin.
+  frameEpoch += 1;
+  frame.src = `/index.html?frame=${frameEpoch}#lattice_nonce=${NONCE}&host_origin=${encodeURIComponent(location.origin)}`;
 }
 
 function post(message: Record<string, unknown>): void {
@@ -137,6 +233,10 @@ window.addEventListener("message", (event) => {
         }
         try {
           post({ type: "lattice.host.result", id: data.id, result: handler((data.payload ?? {}) as any) });
+          if (measuring && !measuring.dataAt && key === "lines/list") {
+            measuring.dataAt = performance.now();
+            watchRender();
+          }
         } catch (cause) {
           post({ type: "lattice.host.error", id: data.id, message: cause instanceof Error ? cause.message : String(cause) });
         }
@@ -162,5 +262,14 @@ document.getElementById("theme")!.addEventListener("click", () => {
   applyChrome();
   post({ type: "lattice.host.theme", colorScheme: dark ? "dark" : "light", designTokens: tokens() });
 });
+
+/* `?measure=1` arms the very first mount, so a single fresh tab load yields one
+ * number for what the operator actually waits through: no remount, no warm
+ * document, nothing else competing for the compositor. Read window.__measure. */
+if (params.get("measure") === "1") {
+  armMeasure((value) => {
+    (window as unknown as { __measure?: Measure }).__measure = value;
+  });
+}
 
 reload();
