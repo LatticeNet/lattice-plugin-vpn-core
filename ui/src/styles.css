@@ -193,7 +193,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    column impossible to scan. Every one of these cells carries a title. */
 td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.actions-cell { text-align: right; }
+/* The row action is pinned to the right edge of the scroll container.
+   A wide table inside a frame the host sizes to content puts its only
+   horizontal scrollbar thousands of pixels below the first row, so an action
+   that lives past the fold is an action nobody can reach. `sticky` works here,
+   unlike on the page itself, because .table-wrap is a real scrollport. */
+.actions-cell { position: sticky; right: 0; z-index: 1; text-align: right; background: var(--card, #fff); box-shadow: -1px 0 0 var(--border, #d9dde2); }
+th.actions-cell { background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); }
+tbody tr:hover .actions-cell { background: color-mix(in srgb, var(--muted, #eef0f2) 52%, var(--card, #fff)); }
 
 /* Sortable headers. A 111-row table that cannot be ordered is a list. */
 .sort-button { display: inline-flex; align-items: center; gap: var(--sp-1); border: 0; border-radius: var(--radius-sm); padding: 2px var(--sp-1); margin: -2px calc(-1 * var(--sp-1)); color: inherit; background: transparent; font: inherit; text-transform: inherit; }

@@ -192,12 +192,10 @@ const LINE_COLUMNS: Array<{ key: LineSortKey | ""; label: string; numeric?: bool
   { key: "", label: "Source" },
   { key: "ownership", label: "Ownership" },
   { key: "endpoint", label: "Endpoint" },
-  { key: "", label: "Listen" },
   { key: "", label: "Reality SNI" },
   { key: "users", label: "Users", numeric: true },
   { key: "", label: "Outbound ref" },
   { key: "status", label: "Status" },
-  { key: "", label: "Error" },
 ];
 
 function toggleSort(key: LineSortKey): void {
@@ -1011,13 +1009,11 @@ onBeforeUnmount(() => {
             <td><span class="badge">{{ line.core || 'unknown' }}</span></td>
             <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ line.source }}</span></td>
             <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ lineOwnership(line) }}</span><span v-if="line.overlay" class="badge" :data-tone="overlayTone(line.overlay_status)" :title="line.overlay_user ? `Bound account: ${line.overlay_user}` : 'Lattice-owned overlay line'">lattice-managed</span></td>
-            <td class="mono" :title="formatLineEndpoint(line)">{{ formatLineEndpoint(line) }}</td>
-            <td class="mono" :title="formatLineListen(line)">{{ formatLineListen(line) }}</td>
+            <td class="mono" :title="`public ${formatLineEndpoint(line)}, listen ${formatLineListen(line)}`">{{ formatLineEndpoint(line) }}<small>listen {{ formatLineListen(line) }}</small></td>
             <td class="mono" :title="formatLineDomain(line)">{{ formatLineDomain(line) }}</td>
             <td class="num" :title="line.user_known ? undefined : 'The node did not report a user count for this line'">{{ line.user_known ? line.user_count : 'unknown' }}</td>
             <td class="mono" :title="line.outbound_ref || undefined">{{ line.outbound_ref || '-' }}<small v-if="line.outbound_server">{{ line.outbound_server }}<span v-if="line.outbound_port">:{{ line.outbound_port }}</span></small></td>
-            <td><span class="status-dot" :data-tone="lineStatus(line)" :title="line.status || (line.last_error ? 'error' : 'ok')">{{ line.status || (line.last_error ? 'error' : 'ok') }}</span></td>
-            <td :class="{ 'error-text': line.last_error }" :title="line.last_error || undefined">{{ lineErrorText(line) }}</td>
+            <td><span class="status-dot" :data-tone="lineStatus(line)" :title="line.status || (line.last_error ? 'error' : 'ok')">{{ line.status || (line.last_error ? 'error' : 'ok') }}</span><small v-if="line.last_error" class="error-text" :title="lineErrorText(line)">{{ lineErrorText(line) }}</small></td>
             <td v-if="canViewLineDetails" class="actions-cell"><button class="button button-secondary button-compact" type="button" @click="openLineDetails(group, line)">Details</button></td>
           </tr></tbody></table></div>
         <div v-else-if="search.trim()" class="empty-state">
