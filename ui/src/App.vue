@@ -1008,7 +1008,7 @@ onBeforeUnmount(() => {
           <span v-else-if="def.status === 'planned'" class="muted">awaiting approval</span>
         </div>
       </section>
-      <section class="data-panel">
+      <section class="data-panel fleet-panel">
         <header class="panel-header">
           <div><h2>Fleet lines</h2><p>Every inbound the control plane can see, whether Lattice owns it or only observes it.</p></div>
           <span class="count">{{ visibleLines.length }} shown</span>
