@@ -23,8 +23,7 @@ type Pending = {
 type PluginMessage =
   | { type: "lattice.plugin.ready"; nonce: string }
   | { type: "lattice.plugin.call"; nonce: string; id: string; service: string; method: string; payload: unknown }
-  | { type: "lattice.plugin.cancel"; nonce: string; id: string }
-  | { type: "lattice.plugin.resize"; nonce: string; height: number };
+  | { type: "lattice.plugin.cancel"; nonce: string; id: string };
 
 const TOKEN_NAMES = new Set([
   "--background", "--foreground", "--card", "--card-foreground", "--muted",
@@ -93,12 +92,6 @@ export class BridgeClient {
     });
     promise.catch(() => {});
     return { promise, cancel };
-  }
-
-  resize(height: number): void {
-    if (!this.disposed && Number.isFinite(height)) {
-      this.post({ type: "lattice.plugin.resize", nonce: this.nonce, height: Math.ceil(height) });
-    }
   }
 
   dispose(): void {
