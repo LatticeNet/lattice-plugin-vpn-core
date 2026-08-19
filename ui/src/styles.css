@@ -2,12 +2,14 @@
  *
  * Three constraints shape this sheet and none of them are cosmetic.
  *
- * 1. The plugin renders inside a sandboxed iframe the host sizes to the
- *    plugin's own reported content height. The frame is therefore NOT a
- *    viewport: `position: fixed` resolves against the whole frame, `vh` is the
- *    frame height rather than the window, and `position: sticky` never
- *    activates. Overlays are absolute and anchored in document coordinates
- *    (see src/overlayAnchor.ts); every ceiling is a px value.
+ * 1. The plugin renders inside a sandboxed iframe the host sizes to fill the
+ *    console's main region. The frame IS a viewport: this document scrolls
+ *    inside it, and `position: fixed`, `position: sticky` and `vh` all resolve
+ *    against the visible window. None of that was true while the host sized
+ *    the frame to the content height this page reported, which is why overlays
+ *    were anchored in document coordinates (src/overlayAnchor.ts) and every
+ *    ceiling was a px value. Overlays are viewport-centred now and that anchor
+ *    is inert.
  * 2. The host console is fluid edge to edge, so this workspace is fluid too.
  *    Only a section that genuinely reads better narrow gets a local `ch` cap.
  * 3. Colour comes from host tokens with fallbacks. Status tones are the only
@@ -39,8 +41,9 @@
   --radius: 6px;
   --radius-lg: 8px;
 
-  /* Ceilings are px, never vh: this document's height is the frame height. */
-  --overlay-max-height: 640px;
+  /* The window, less room to read the page behind it. A px ceiling here used
+     to be the only safe kind: `vh` was a share of the whole document. */
+  --overlay-max-height: calc(100vh - 2 * var(--sp-6, 32px));
   --measure: 62ch;
 
   --tone-neutral: var(--muted-foreground, #65707b);
@@ -264,22 +267,24 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 .muted { color: var(--muted-foreground, #65707b); font-size: var(--text-sm); }
 
 /* ── overlays ─────────────────────────────────────────────────────────────
-   Absolute, never fixed; anchored to the click in document coordinates; every
-   ceiling in px. See the file header and src/overlayAnchor.ts. */
+   Fixed and centred on the window. The frame is a viewport, so the scrim covers
+   what the operator can see and the modal takes the height that is there. The
+   scrim was absolute and the modal was pushed down by --overlay-anchor-top, a
+   document coordinate: under a viewport frame that offset drops the modal below
+   the fold as soon as the page is scrolled, so it is gone and the variable the
+   screens still set is inert. See the file header. */
 .overlay-scrim {
-  position: absolute;
+  position: fixed;
   z-index: 1000;
   inset: 0;
-  min-height: 100%;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 0 var(--sp-4) var(--sp-7);
+  padding: var(--sp-4);
   background: color-mix(in srgb, #05070a 62%, transparent);
 }
 .modal {
   width: min(660px, 100%);
-  margin-top: var(--overlay-anchor-top, var(--sp-5));
   max-height: var(--overlay-max-height);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -362,7 +367,7 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
   .binding-add, .chain-plan-form { grid-template-columns: 1fr; }
   .chain-plan-actions { grid-column: auto; align-items: stretch; flex-direction: column; }
   .topology-graph-shell { display: none; }
-  .overlay-scrim { padding: 0 var(--sp-2) var(--sp-6); }
+  .overlay-scrim { padding: var(--sp-2); }
   .modal > header, .modal > footer, .form-grid, .detail-body, .binding-add, .binding-list { padding: var(--sp-3); }
   .modal > footer { flex-wrap: wrap; }
   .modal > footer .button { flex: 1 1 auto; }
