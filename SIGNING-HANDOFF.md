@@ -32,9 +32,11 @@ line. At the time of writing they were server floor `0.2.2-alpha.19`, dashboard
 host bridge `1`, node-agent `0.3.4-alpha.1`. The plugin version is whatever the
 manifest declares.
 
-Verified complete-bundle SHA-256: none yet. The digest above was removed when
-the plugin moved to a new version, because it named the previous build and a
-signer reading it would have verified the wrong bytes. Pack first, then write
-the digest here and into `manifest.json`; the two must be the same string, and
-a test in `system-go` enforces that and refuses a digest here while the
-manifest declares none.
+Verified complete-bundle SHA-256:
+`73564a677608aa1b1637190aa4be9105a10a0723f5f6ed6b51f697990af6eea7`.
+
+That digest is the previous build's, and so is the one in `manifest.json`; they
+match each other and neither describes the version now declared. `pluginsign
+-update-digest` overwrites both at pack time, which is the only moment either is
+true. A test in `system-go` holds the two to the same string in both
+directions, so the checklist can never quote a bundle the manifest does not.
