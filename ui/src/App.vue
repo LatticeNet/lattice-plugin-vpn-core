@@ -513,20 +513,29 @@ async function bindLine(): Promise<void> {
   }
 }
 
+/** The bound-identity list could not be refreshed, so it must not be read as empty. */
+const usersUnavailable = ref(false);
+
+const unbindBusy = ref(false);
 async function unbindLine(lineHash: string): Promise<void> {
-  if (!bindingUser.value || !canUnbindUser.value) return;
+  if (!bindingUser.value || !canUnbindUser.value || unbindBusy.value) return;
+  unbindBusy.value = true;
   try {
     await pluginCall(SERVICES.admin, "unbind", { user_id: bindingUser.value.id, line_hash_id: lineHash });
     notice.value = "Line binding removed";
     await loadCurrent(true);
   } catch (cause) {
     error.value = safeErrorMessage(cause, "Binding could not be removed");
+  } finally {
+    unbindBusy.value = false;
   }
 }
 
 const deleteTarget = ref<VpnUser>();
+const deletingUser = ref(false);
 async function deleteUser(): Promise<void> {
-  if (!deleteTarget.value || !canDeleteUser.value) return;
+  if (!deleteTarget.value || !canDeleteUser.value || deletingUser.value) return;
+  deletingUser.value = true;
   try {
     await pluginCall(SERVICES.admin, "delete", { id: deleteTarget.value.id });
     notice.value = `${deleteTarget.value.email} deleted`;
@@ -534,6 +543,8 @@ async function deleteUser(): Promise<void> {
     await loadCurrent(true);
   } catch (cause) {
     error.value = safeErrorMessage(cause, "User could not be deleted");
+  } finally {
+    deletingUser.value = false;
   }
 }
 
@@ -595,8 +606,12 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   // Best effort: the on-node user section lists bound identities.
   try {
     await ensureUsersLoaded();
+    usersUnavailable.value = false;
   } catch {
-    users.value = [];
+    // Not `users = []`. An empty list renders as "No identities bound to this
+    // line yet", which is a claim about the line, not about the request that
+    // failed. Keep whatever was already loaded and say the list is unavailable.
+    usersUnavailable.value = true;
   }
   await resize();
 }
@@ -1158,9 +1173,9 @@ onBeforeUnmount(() => {
         <footer><button class="button button-secondary" type="button" @click="closeRollout">Done</button></footer>
       </template>
     </section></div>
-    <div v-if="bindingUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="bindingUser = undefined"><section tabindex="-1" class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div v-if="canBindUser" class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button v-if="canUnbindUser" class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines bound to this identity.</p><p v-if="!canBindUser && !canUnbindUser" class="empty-inline">This session cannot change bindings.</p></div></section></div>
+    <div v-if="bindingUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="bindingUser = undefined"><section tabindex="-1" class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div v-if="canBindUser" class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button v-if="canUnbindUser" class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" :disabled="unbindBusy" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines bound to this identity.</p><p v-if="!canBindUser && !canUnbindUser" class="empty-inline">This session cannot change bindings.</p></div></section></div>
 
-    <div v-if="deleteTarget" class="overlay-scrim" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes plugin-owned credentials and line bindings.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong>?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>
+    <div v-if="deleteTarget" class="overlay-scrim" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes plugin-owned credentials and line bindings.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong>?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" :disabled="deletingUser" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>
 
     <div v-if="rotateUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="rotateUser = undefined"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>Rotate credential</h2><p>{{ rotateUser.email }}. The old secret stops working once the new one is applied to its lines.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
       <label class="field"><span>Protocol credential</span><select v-model="rotateProtocol"><option v-for="credential in rotateUser.credentials" :key="credential.protocol" :value="credential.protocol">{{ credential.protocol }}</option></select></label>
@@ -1198,7 +1213,8 @@ onBeforeUnmount(() => {
               <button class="button button-secondary button-compact destructive" type="button" :disabled="lineUsersBusy" title="Queue sb user del for this line" @click="planLineUser('plan_remove', user.id)">Remove</button>
             </span>
           </div>
-          <p v-if="!lineDetailBoundUsers.length" class="empty-inline">No identities bound to this line yet.</p>
+          <p v-if="usersUnavailable" class="empty-inline" role="status">The identity list could not be loaded, so bindings for this line are not shown.</p>
+          <p v-else-if="!lineDetailBoundUsers.length" class="empty-inline">No identities bound to this line yet.</p>
         </div>
         <div v-if="lineDetailBindableUsers.length" class="binding-add">
           <select v-model="lineUserAdd"><option value="">Select an identity to add</option><option v-for="user in lineDetailBindableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select>
