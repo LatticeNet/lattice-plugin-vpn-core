@@ -847,9 +847,22 @@ const hasRouteData = computed(() => ({
 const overlayAnchorTop = ref(MIN_ANCHOR_TOP);
 const overlayStyle = computed(() => ({ "--overlay-anchor-top": `${overlayAnchorTop.value}px` }));
 
-const overlayOpen = computed(() => userDialogOpen.value || rolloutOpen.value || !!bindingUser.value ||
-  !!deleteTarget.value || !!rotateUser.value || !!rotateRevealed.value || lineDetailOpen.value ||
-  profileSettingsOpen.value);
+// Which overlay is open, not merely whether one is. Rotating a credential
+// closes the confirm dialog and opens the reveal in the same tick; a boolean
+// stays true across that swap, so the reveal would never be focused or
+// clamped. A changing key fires the watcher on every handover.
+const openOverlayKey = computed(() => {
+  if (rotateRevealed.value) return "rotate-revealed";
+  if (deleteTarget.value) return "delete";
+  if (rotateUser.value) return "rotate";
+  if (bindingUser.value) return "bindings";
+  if (rolloutOpen.value) return "rollout";
+  if (userDialogOpen.value) return "user";
+  if (profileSettingsOpen.value) return "profile-settings";
+  if (lineDetailOpen.value) return "line-detail";
+  return "";
+});
+const overlayOpen = computed(() => openOverlayKey.value !== "");
 
 function recordAnchor(event: Event): void {
   // A click inside an open overlay must not move the anchor, or the next one
@@ -874,8 +887,8 @@ function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape" && overlayOpen.value) closeTopOverlay();
 }
 
-watch(overlayOpen, async (open) => {
-  if (!open) return;
+watch(openOverlayKey, async (key) => {
+  if (!key) return;
   await nextTick();
   const panel = document.querySelector<HTMLElement>(".overlay-scrim .modal");
   if (!panel) return;

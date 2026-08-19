@@ -294,10 +294,10 @@ export function sortLineRows(rows: readonly LineRow[], key: LineSortKey | "", di
     const a = lineSortValue(left, key);
     const b = lineSortValue(right, key);
     if (a === b) {
-      // Ties fall back to node then line, so the order never wobbles between
-      // renders of the same data.
-      const tie = (left.group.node_id + left.line.name).localeCompare(right.group.node_id + right.line.name);
-      return tie;
+      // Ties fall back to node then line, and deliberately do NOT follow the
+      // primary direction: reversing "status" should reverse the status groups,
+      // not shuffle the rows inside each one. Same data, same order, always.
+      return (left.group.node_id + left.line.name).localeCompare(right.group.node_id + right.line.name);
     }
     if (typeof a === "number" && typeof b === "number") return (a - b) * sign;
     return String(a).localeCompare(String(b)) * sign;

@@ -173,7 +173,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .stack { display: flex; flex-direction: column; gap: var(--sp-4); }
 .data-panel { overflow: hidden; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius-lg); background: var(--card, #fff); }
-.data-panel + .data-panel, .topology-workspace { margin-bottom: var(--sp-4); }
+/* One rule for the gap between top-level blocks. Nested panels (the usage
+   split, for instance) are spaced by their own grid gap. */
+.workspace > .data-panel, .workspace > .split-layout, .workspace > .empty-state { margin-bottom: var(--sp-4); }
 .panel-header { display: flex; flex-wrap: wrap; min-height: 52px; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border, #d9dde2); }
 .panel-header h2 { font-size: var(--text-md); }
 
@@ -208,7 +210,6 @@ th[aria-sort="ascending"] .sort-button, th[aria-sort="descending"] .sort-button 
 .error-text { color: var(--tone-danger) !important; white-space: normal !important; }
 
 .split-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--sp-4); }
-.collectors { margin-top: var(--sp-4); }
 .collector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0; }
 .collector-grid > div { min-width: 0; padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--border, #d9dde2); border-bottom: 1px solid var(--border, #d9dde2); }
 .collector-grid strong, .collector-grid small { display: block; margin-top: var(--sp-1); }
@@ -222,7 +223,7 @@ th[aria-sort="ascending"] .sort-button, th[aria-sort="descending"] .sort-button 
 .chain-plan-form .permission-note { grid-column: 1 / -1; }
 
 .evidence-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0; border-bottom: 1px solid var(--border, #d9dde2); }
-.evidence-cell { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--border, #d9dde2); border: 0; border-right: 1px solid var(--border, #d9dde2); background: var(--card, #fff); color: inherit; text-align: left; }
+.evidence-cell { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3) var(--sp-4); border: 0; border-right: 1px solid var(--border, #d9dde2); background: var(--card, #fff); color: inherit; text-align: left; }
 .evidence-cell:last-child { border-right: 0; }
 .evidence-cell strong { font-size: var(--text-lg); font-weight: 660; font-variant-numeric: tabular-nums; }
 .evidence-cell span { color: var(--muted-foreground, #65707b); font-size: var(--text-xs); font-weight: 600; }
