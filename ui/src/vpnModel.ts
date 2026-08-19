@@ -9,6 +9,8 @@ export interface Line {
   managed: boolean;
   name: string;
   type?: string;
+  transport?: string;
+  security?: string;
   listen_host?: string;
   listen_port?: number;
   public_host?: string;

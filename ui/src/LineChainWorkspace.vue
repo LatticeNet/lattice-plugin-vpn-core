@@ -1,16 +1,24 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Link2, LoaderCircle, Trash2, Waypoints } from "@lucide/vue";
 
 import {
+  CHAIN_TARGET_REJECTION_TEXT,
+  chainTargetRejection,
   connectedSubgraph,
+  diagnoseTopologyAbsence,
   filterTopologyRows,
+  GRAPH_ASSUMED_WIDTH,
+  GRAPH_LEGIBLE_HEIGHT,
+  isGraphLegible,
   layoutChainGraph,
   normalizeChainTopology,
   pageTopologyRows,
   summarizeTopology,
+  type ChainTargetRejection,
   type RowEvidence,
   type TopologyEdgeKind,
+  type TopologyTarget,
 } from "./chainTopology";
 import { lineChainTone, type LineChain, type LineGroup } from "./vpnModel";
 
@@ -46,16 +54,68 @@ const pageData = computed(() => pageTopologyRows(filteredRows.value, page.value,
  * nine characters; a hundred of them is a wall, not a topology. */
 const connected = computed(() => connectedSubgraph(topology.value.graph));
 const layout = computed(() => layoutChainGraph(connected.value.nodes, connected.value.edges));
-const hasDrawing = computed(() => layout.value.nodes.length > 0);
+
+/* Whether the drawing fits is a fact about this console's width, not a guess,
+ * so the panel measures itself. The graph shell adds var(--sp-4) of padding on
+ * each side, which the drawing does not get to use. */
+const SHELL_PADDING = 32;
+const panel = ref<HTMLElement>();
+/* Seeded with the conservative fallback rather than zero, so the first paint
+ * and any environment without a ResizeObserver still decide sensibly instead
+ * of showing an empty state that a measurement immediately contradicts. */
+const panelWidth = ref(GRAPH_ASSUMED_WIDTH + SHELL_PADDING);
+let observer: ResizeObserver | undefined;
+onMounted(() => {
+  if (!panel.value) return;
+  panelWidth.value = panel.value.clientWidth || panelWidth.value;
+  if (typeof ResizeObserver === "undefined") return;
+  observer = new ResizeObserver(([entry]) => { panelWidth.value = entry.contentRect.width; });
+  observer.observe(panel.value);
+});
+onBeforeUnmount(() => { observer?.disconnect(); observer = undefined; });
+const graphWidthBudget = computed(() => Math.max(0, Math.floor(panelWidth.value) - SHELL_PADDING));
+
+/* A drawing scaled to a twentieth of its size is not a drawing, it is a smear.
+ * When it does not fit, the table carries the topology on its own and the
+ * panel says so rather than printing the smear. */
+const hasDrawing = computed(() => isGraphLegible(layout.value, graphWidthBudget.value));
+
+const absence = computed(() => diagnoseTopologyAbsence(props.groups, topology.value, {
+  edges: layout.value.edges.length,
+  legible: hasDrawing.value,
+}));
 
 const lineEntries = computed(() => props.groups.flatMap((group) => group.lines
   .filter((line) => !!line.line_uuid)
   .map((line) => ({ line, label: `${group.node_name || group.node_id} / ${line.name}` }))));
 const sources = computed(() => lineEntries.value);
-const targets = computed(() => lineEntries.value.filter(({ line }) => line.managed && line.line_uuid !== sourceUUID.value));
+const selectedSourceNodeID = computed(() => sources.value.find(({ line }) => line.line_uuid === sourceUUID.value)?.line.node_id);
+/* The server's plan call compiles a REALITY outbound onto the target and needs
+ * the target's own descriptor, so it accepts a narrower set than "managed".
+ * Offering anything wider means offering a plan that gets refused. */
+const targetVerdicts = computed(() => lineEntries.value
+  .map((entry) => ({ ...entry, rejection: chainTargetRejection(entry.line, selectedSourceNodeID.value) })));
+const targets = computed(() => targetVerdicts.value.filter((entry) => entry.rejection === null));
 const selectedRow = computed(() => topology.value.rows.find((row) => row.sourceLineUUID === sourceUUID.value));
 const sourceBusy = computed(() => !!sourceUUID.value && props.busySources.has(sourceUUID.value));
 const noTargets = computed(() => sources.value.length > 0 && targets.value.length === 0);
+/* Why the eligible set is empty, counted rather than guessed. Judged without a
+ * source node, so "on the source node" never appears and the counts add up to
+ * the fleet: this note is about the fleet, not about the current selection. */
+const targetBlockers = computed(() => {
+  const counts = new Map<ChainTargetRejection, number>();
+  for (const entry of lineEntries.value) {
+    const rejection = chainTargetRejection(entry.line);
+    if (!rejection) continue;
+    counts.set(rejection, (counts.get(rejection) ?? 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).map(([reason, count]) => ({ reason, count, text: CHAIN_TARGET_REJECTION_TEXT[reason] }));
+});
+
+/** The identifier a target is actually known by: uuid where it has one, hash otherwise. */
+function targetHandle(target: TopologyTarget): string {
+  return target.lineUUID || target.lineHashID || "unknown";
+}
 
 const FILTERS: Array<{ key: RowEvidence | "all"; label: string; hint: string }> = [
   { key: "all", label: "Sources", hint: "Every line that can carry a chain" },
@@ -92,7 +152,7 @@ function edgeLabel(kind: TopologyEdgeKind): string {
 </script>
 
 <template>
-  <section class="data-panel topology-workspace" aria-labelledby="topology-title">
+  <section ref="panel" class="data-panel topology-workspace" aria-labelledby="topology-title">
     <header class="panel-header">
       <div>
         <h2 id="topology-title">Line topology</h2>
@@ -119,7 +179,7 @@ function edgeLabel(kind: TopologyEdgeKind): string {
 
     <form class="chain-plan-form" @submit.prevent="emit('plan', sourceUUID, targetUUID)">
       <label class="field"><span>Source · consumer / hub</span><select v-model="sourceUUID"><option v-for="entry in sources" :key="entry.line.line_uuid" :value="entry.line.line_uuid">{{ entry.label }}</option></select></label>
-      <label class="field"><span>Target · downstream / producer</span><select v-model="targetUUID" :disabled="noTargets"><option v-if="noTargets" value="">No managed line available</option><option v-for="entry in targets" :key="entry.line.line_uuid" :value="entry.line.line_uuid">{{ entry.label }}</option></select></label>
+      <label class="field"><span>Target · downstream / producer</span><select v-model="targetUUID" :disabled="noTargets"><option v-if="noTargets" value="">No eligible target on this fleet</option><option v-for="entry in targets" :key="entry.line.line_uuid" :value="entry.line.line_uuid">{{ entry.label }}</option></select></label>
       <div class="chain-plan-actions">
         <button class="button button-primary" type="submit" :disabled="!canPlan || !sourceUUID || !targetUUID || sourceBusy">
           <LoaderCircle v-if="sourceBusy" class="spin" :size="15" />
@@ -131,7 +191,13 @@ function edgeLabel(kind: TopologyEdgeKind): string {
         </button>
       </div>
       <p v-if="!canPlan && !canRemove" class="permission-note">Read-only session. Planning controls are unavailable.</p>
-      <p v-else-if="noTargets" class="permission-note">A chain target has to be a Lattice-managed line. Roll one out first, then a chain can be planned onto it.</p>
+      <div v-else-if="noTargets" class="chain-target-note">
+        <p>A chain is built by compiling a VLESS+REALITY outbound onto the target, which needs the target's own Reality descriptor and the credential bound to it. The control plane holds those only for a line it rolled out itself, so none of the {{ sources.length }} lines on this fleet can be a target yet:</p>
+        <ul class="target-blockers">
+          <li v-for="blocker in targetBlockers" :key="blocker.reason"><strong>{{ blocker.count }}</strong> {{ blocker.text }}</li>
+        </ul>
+        <p>Roll out a managed line from the Lines view and wait for it to report healthy; it becomes selectable here on the next refresh.</p>
+      </div>
       <p v-else class="permission-note">Plans create approval previews only; topology changes after approved host execution and observation.</p>
     </form>
 
@@ -168,13 +234,38 @@ function edgeLabel(kind: TopologyEdgeKind): string {
          and what produces it, instead of drawing a hundred lone boxes. -->
     <div v-else class="empty-state">
       <Waypoints :size="26" aria-hidden="true" />
-      <strong>No topology to draw yet</strong>
-      <p v-if="!summary.sources">No line carries a <code>line_uuid</code>, so no line can be the end of a chain. Lines get an identity once the server has rediscovered them, or once the line is reattached from its detail panel.</p>
-      <p v-else>
-        {{ summary.sources }} lines can carry a chain and none of them has one.
-        A chain appears here once a plan is approved and the apply is observed on the node.
-        Runtime jump-edge discovery is not reporting on this fleet, so there is no inferred topology either.
-      </p>
+      <strong>No topology to draw</strong>
+
+      <template v-if="absence.reason === 'no_identity'">
+        <p>No line carries a <code>line_uuid</code>, so no line can be either end of a chain. Lines get an identity once the server has rediscovered them, or once the line is reattached from its detail panel.</p>
+      </template>
+
+      <template v-else-if="absence.reason === 'no_relay'">
+        <p>{{ summary.sources }} lines report their configuration and every one of them exits directly. Nothing is relaying through anything, so there is no structure to draw. This is a flat fleet of independent endpoints, not missing data.</p>
+        <p>An edge appears here without any approval as soon as one line's outbound points at another line's endpoint. It also appears when an approved chain plan is applied and observed on the node.</p>
+      </template>
+
+      <template v-else-if="absence.reason === 'upstream_off_fleet'">
+        <p>{{ absence.relayCandidates }} of {{ summary.sources }} lines route through a named upstream rather than exiting directly, and none of those upstreams matches an endpoint this control plane can see. An edge needs both ends on the fleet, so none can be drawn.</p>
+        <p>The unmatched upstreams are:</p>
+        <ul class="unmatched-upstreams">
+          <li v-for="upstream in absence.unmatchedUpstreams" :key="upstream" class="mono">{{ upstream }}</li>
+        </ul>
+        <p>If one of these is a node Lattice should own, adopt it and the edge resolves on the next refresh. If it is a third-party provider, there is nothing further to draw.</p>
+      </template>
+
+      <template v-else-if="absence.reason === 'too_dense'">
+        <p>{{ topology.edges.length }} edges across {{ summary.sources }} sources. At a size where the line names can be read the picture would be {{ layout.width }} by {{ layout.height }} pixels, and this panel has {{ graphWidthBudget }} by {{ GRAPH_LEGIBLE_HEIGHT }} to draw it in. Scaled down to fit it is a smear, so it is not drawn.</p>
+        <p>The table below carries the same evidence and is the canonical form. Filter it by "Linked" or "Discovery only" above to narrow it to the lines that carry an edge.</p>
+      </template>
+
+      <template v-else-if="absence.reason === 'beyond_cap'">
+        <p>{{ topology.edges.length }} edges exist, and every one of them touches a line outside the first {{ topology.graph.nodes.length }} of {{ topology.graph.totalNodes }} the drawing can reach. They are all listed in the table below.</p>
+      </template>
+
+      <template v-else>
+        <p>{{ summary.sources }} lines can carry a chain and none of them has one.</p>
+      </template>
     </div>
 
     <div class="table-wrap topology-table-wrap">
@@ -199,7 +290,8 @@ function edgeLabel(kind: TopologyEdgeKind): string {
               <ul v-if="row.discoveredTargets.length" class="topology-evidence-list" aria-label="Discovered topology evidence">
                 <li v-for="item in row.discoveredTargets" :key="`${item.kind}:${item.target.lineUUID}`">
                   <strong>{{ item.kind === 'discovered_declared' ? 'declared' : 'inferred' }}</strong>
-                  <small class="mono" :title="item.target.lineUUID">{{ item.target.lineUUID }}<span v-if="!item.target.resolved"> · unresolved</span></small>
+                  <small v-if="item.target.resolved" :title="item.target.label">{{ item.target.label }}</small>
+                  <small class="mono" :title="targetHandle(item.target)">{{ targetHandle(item.target) }}<span v-if="!item.target.resolved"> · unresolved</span></small>
                 </li>
               </ul>
               <span v-else>-</span>

@@ -58,7 +58,7 @@ shell.innerHTML = `
   <div class="bar">
     <strong>vpn-core dev harness</strong>
     <label>route <select id="route">${ROUTES.map((value) => `<option${value === route ? " selected" : ""}>${value}</option>`).join("")}</select></label>
-    <label>data <select id="scenario">${["production", "rich", "empty", "failing"].map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
+    <label>data <select id="scenario">${["production", "offfleet", "rich", "dense", "empty", "failing"].map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>width <select id="width">${["1440", "2423", "375"].map((value) => `<option${value === width ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <button id="theme" type="button">${dark ? "light" : "dark"}</button>
     <span id="reported"></span>

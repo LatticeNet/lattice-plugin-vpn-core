@@ -7,10 +7,20 @@
  * than an afterthought. Anything the harness cannot answer throws, because a
  * mock that quietly returns undefined teaches the UI to tolerate nonsense.
  *
+ * Outbounds and jump_edges are kept internally consistent per scenario, which
+ * an earlier revision of this file was not. The server derives jump_edges from
+ * each line's own outbound (host, port) against a fleet-wide listen index, so
+ * a fixture cannot both point its outbounds at fleet endpoints and report no
+ * edges: that combination cannot come off the wire. "production" is therefore
+ * a flat fleet of direct exits, "offfleet" relays through upstreams the
+ * control plane does not own, "rich" carries the handful of edges the server
+ * would compute for a fleet with real hub/exit structure, and "dense" relays
+ * almost everything, which is what stops a drawing being readable.
+ *
  * Never imported by src/; the shipped bundle is built from index.html alone.
  */
 
-export type Scenario = "production" | "rich" | "empty" | "failing";
+export type Scenario = "production" | "offfleet" | "rich" | "dense" | "empty" | "failing";
 
 const NODE_NAMES = [
   "hkg-edge-01", "hkg-edge-02", "sin-edge-01", "sin-edge-02", "nrt-edge-01",
@@ -43,6 +53,40 @@ interface FixtureLine {
   user_known: boolean; status?: string; last_error?: string;
 }
 
+/** "dense" is "rich" with the relay density turned up; everything else matches. */
+const isRich = (scenario: Scenario) => scenario === "rich" || scenario === "dense";
+
+/**
+ * What a line's outbound looks like, and therefore whether an edge can exist.
+ *
+ * production: every line exits directly, so the fleet has no relay structure.
+ * offfleet:   three quarters relay through vendor endpoints Lattice cannot see.
+ * rich:       a few hubs relay onto fleet endpoints and carry the resolved edge.
+ * dense:      almost everything relays, which is what makes a drawing unreadable.
+ */
+function outboundShape(scenario: Scenario, made: number, index: number): Partial<FixtureLine> {
+  if (scenario === "production") return { outbound_ref: "direct" };
+  if (scenario === "rich" ? made % 11 !== 4 : made % 4 === 0) return { outbound_ref: "direct" };
+  if (scenario === "offfleet") {
+    return {
+      outbound_ref: `relay-${(made % 5) + 1}`,
+      outbound_server: `edge-${(made % 3) + 1}.vendor-transit.example.invalid`,
+      outbound_port: 443,
+    };
+  }
+  // The target is the port-443 line on another node, which is the line the
+  // server's listen index would have matched. Its hash, not its uuid: the
+  // relay graph is addressed by line_hash_id.
+  const targetSlot = ((index + 3) % NODE_NAMES.length) * 6;
+  return {
+    outbound_ref: `relay-${(made % 5) + 1}`,
+    outbound_server: `${NODE_NAMES[(index + 3) % NODE_NAMES.length]}.example.invalid`,
+    outbound_port: 443,
+    jump_edges: [`lh_${targetSlot.toString().padStart(4, "0")}`],
+    declared_jump_edges: made % 3 === 0 ? [`lh_${targetSlot.toString().padStart(4, "0")}`] : undefined,
+  };
+}
+
 /** 111 lines over 21 nodes, the exact counts production reports. */
 function buildLines(scenario: Scenario): Array<{ node_id: string; node_name: string; lines: FixtureLine[] }> {
   if (scenario === "empty") return [];
@@ -51,9 +95,9 @@ function buildLines(scenario: Scenario): Array<{ node_id: string; node_name: str
   for (let index = 0; made < 111; index += 1) {
     const group = groups[index % groups.length];
     const kind = LINE_KINDS[made % LINE_KINDS.length];
-    const managed = scenario === "rich" && made % 9 === 0;
-    const failing = scenario === "rich" && made % 17 === 5;
-    const pending = scenario === "rich" && made % 23 === 7;
+    const managed = isRich(scenario) && made % 9 === 0;
+    const failing = isRich(scenario) && made % 17 === 5;
+    const pending = isRich(scenario) && made % 23 === 7;
     group.lines.push({
       id: `l${made}`,
       line_hash_id: `lh_${made.toString().padStart(4, "0")}`,
@@ -68,9 +112,7 @@ function buildLines(scenario: Scenario): Array<{ node_id: string; node_name: str
       listen_port: kind.port,
       public_host: `${group.node_name}.example.invalid`,
       domain: kind.domain,
-      outbound_ref: made % 4 === 0 ? "direct" : `relay-${(made % 5) + 1}`,
-      outbound_server: made % 4 === 0 ? undefined : `${NODE_NAMES[(index + 3) % NODE_NAMES.length]}.example.invalid`,
-      outbound_port: made % 4 === 0 ? undefined : 443,
+      ...outboundShape(scenario, made, index),
       user_count: made % 7,
       user_known: made % 11 !== 3,
       status: failing ? "error" : pending ? "pending" : "ok",
@@ -86,7 +128,7 @@ function buildLines(scenario: Scenario): Array<{ node_id: string; node_name: str
 }
 
 function buildChains(scenario: Scenario) {
-  if (scenario !== "rich") return [];
+  if (!isRich(scenario)) return [];
   return [
     {
       source_line_uuid: uuid(1), source_node_id: "node-hkg-edge-01", status: "converged",
@@ -144,13 +186,13 @@ function buildProfiles(scenario: Scenario) {
   return NODE_NAMES.map((name, index) => ({
     node_id: `node-${name}`,
     node_name: name,
-    managed: scenario === "rich" && index % 4 === 0,
+    managed: isRich(scenario) && index % 4 === 0,
     core: "sing-box",
     core_version: "1.12.4",
     config_path: `/etc/sing-box/config.json`,
     stats_api: index % 3 === 0 ? "127.0.0.1:8080" : undefined,
-    applied: scenario === "rich" && index % 8 === 0,
-    last_error: scenario === "rich" && index === 5 ? "sb: exit status 1: config check failed at inbounds[3]" : undefined,
+    applied: isRich(scenario) && index % 8 === 0,
+    last_error: isRich(scenario) && index === 5 ? "sb: exit status 1: config check failed at inbounds[3]" : undefined,
     inbound_count: 5 + (index % 3),
     discovered_count: 5 + (index % 3),
     discovery_status: "ok",
@@ -160,9 +202,44 @@ function buildProfiles(scenario: Scenario) {
 }
 
 function buildUsage(scenario: Scenario) {
-  if (scenario !== "rich") return { by_user: [], by_node: [], collectors: [], per_line: false };
+  if (scenario === "offfleet") {
+    // A fleet whose collectors report node totals only: usage exists, and no
+    // byte of it can be placed on a line.
+    return {
+      per_line: false,
+      by_user: USERS.filter((user) => user.enabled).map((user, index) => ({
+        user_id: user.id, email: user.email, used_bytes: (index + 1) * 12 * 1024 ** 3, status: "active",
+      })),
+      by_node: NODE_NAMES.slice(0, 3).map((name, index) => ({
+        node_id: `node-${name}`, node_name: name, used_bytes: (index + 1) * 9 * 1024 ** 3, user_count: 2,
+      })),
+      rows: NODE_NAMES.slice(0, 3).flatMap((name, index) => USERS.filter((user) => user.enabled).map((user) => ({
+        node_id: `node-${name}`, node_name: name, user_id: user.id, email: user.email,
+        bytes: (index + 1) * 4 * 1024 ** 3,
+      }))),
+      collectors: NODE_NAMES.slice(0, 3).map((name) => ({
+        node_id: `node-${name}`, node_name: name, source: "usage_file", status: "ok", checked_at: "2026-08-18T09:00:00Z",
+      })),
+    };
+  }
+  if (!isRich(scenario)) return { by_user: [], by_node: [], rows: [], collectors: [], per_line: false };
   return {
     per_line: true,
+    // Per-(node, user, line) rows, plus two nodes still on an aggregate-only
+    // collector so the partial-attribution notice has something to report.
+    rows: [
+      ...NODE_NAMES.slice(0, 5).flatMap((name, index) => [0, 1, 2].flatMap((slot) => USERS
+        .filter((user) => user.enabled)
+        .map((user, seat) => ({
+          node_id: `node-${name}`, node_name: name, user_id: user.id, email: user.email,
+          line_hash_id: `lh_${(index * 6 + slot).toString().padStart(4, "0")}`,
+          bytes: (slot + 1) * (seat + 1) * 7 * 1024 ** 3,
+        })))),
+      ...NODE_NAMES.slice(5, 7).map((name, index) => ({
+        node_id: `node-${name}`, node_name: name, user_id: "u_ops", email: "ops@example.invalid",
+        bytes: (index + 1) * 31 * 1024 ** 3,
+      })),
+    ],
     by_user: USERS.filter((user) => user.enabled).map((user, index) => ({
       user_id: user.id, email: user.email,
       used_bytes: (index + 1) * 91 * 1024 ** 3,
@@ -194,7 +271,7 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     "lines/list": () => ({ groups }),
     "lines/chains": () => ({ chains }),
     "lines/managed": () => ({
-      managed_lines: scenario === "rich"
+      managed_lines: isRich(scenario)
         ? [{
             line_uuid: uuid(900), node_id: "node-gru-hub-01", line_hash_id: "lh_9000",
             tag: "lattice-mng-24443", port: 24443, sni: "www.microsoft.com",
