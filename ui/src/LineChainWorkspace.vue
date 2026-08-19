@@ -177,8 +177,8 @@ function edgeLabel(kind: TopologyEdgeKind): string {
     </div>
 
     <form class="chain-plan-form" @submit.prevent="emit('plan', sourceUUID, targetUUID)">
-      <label class="field"><span>Source · consumer / hub</span><select v-model="sourceUUID"><option v-for="entry in sources" :key="entry.line.line_uuid" :value="entry.line.line_uuid">{{ entry.label }}</option></select></label>
-      <label class="field"><span>Target · downstream / producer</span><select v-model="targetUUID" :disabled="noTargets"><option v-if="noTargets" value="">No eligible target on this fleet</option><option v-for="entry in targets" :key="entry.line.line_uuid" :value="entry.line.line_uuid">{{ entry.label }}</option></select></label>
+      <label class="field"><span>Source line, the one that dials out</span><select v-model="sourceUUID"><option v-for="entry in sources" :key="entry.line.line_uuid" :value="entry.line.line_uuid">{{ entry.label }}</option></select></label>
+      <label class="field"><span>Target line, the one it dials into</span><select v-model="targetUUID" :disabled="noTargets"><option v-if="noTargets" value="">No eligible target on this fleet</option><option v-for="entry in targets" :key="entry.line.line_uuid" :value="entry.line.line_uuid">{{ entry.label }}</option></select></label>
       <div class="chain-plan-actions">
         <button class="button button-primary" type="submit" :disabled="!canPlan || !sourceUUID || !targetUUID || sourceBusy">
           <LoaderCircle v-if="sourceBusy" class="spin" :size="15" />
@@ -197,7 +197,7 @@ function edgeLabel(kind: TopologyEdgeKind): string {
         </ul>
         <p>Roll out a managed line from the Lines view and wait for it to report healthy; it becomes selectable here on the next refresh.</p>
       </div>
-      <p v-else class="permission-note">Plans create approval previews only; topology changes after approved host execution and observation.</p>
+      <p v-else class="permission-note">Planning files an approval and changes nothing on either node. The link moves only after you approve it, the host executes it, and Lattice observes the result.</p>
     </form>
 
     <div v-if="hasDrawing" class="topology-graph-shell">
@@ -212,7 +212,7 @@ function edgeLabel(kind: TopologyEdgeKind): string {
       <!-- Capped at its own intrinsic width: stretched to fill 1440px a
            four-node graph renders 8px labels at triple size. -->
       <svg class="topology-graph" :style="{ maxWidth: `${layout.width}px` }" :viewBox="`0 0 ${layout.width} ${layout.height}`" role="img" aria-labelledby="graph-title graph-desc">
-        <title id="graph-title">Line chain topology, ranked by hop</title>
+        <title id="graph-title">Line chain topology, ordered by depth from an unchained source</title>
         <desc id="graph-desc">Secondary visualization of the same committed, observed, declared, and inferred evidence listed in the canonical table. Only lines that carry an edge are drawn.</desc>
         <g v-for="edge in layout.edges" :key="edge.id" class="graph-edge" :data-kind="edge.kind">
           <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" />
@@ -270,7 +270,7 @@ function edgeLabel(kind: TopologyEdgeKind): string {
     <div class="table-wrap topology-table-wrap">
       <table class="topology-table">
         <caption class="sr-only">Canonical line topology state</caption>
-        <thead><tr><th>Source</th><th>Committed baseline</th><th>Proposal (not an edge)</th><th>Observed evidence</th><th>Discovery evidence</th><th>Status</th><th>Error</th></tr></thead>
+        <thead><tr><th>Source</th><th>Committed baseline</th><th>Proposal (not an edge)</th><th>Observed evidence</th><th>Discovery evidence</th><th>Chain state</th><th>Error</th></tr></thead>
         <tbody>
           <tr v-for="row in pageData.rows" :key="row.sourceLineUUID">
             <td>
@@ -301,7 +301,7 @@ function edgeLabel(kind: TopologyEdgeKind): string {
           <tr v-if="!pageData.rows.length">
             <td colspan="7">
               <p class="empty-inline">
-                <template v-if="filter === 'all'">No line carries a chain identity yet, so the canonical table has nothing to list.</template>
+                <template v-if="filter === 'all'">No line carries a chain identity yet, so there is nothing to list. A line gets one when Lattice rolls it out, or when you reattach an existing UUID from the line detail.</template>
                 <template v-else>No source is in the "{{ FILTERS.find((item) => item.key === filter)?.label }}" state.</template>
                 <button v-if="filter !== 'all'" class="button button-secondary button-compact" type="button" @click="filter = 'all'">Show every source</button>
               </p>

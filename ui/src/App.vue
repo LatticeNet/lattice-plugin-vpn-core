@@ -289,7 +289,9 @@ const rolloutableUsers = computed(() => users.value.filter((user) =>
   user.enabled && user.credentials.some((cred) => cred.protocol === "vless" && cred.has_secret)));
 
 async function pluginCall<T>(service: string, method: string, payload: unknown = {}): Promise<T> {
-  if (!bridge || !canCall(init.value, service, method)) throw new Error(`Method ${service}.${method} is not available for this session`);
+  if (!bridge || !canCall(init.value, service, method)) {
+    throw new Error(`This session is not allowed to run ${method}, so nothing was sent to any node.`);
+  }
   return bridge.call<T>(service, method, payload).promise;
 }
 
@@ -311,7 +313,8 @@ async function planLineChain(sourceLineUUID: string, targetLineUUID: string): Pr
       source_line_uuid: sourceLineUUID,
       target_line_uuid: targetLineUUID,
     });
-    notice.value = `Approval ${result.approval?.id || "created"} planned. ${result.preview?.summary || "Review it in Operations → Approvals; no topology was changed."}`;
+    const approvalId = result.approval?.id ?? "";
+    notice.value = `Chain planned${approvalId ? ` as approval ${approvalId}` : ""}. ${result.preview?.summary || "Review it in Operations, then Approvals. No topology changed."}`;
     await loadCurrent(true);
   } catch (cause) {
     error.value = safeErrorMessage(cause, "Line chain could not be planned");
@@ -327,7 +330,8 @@ async function planLineChainRemoval(sourceLineUUID: string): Promise<void> {
     const result = await pluginCall<{ approval?: { id?: string }; preview?: { summary?: string } }>(SERVICES.lines, "plan_remove_chain", {
       source_line_uuid: sourceLineUUID,
     });
-    notice.value = `Approval ${result.approval?.id || "created"} planned. ${result.preview?.summary || "Review it in Operations → Approvals; the current edge remains until execution is observed."}`;
+    const approvalId = result.approval?.id ?? "";
+    notice.value = `Chain removal planned${approvalId ? ` as approval ${approvalId}` : ""}. ${result.preview?.summary || "Review it in Operations, then Approvals. The current link stays until Lattice observes the removal."}`;
     await loadCurrent(true);
   } catch (cause) {
     error.value = safeErrorMessage(cause, "Line chain removal could not be planned");
@@ -351,7 +355,7 @@ async function loadCurrent(background = false): Promise<void> {
             if (!snapshot) throw new Error(lineWorkspaceLoader?.error || "Line topology unavailable");
             lines.value = [...snapshot.groups];
             chains.value = [...snapshot.chains];
-            if (lineWorkspaceLoader?.error) error.value = `Refresh failed; showing last known topology. ${lineWorkspaceLoader.error}`;
+            if (lineWorkspaceLoader?.error) error.value = `The topology below is the last good read, not the current one. The newest refresh failed: ${lineWorkspaceLoader.error}`;
           }));
         } else {
           calls.push(pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list")
@@ -398,7 +402,7 @@ async function loadCurrent(background = false): Promise<void> {
       }
     }
   } catch (cause) {
-    error.value = safeErrorMessage(cause);
+    error.value = safeErrorMessage(cause, "This page could not be loaded, and nothing came back to say why.");
   } finally {
     loading.value = false;
     refreshing.value = false;
@@ -751,7 +755,7 @@ async function reattachLineUUID(): Promise<void> {
   lineUsersError.value = "";
   try {
     await pluginCall(SERVICES.lines, "reattach", { line_hash_id: line.line_hash_id, line_uuid: next });
-    notice.value = "Line identity reattached. Approve the queued sidecar sync before treating it as converged";
+    notice.value = "Line identity reattached in the control plane. The node still holds the old identity until you sync it, using the button above.";
     reattachUUID.value = "";
     await loadCurrent(true);
     const refreshed = await pluginCall<{ line: Line }>(SERVICES.lines, "get", { line_hash_id: line.line_hash_id });
@@ -863,7 +867,7 @@ async function saveProfileSettings(): Promise<void> {
     });
     applyProfileSettings(result.settings);
     profileReconfigureCommand.value = result.command ?? "";
-    notice.value = `${profileSettings.value.node_name || profileSettings.value.node_id} plugin settings saved`;
+    notice.value = `Settings saved for ${profileSettings.value.node_name || profileSettings.value.node_id}. If a reconfigure command is shown, that node keeps running the old settings until someone runs it there.`;
     await loadCurrent(true);
   } catch (cause) {
     profileSettingsError.value = safeErrorMessage(cause, "Node settings could not be saved");
@@ -974,7 +978,7 @@ onBeforeUnmount(() => {
 
     <div v-if="bootError || error" class="alert" role="alert">
       <CircleAlert :size="17" aria-hidden="true" />
-      <span><strong>{{ bootError ? 'The plugin host is unavailable' : `${routeMeta.title} could not be loaded` }}</strong>{{ bootError || error }}</span>
+      <span><strong>{{ bootError ? 'This page has no console session' : `${routeMeta.title} did not fully load` }}</strong>{{ bootError || error }}</span>
       <button v-if="!bootError" class="button button-secondary button-compact" type="button" :disabled="refreshing" @click="loadCurrent(true)">
         <LoaderCircle v-if="refreshing" class="spin" :size="13" aria-hidden="true" /> Try again
       </button>
@@ -1002,14 +1006,14 @@ onBeforeUnmount(() => {
     <div v-else-if="(bootError || error) && !hasRouteData" class="empty-state">
       <CircleAlert :size="26" aria-hidden="true" />
       <strong>Nothing could be loaded</strong>
-      <p>The request the page needs did not come back, so this is not an empty fleet: it is an unanswered question. The message above is what the control plane said.</p>
+      <p>This is not an empty fleet, it is an unanswered question. The message above says what stopped it.</p>
       <div v-if="!bootError" class="empty-actions"><button class="button button-secondary" type="button" :disabled="refreshing" @click="loadCurrent(true)"><RefreshCw :size="15" aria-hidden="true" /> Try again</button></div>
     </div>
 
     <template v-else-if="route === 'lines'">
       <section class="summary-strip" aria-label="Line summary" :style="{ '--stat-count': canReadManaged ? 5 : 4 }">
         <div><span>Total lines</span><strong>{{ allLines.length }}</strong></div>
-        <div><span>Healthy</span><strong>{{ healthyLines }}</strong><small>{{ allLines.length - healthyLines }} degraded or failing</small></div>
+        <div><span>Not reporting a problem</span><strong>{{ healthyLines }}</strong><small>{{ allLines.length - healthyLines }} reporting an error or still pending</small></div>
         <div :data-tone="allLines.length && !managedLines ? 'warning' : undefined"><span>Lattice-managed lines</span><strong>{{ managedLines }}</strong><small>{{ allLines.length - managedLines }} observed only</small></div>
         <div><span>Nodes</span><strong>{{ lines.length }}</strong></div>
         <div v-if="canReadManaged" :data-tone="overlayStats.total && !overlayStats.covered ? 'warning' : undefined"><span>Nodes carrying a managed line</span><strong>{{ overlayStats.covered }} / {{ overlayStats.total }}</strong><small>{{ overlayStats.total - overlayStats.covered }} without one</small></div>
@@ -1054,7 +1058,7 @@ onBeforeUnmount(() => {
             <td class="mono" :title="formatLineDomain(line)">{{ formatLineDomain(line) }}</td>
             <td class="num" :title="line.user_known ? undefined : 'The node did not report a user count for this line'">{{ line.user_known ? line.user_count : 'unknown' }}</td>
             <td class="mono" :title="line.outbound_ref || undefined">{{ line.outbound_ref || '-' }}<small v-if="line.outbound_server">{{ line.outbound_server }}<span v-if="line.outbound_port">:{{ line.outbound_port }}</span></small></td>
-            <td><span class="status-dot" :data-tone="lineStatus(line)" :title="line.status || (line.last_error ? 'error' : 'ok')">{{ line.status || (line.last_error ? 'error' : 'ok') }}</span><small v-if="line.last_error" class="error-text" :title="lineErrorText(line)">{{ lineErrorText(line) }}</small></td>
+            <td><span class="status-dot" :data-tone="lineStatus(line)" :title="line.status || (line.last_error ? 'error' : 'not reported')">{{ line.status || (line.last_error ? 'error' : 'not reported') }}</span><small v-if="line.last_error" class="error-text" :title="lineErrorText(line)">{{ lineErrorText(line) }}</small></td>
             <td v-if="canViewLineDetails" class="actions-cell"><button class="button button-secondary button-compact" type="button" @click="openLineDetails(group, line)">Details</button></td>
           </tr></tbody></table></div>
         <div v-else-if="search.trim()" class="empty-state">
@@ -1099,7 +1103,7 @@ onBeforeUnmount(() => {
           <td><strong>{{ user.email }}</strong><small>{{ user.name || user.id }}<span v-if="user.migrated"> / migrated</span></small></td>
           <td><span class="status-dot" :data-tone="user.enabled ? 'healthy' : 'warning'">{{ user.enabled ? 'enabled' : 'disabled' }}</span></td>
           <td><span v-for="credential in user.credentials" :key="credential.protocol" class="badge credential">{{ credential.protocol }}<KeyRound v-if="credential.has_secret" :size="11" /></span><span v-if="!user.credentials.length">-</span></td>
-          <td>{{ user.bindings.length }}</td><td>{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'Unlimited' }}</td><td>{{ formatDate(user.expires_at) }}</td>
+          <td>{{ user.bindings.length }}</td><td>{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'No quota set' }}</td><td>{{ formatDate(user.expires_at) }}</td>
           <td v-if="showUserActions" class="actions-cell"><div class="icon-actions">
             <button v-if="canUpdateUser" class="icon-button bordered" type="button" aria-label="Edit identity" title="Edit identity" @click="openEditUser(user)"><Pencil :size="14" /></button>
             <button v-if="canRotateCredentials && user.credentials.length" class="icon-button bordered" type="button" aria-label="Rotate a credential" title="Rotate a credential" @click="openRotate(user)"><KeyRound :size="14" /></button>
@@ -1130,7 +1134,7 @@ onBeforeUnmount(() => {
           <td><span class="badge">{{ profile.core || 'unknown' }} {{ profile.core_version || '' }}</span></td>
           <td><span class="status-dot" :data-tone="profile.applied ? 'healthy' : profile.managed ? 'warning' : 'neutral'">{{ profile.managed ? (profile.applied ? 'managed / applied' : 'managed / pending') : 'observed' }}</span></td>
           <td>{{ profile.inbound_count }}</td><td>{{ profile.discovered_count }}</td>
-          <td><span class="status-dot" :data-tone="profile.collector?.status === 'error' ? 'error' : profile.collector?.status === 'ok' ? 'healthy' : 'neutral'">{{ profile.collector?.status || 'not configured' }}</span></td>
+          <td><span class="status-dot" :data-tone="profile.collector?.status === 'error' ? 'error' : profile.collector?.status === 'ok' ? 'healthy' : 'neutral'">{{ profile.collector?.status || 'not reported' }}</span></td>
           <td class="mono path-cell">{{ profile.config_path || '-' }}<small v-if="profile.last_error || profile.discovery_error" class="error-text">{{ profile.last_error || profile.discovery_error }}</small></td>
           <td v-if="canReadProfileSettings" class="actions-cell"><button class="icon-button bordered" type="button" aria-label="Configure sing-box integration" title="Configure sing-box integration" @click="openProfileSettings(profile)"><Pencil :size="14" /></button></td>
         </tr></tbody></table></div>
@@ -1150,7 +1154,7 @@ onBeforeUnmount(() => {
           <div v-else class="empty-state"><Activity :size="24" aria-hidden="true" /><strong>No node has reported traffic</strong><p>A node reports once its profile names a usage source: a stats file, a collector URL, the Xray API, or the sing-box experimental API. Set one under Node Profiles.</p></div>
         </article>
         <article class="data-panel"><header class="panel-header"><div><h2>By identity</h2><p>Monotonic account totals</p></div><Users :size="17" aria-hidden="true" /></header>
-          <div v-if="usage.by_user.length" class="table-wrap"><table style="min-width: 420px"><thead><tr><th>Identity</th><th>Status</th><th class="num">Used</th><th class="num">Quota</th></tr></thead><tbody><tr v-for="user in usage.by_user" :key="user.user_id"><td><strong :title="user.email || user.user_id">{{ user.email || user.user_id }}</strong><small :title="user.user_id">{{ user.user_id }}</small></td><td><span class="status-dot" :data-tone="user.status === 'active' ? 'healthy' : user.status === 'over_quota' ? 'error' : 'neutral'">{{ user.status || 'unknown' }}</span></td><td class="mono num">{{ formatBytes(user.used_bytes) }}</td><td class="mono num">{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'Unlimited' }}</td></tr></tbody></table></div>
+          <div v-if="usage.by_user.length" class="table-wrap"><table style="min-width: 420px"><thead><tr><th>Identity</th><th>Status</th><th class="num">Used</th><th class="num">Quota</th></tr></thead><tbody><tr v-for="user in usage.by_user" :key="user.user_id"><td><strong :title="user.email || user.user_id">{{ user.email || user.user_id }}</strong><small :title="user.user_id">{{ user.user_id }}</small></td><td><span class="status-dot" :data-tone="user.status === 'active' ? 'healthy' : user.status === 'over_quota' ? 'error' : 'neutral'">{{ user.status || 'unknown' }}</span></td><td class="mono num">{{ formatBytes(user.used_bytes) }}</td><td class="mono num">{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'No quota set' }}</td></tr></tbody></table></div>
           <div v-else class="empty-state"><Users :size="24" aria-hidden="true" /><strong>No per-identity totals</strong><p>Per-identity accounting needs a collector that reports per-user counters. Without one, only node totals are available.</p></div>
         </article>
       </section>
@@ -1190,7 +1194,7 @@ onBeforeUnmount(() => {
         </p>
       </section>
       <section class="data-panel collectors"><header class="panel-header"><div><h2>Collectors</h2><p>Source health and last checks</p></div></header><div v-if="usage.collectors.length" class="collector-grid"><div v-for="collector in usage.collectors" :key="collector.node_id"><span class="status-dot" :data-tone="collector.status === 'error' ? 'error' : collector.status === 'ok' ? 'healthy' : 'neutral'">{{ collector.status || 'unknown' }}</span><strong>{{ collector.node_name || collector.node_id }}</strong><small>{{ collector.source || 'unspecified' }} / {{ formatDate(collector.checked_at) }}</small><p v-if="collector.error" class="error-text">{{ collector.error }}</p></div></div>
-        <div v-else class="empty-state"><Gauge :size="24" aria-hidden="true" /><strong>No collector is configured</strong><p>Usage stays at zero until at least one node profile points at a usage source. Open Node Profiles, edit a node, and set a usage file, collector URL, Xray API or sing-box stats API.</p></div>
+        <div v-else class="empty-state"><Gauge :size="24" aria-hidden="true" /><strong>No collector is configured</strong><p>No node profile points at a usage source, so traffic on those nodes is unmeasured rather than zero. Open Node Profiles, edit a node, and set a usage file, collector URL, Xray API or sing-box stats API.</p></div>
       </section>
     </template>
 
@@ -1213,7 +1217,7 @@ onBeforeUnmount(() => {
       </template>
       <template v-else-if="!rolloutResult">
         <p>This files one approval per eligible node, binding <strong>{{ rolloutableUsers.find((user) => user.id === rolloutUserId)?.email || rolloutUserId }}</strong> to a new VLESS with REALITY line on candidate port <strong class="mono">{{ rolloutPort }}</strong>. Nothing is applied until the batch is approved.</p>
-        <ul class="confirm-names" aria-label="Nodes this rollout files approvals against">
+        <ul class="confirm-names" aria-label="Nodes this rollout will consider">
           <li v-for="name in rolloutNodeNames" :key="name">{{ name }}</li>
         </ul>
         <div v-if="rolloutError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ rolloutError }}</span></div>
@@ -1236,11 +1240,11 @@ onBeforeUnmount(() => {
         <footer><button class="button button-secondary" type="button" @click="closeRollout">Done</button></footer>
       </template>
     </section></div>
-    <div v-if="bindingUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="bindingUser = undefined"><section tabindex="-1" class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div v-if="canBindUser" class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button v-if="canUnbindUser" class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" :disabled="unbindBusy" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines bound to this identity.</p><p v-if="!canBindUser && !canUnbindUser" class="empty-inline">This session cannot change bindings.</p></div></section></div>
+    <div v-if="bindingUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="bindingUser = undefined"><section tabindex="-1" class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div v-if="canBindUser" class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button v-if="canUnbindUser" class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" :disabled="unbindBusy" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines are bound to this identity, so its credential authenticates nowhere. Bind one above.</p><p v-if="!canBindUser && !canUnbindUser" class="empty-inline">This session cannot change bindings.</p></div></section></div>
 
-    <div v-if="deleteTarget" class="overlay-scrim" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes plugin-owned credentials and line bindings.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong>?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" :disabled="deletingUser" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>
+    <div v-if="deleteTarget" class="overlay-scrim" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes the credentials and line bindings Lattice holds for this identity. It sends nothing to a node: the account keeps working on each line until that line is planned and applied again.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong> and its {{ deleteTarget.bindings.length }} line binding(s)?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" :disabled="deletingUser" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>
 
-    <div v-if="rotateUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="rotateUser = undefined"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>Rotate credential</h2><p>{{ rotateUser.email }}. The old secret stops working once the new one is applied to its lines.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
+    <div v-if="rotateUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="rotateUser = undefined"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>Rotate credential</h2><p>{{ rotateUser.email }}, bound to {{ rotateUser.bindings.length }} line(s). The old secret keeps working on each of them until that line is planned and applied with the new one.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
       <label class="field"><span>Protocol credential</span><select v-model="rotateProtocol"><option v-for="credential in rotateUser.credentials" :key="credential.protocol" :value="credential.protocol">{{ credential.protocol }}</option></select></label>
       <footer><button class="button button-secondary" type="button" @click="rotateUser = undefined">Cancel</button><button class="button button-primary" type="button" :disabled="rotateBusy || !rotateProtocol" @click="rotateCredential"><LoaderCircle v-if="rotateBusy" class="spin" :size="15" /> Rotate</button></footer></section></div>
 
@@ -1258,22 +1262,22 @@ onBeforeUnmount(() => {
         <div><span>Reality SNI</span><strong class="mono">{{ formatLineDomain(lineDetail) }}</strong><small>Server name</small></div>
         <div><span>Outbound ref</span><strong class="mono">{{ lineDetail.outbound_ref || '-' }}</strong><small v-if="lineDetail.outbound_server">{{ lineDetail.outbound_server }}<span v-if="lineDetail.outbound_port">:{{ lineDetail.outbound_port }}</span></small></div>
         <div><span>Ownership</span><strong>{{ lineOwnership(lineDetail) }}</strong><small>{{ lineDetail.source }}</small></div>
-        <div><span>Status</span><strong>{{ lineDetail.status || (lineDetail.last_error ? 'error' : 'ok') }}</strong><small>{{ lineDetail.user_known ? `${lineDetail.user_count} users` : 'user count unavailable' }}</small></div>
+        <div><span>Status</span><strong>{{ lineDetail.status || (lineDetail.last_error ? 'error' : 'not reported') }}</strong><small>{{ lineDetail.user_known ? `${lineDetail.user_count} users` : 'user count unavailable' }}</small></div>
       </div>
       <div v-if="lineDetailBusy" class="loading-state loading-inline"><LoaderCircle class="spin" :size="18" /> Refreshing line details</div>
-      <section class="detail-section"><h3>Line identity</h3><dl class="detail-pairs"><dt class="mono">line_uuid</dt><dd class="mono">{{ lineDetail.line_uuid || 'pending allocation' }}</dd><template v-if="lineDetail.downstream_line_uuid"><dt class="mono">downstream_line_uuid</dt><dd class="mono">{{ lineDetail.downstream_line_uuid }}</dd></template></dl>
-        <div v-if="canSyncMetadata && !lineDetail.managed" class="icon-actions"><button class="button button-secondary button-compact" type="button" :disabled="syncBusy" title="Queue a reviewed sidecar apply for this node" @click="syncSidecar"><LoaderCircle v-if="syncBusy" class="spin" :size="13" /> Sync sidecar to node</button></div>
+      <section class="detail-section"><h3>Line identity</h3><dl class="detail-pairs"><dt>Chain identity</dt><dd class="mono">{{ lineDetail.line_uuid || 'not allocated yet, so this line cannot be either end of a chain' }}</dd><template v-if="lineDetail.downstream_line_uuid"><dt>Downstream identity</dt><dd class="mono">{{ lineDetail.downstream_line_uuid }}</dd></template></dl>
+        <div v-if="canSyncMetadata && !lineDetail.managed" class="icon-actions"><button class="button button-secondary button-compact" type="button" :disabled="syncBusy" title="File an approval that writes this line's identity file on its node" @click="syncSidecar"><LoaderCircle v-if="syncBusy" class="spin" :size="13" /> Write identity to the node</button></div>
         <div v-if="canReattachLine" class="binding-add"><input v-model="reattachUUID" class="mono" type="text" autocomplete="off" spellcheck="false" placeholder="Existing UUIDv4 to reattach" /><button class="button button-secondary button-compact" type="button" :disabled="reattachBusy || !reattachUUID.trim()" @click="reattachLineUUID"><LoaderCircle v-if="reattachBusy" class="spin" :size="13" /> Reattach identity</button></div>
       </section>
       <section v-if="canPlanLineUsers" class="detail-section"><h3>On-node users</h3>
-        <p class="field-help">Actions queue a reviewed {{ lineDetail.managed ? 'whole-config render and reload' : 'sb user add/del' }}. Nothing changes on the node until approved; successful apply then reconciles runtime discovery.</p>
+        <p class="field-help">Each action here files an approval and changes nothing yet. Once you approve it, applying {{ lineDetail.managed ? 'rewrites the whole core config on that node and reloads it' : 'changes this one user record on that node in place' }}.</p>
         <div v-if="lineUsersError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineUsersError }}</span></div>
         <div class="binding-list">
           <div v-for="user in lineDetailBoundUsers" :key="user.id">
             <span>{{ user.email }}<small v-if="user.name"> ({{ user.name }})</small></span>
             <span class="icon-actions">
-              <button class="button button-secondary button-compact" type="button" :disabled="lineUsersBusy" title="Queue a reviewed user update for this line" @click="planLineUser('plan_update', user.id)">Update</button>
-              <button class="button button-secondary button-compact destructive" type="button" :disabled="lineUsersBusy" title="Queue sb user del for this line" @click="planLineUser('plan_remove', user.id)">Remove</button>
+              <button class="button button-secondary button-compact" type="button" :disabled="lineUsersBusy" title="File an approval to update this identity on this line" @click="planLineUser('plan_update', user.id)">Update</button>
+              <button class="button button-secondary button-compact destructive" type="button" :disabled="lineUsersBusy" title="File an approval to remove this identity from this line" @click="planLineUser('plan_remove', user.id)">Remove</button>
             </span>
           </div>
           <p v-if="usersUnavailable" class="empty-inline" role="status">The identity list could not be loaded, so bindings for this line are not shown.</p>
@@ -1310,7 +1314,7 @@ onBeforeUnmount(() => {
             <label class="field"><span>Xray API</span><input v-model="profileForm.proxy_usage_xray_api" class="mono" type="text" placeholder="127.0.0.1:10085" autocomplete="off" /></label>
             <label class="field"><span>Xray binary</span><input v-model="profileForm.proxy_usage_xray_bin" class="mono" type="text" placeholder="/usr/local/bin/xray" autocomplete="off" /></label>
             <label class="field field-wide"><span>Xray stat pattern</span><input v-model="profileForm.proxy_usage_xray_pattern" class="mono" type="text" autocomplete="off" /></label>
-            <label class="field field-wide"><span>sing-box stats API</span><input v-model="profileForm.singbox_stats_api" class="mono" type="text" placeholder="127.0.0.1:8080" autocomplete="off" /><small class="field-help">Loopback experimental API (sb stats on). Enables per-user stats (ADR-004).</small></label>
+            <label class="field field-wide"><span>sing-box stats API</span><input v-model="profileForm.singbox_stats_api" class="mono" type="text" placeholder="127.0.0.1:8080" autocomplete="off" /><small class="field-help">sing-box's experimental stats API, on loopback. Without it there are no per-identity usage numbers for this node.</small></label>
           </div>
           <section v-if="profileReconfigureCommand" class="detail-section"><h3>Generated agent command</h3><textarea class="command-output mono" :value="profileReconfigureCommand" readonly aria-label="Generated agent reconfiguration command" /></section>
         </template>
