@@ -165,7 +165,7 @@ export function lineOwnership(line: Line): string {
 }
 
 export function lineErrorText(line: Line): string {
-  return line.last_error?.trim() || "-";
+  return line.last_error?.trim() || "none reported";
 }
 
 function formatHostPort(host: string | undefined, port: number | undefined): string {

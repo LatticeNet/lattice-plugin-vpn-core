@@ -66,14 +66,14 @@ export class BridgeClient {
   }
 
   call<T>(service: string, method: string, payload: unknown, timeoutMs = 15_000): { promise: Promise<T>; cancel: () => void } {
-    if (this.disposed) throw new Error("plugin bridge is disposed");
+    if (this.disposed) throw new Error("This page is no longer connected to the console, so the bridge is disposed and nothing was sent.");
     const id = `vpn-core-${++this.sequence}`;
     let cancel = () => {};
     const promise = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         this.post({ type: "lattice.plugin.cancel", nonce: this.nonce, id });
-        reject(new Error("Request timed out"));
+        reject(new Error("The console did not answer this request and it timed out. It may still be running there, so re-check the state before retrying."));
       }, timeoutMs);
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
@@ -86,7 +86,7 @@ export class BridgeClient {
         clearTimeout(pending.timer);
         this.pending.delete(id);
         this.post({ type: "lattice.plugin.cancel", nonce: this.nonce, id });
-        pending.reject(new Error("Request cancelled"));
+        pending.reject(new Error("The request was cancelled before the console answered, so its outcome is unknown."));
       };
       this.post({ type: "lattice.plugin.call", nonce: this.nonce, id, service, method, payload });
     });
@@ -95,7 +95,7 @@ export class BridgeClient {
   }
 
   dispose(): void {
-    this.failBridge(new Error("Plugin host disconnected"));
+    this.failBridge(new Error("The console disconnected this plugin. Any request still in flight has an unknown outcome: reload and check before retrying."));
   }
 
   private onMessage(event: MessageEvent): void {
@@ -121,9 +121,9 @@ export class BridgeClient {
         return;
       case "lattice.host.error":
         if (typeof message.id === "string") {
-          this.finish(message.id, new Error(typeof message.message === "string" ? message.message : "Plugin call failed"));
+          this.finish(message.id, new Error(typeof message.message === "string" ? message.message : "The console refused this request and gave no reason."));
         } else {
-          this.failBridge(new Error(typeof message.message === "string" ? message.message : "Plugin host rejected initialization"));
+          this.failBridge(new Error(typeof message.message === "string" ? message.message : "The console refused to start this plugin. Your session may lack the scopes it declares."));
         }
         return;
       case "lattice.host.dispose":
@@ -180,19 +180,19 @@ export function canCall(init: HostInit | undefined, service: string, method: str
 function readChannel(hash: string): { nonce: string; hostOrigin: string } {
   const params = new URLSearchParams(hash.replace(/^#/, ""));
   const nonce = params.get("lattice_nonce");
-  if (!nonce || nonce.length < 16 || nonce.length > 128) throw new Error("Missing plugin channel nonce");
+  if (!nonce || nonce.length < 16 || nonce.length > 128) throw new Error("Missing plugin channel nonce in this page's URL. The Lattice console builds that URL, so open the plugin from the console rather than directly.");
   const hostOrigin = params.get("host_origin")?.trim();
-  if (!hostOrigin) throw new Error("Missing plugin host origin");
+  if (!hostOrigin) throw new Error("Missing plugin host origin in this page's URL. The Lattice console builds that URL, so open the plugin from the console rather than directly.");
   // Must be an exact absolute http(s) origin. Anything else is a host bug
   // or a tampered frame URL, and neither is a reason to silently downgrade.
   let parsed: URL;
   try {
     parsed = new URL(hostOrigin);
   } catch {
-    throw new Error("Invalid plugin host origin");
+    throw new Error("Invalid plugin host origin in this page's URL. The Lattice console builds that URL, so open the plugin from the console rather than directly.");
   }
   if (parsed.origin !== hostOrigin || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
-    throw new Error("Invalid plugin host origin");
+    throw new Error("Invalid plugin host origin in this page's URL. The Lattice console builds that URL, so open the plugin from the console rather than directly.");
   }
   return { nonce, hostOrigin };
 }
