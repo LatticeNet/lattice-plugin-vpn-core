@@ -9,6 +9,8 @@ export interface Line {
   managed: boolean;
   name: string;
   type?: string;
+  transport?: string;
+  security?: string;
   listen_host?: string;
   listen_port?: number;
   public_host?: string;
@@ -322,4 +324,107 @@ export function quotaBytesFromInput(raw: string): number | undefined {
   const gib = Number(text);
   if (!Number.isFinite(gib) || gib < 0) return undefined;
   return Math.round(gib * 1024 * 1024 * 1024);
+}
+
+/**
+ * One row of the server's usage read-model: bytes for a (node, user) pair, and
+ * for a (node, user, line) triple once a line-aware collector is reporting.
+ *
+ * The server has computed and returned these all along; the plugin declared a
+ * result type without them, so every per-line and per-(node, user) figure was
+ * parsed and dropped. See vpnCoreUsageRPC in lattice-server internal/server/usage.go.
+ */
+export interface UsageRow {
+  node_id: string;
+  node_name?: string;
+  user_id: string;
+  email?: string;
+  /** Empty when the node's collector reports node totals only. */
+  line_hash_id?: string;
+  bytes: number;
+}
+
+export interface LineUsage {
+  lineHashID: string;
+  label: string;
+  nodeID: string;
+  nodeName?: string;
+  /** Whether the hash matched a line in the current fleet listing. */
+  resolved: boolean;
+  bytes: number;
+  users: number;
+}
+
+export interface UsageLineBreakdown {
+  lines: LineUsage[];
+  /** Bytes a collector attributed to a specific line. */
+  attributedBytes: number;
+  /** Bytes reported against a node with no line attribution. */
+  unattributedBytes: number;
+  /** Nodes contributing unattributed bytes, so the gap has an address. */
+  unattributedNodes: string[];
+}
+
+/**
+ * Fold usage rows into per-line totals, naming each line from the fleet listing.
+ *
+ * Unattributed bytes are counted rather than hidden: a node running an older or
+ * aggregate-only collector reports a node total with no line, and a per-line
+ * table that quietly omitted it would read as a complete picture of traffic
+ * when it is not. A hash that matches no current line keeps the hash as its
+ * label and is marked unresolved rather than dropped.
+ */
+export function usageByLine(rows: readonly UsageRow[], groups: readonly LineGroup[]): UsageLineBreakdown {
+  const lineByHash = new Map<string, { line: Line; nodeName?: string }>();
+  for (const group of groups) {
+    for (const line of group.lines) {
+      const hash = line.line_hash_id?.trim();
+      if (hash && !lineByHash.has(hash)) lineByHash.set(hash, { line, nodeName: group.node_name });
+    }
+  }
+
+  const totals = new Map<string, LineUsage & { userIDs: Set<string> }>();
+  const unattributedNodes = new Set<string>();
+  let attributedBytes = 0;
+  let unattributedBytes = 0;
+
+  for (const row of rows) {
+    const hash = row.line_hash_id?.trim();
+    const bytes = Number.isFinite(row.bytes) ? row.bytes : 0;
+    if (!hash) {
+      unattributedBytes += bytes;
+      if (bytes > 0) unattributedNodes.add(row.node_name || row.node_id);
+      continue;
+    }
+    attributedBytes += bytes;
+    const key = `${row.node_id} ${hash}`;
+    let entry = totals.get(key);
+    if (!entry) {
+      const found = lineByHash.get(hash);
+      entry = {
+        lineHashID: hash,
+        label: found?.line.name || hash,
+        nodeID: row.node_id,
+        nodeName: row.node_name || found?.nodeName,
+        resolved: !!found,
+        bytes: 0,
+        users: 0,
+        userIDs: new Set<string>(),
+      };
+      totals.set(key, entry);
+    }
+    entry.bytes += bytes;
+    if (row.user_id) entry.userIDs.add(row.user_id);
+  }
+
+  const lines = [...totals.values()]
+    .map(({ userIDs, ...entry }) => ({ ...entry, users: userIDs.size }))
+    .sort((a, b) => b.bytes - a.bytes || a.lineHashID.localeCompare(b.lineHashID));
+
+  return {
+    lines,
+    attributedBytes,
+    unattributedBytes,
+    unattributedNodes: [...unattributedNodes].sort(),
+  };
 }

@@ -38,6 +38,7 @@ import {
   safeErrorMessage,
   sortLineRows,
   unresolvedOverlayDefs,
+  usageByLine,
   quotaBytesFromInput,
   type Line,
   type LineRow,
@@ -47,6 +48,7 @@ import {
   type LineGroup,
   type ManagedLineDef,
   type RolloutResult,
+  type UsageRow,
   type VpnUser,
 } from "./vpnModel";
 
@@ -133,7 +135,13 @@ interface UsageCollector {
 interface UsageResult {
   by_user: UsageByUser[];
   by_node: UsageByNode[];
+  /**
+   * Per-(node, user) and, where a line-aware collector is running,
+   * per-(node, user, line) bytes. The server has always returned these.
+   */
+  rows: UsageRow[];
   collectors: UsageCollector[];
+  /** True when at least one row carries a line_hash_id. */
   per_line: boolean;
 }
 
@@ -148,7 +156,7 @@ const lines = ref<LineGroup[]>([]);
 const chains = ref<LineChain[]>([]);
 const users = ref<VpnUser[]>([]);
 const profiles = ref<Profile[]>([]);
-const usage = ref<UsageResult>({ by_user: [], by_node: [], collectors: [], per_line: false });
+const usage = ref<UsageResult>({ by_user: [], by_node: [], rows: [], collectors: [], per_line: false });
 const managedDefs = ref<ManagedLineDef[]>([]);
 
 let bridge: BridgeClient | undefined;
@@ -227,6 +235,7 @@ const lineOptions = computed(() => lines.value.flatMap((group) => group.lines.ma
 const enabledUsers = computed(() => users.value.filter((user) => user.enabled).length);
 const totalBindings = computed(() => users.value.reduce((count, user) => count + user.bindings.length, 0));
 const totalTraffic = computed(() => usage.value.by_user.reduce((sum, row) => sum + (row.used_bytes || 0), 0));
+const lineUsage = computed(() => usageByLine(usage.value.rows, lines.value));
 const canCreateUser = computed(() => canCall(init.value, SERVICES.admin, "create"));
 const canUpdateUser = computed(() => canCall(init.value, SERVICES.admin, "update"));
 const canDeleteUser = computed(() => canCall(init.value, SERVICES.admin, "delete"));
@@ -354,9 +363,18 @@ async function loadCurrent(background = false): Promise<void> {
         profiles.value = result.profiles ?? [];
         break;
       }
-      case "usage":
-        usage.value = await pluginCall<UsageResult>(SERVICES.usage, "query");
+      case "usage": {
+        // The line listing names the hashes the collector reports against. It
+        // is the same cached read model the Lines view uses, so this costs a
+        // cache read on the server, not a second fleet walk.
+        const [usageResult, lineResult] = await Promise.all([
+          pluginCall<UsageResult>(SERVICES.usage, "query"),
+          pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list"),
+        ]);
+        usage.value = { ...usageResult, rows: usageResult.rows ?? [] };
+        lines.value = lineResult.groups ?? [];
         break;
+      }
     }
   } catch (cause) {
     error.value = safeErrorMessage(cause);
@@ -858,7 +876,7 @@ const hasRouteData = computed(() => ({
   lines: allLines.value.length > 0,
   users: users.value.length > 0,
   profiles: profiles.value.length > 0,
-  usage: usage.value.by_user.length > 0 || usage.value.by_node.length > 0 || usage.value.collectors.length > 0,
+  usage: usage.value.by_user.length > 0 || usage.value.by_node.length > 0 || usage.value.rows.length > 0 || usage.value.collectors.length > 0,
 }[route.value] ?? false));
 
 const overlayAnchorTop = ref(MIN_ANCHOR_TOP);
@@ -1125,6 +1143,41 @@ onBeforeUnmount(() => {
           <div v-if="usage.by_user.length" class="table-wrap"><table style="min-width: 420px"><thead><tr><th>Identity</th><th>Status</th><th class="num">Used</th><th class="num">Quota</th></tr></thead><tbody><tr v-for="user in usage.by_user" :key="user.user_id"><td><strong :title="user.email || user.user_id">{{ user.email || user.user_id }}</strong><small :title="user.user_id">{{ user.user_id }}</small></td><td><span class="status-dot" :data-tone="user.status === 'active' ? 'healthy' : user.status === 'over_quota' ? 'error' : 'neutral'">{{ user.status || 'unknown' }}</span></td><td class="mono num">{{ formatBytes(user.used_bytes) }}</td><td class="mono num">{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'Unlimited' }}</td></tr></tbody></table></div>
           <div v-else class="empty-state"><Users :size="24" aria-hidden="true" /><strong>No per-identity totals</strong><p>Per-identity accounting needs a collector that reports per-user counters. Without one, only node totals are available.</p></div>
         </article>
+      </section>
+      <!-- Per-line traffic. The server computes this and has always returned
+           it; the plugin used to declare a result type without `rows` and drop
+           it on parse. Rendered only when a collector actually attributed
+           bytes to a line, and the unattributed remainder is stated rather
+           than quietly excluded. -->
+      <section v-if="usage.rows.length" class="data-panel" aria-labelledby="usage-by-line">
+        <header class="panel-header">
+          <div><h2 id="usage-by-line">By line</h2><p>Traffic a collector attributed to a specific inbound.</p></div>
+          <span class="count">{{ lineUsage.lines.length }} lines</span>
+        </header>
+        <div v-if="lineUsage.lines.length" class="table-wrap">
+          <table style="min-width: 520px">
+            <thead><tr><th>Node</th><th>Line</th><th class="num">Identities</th><th class="num">Traffic</th></tr></thead>
+            <tbody>
+              <tr v-for="entry in lineUsage.lines" :key="`${entry.nodeID}:${entry.lineHashID}`">
+                <td><strong :title="entry.nodeName || entry.nodeID">{{ entry.nodeName || entry.nodeID }}</strong><small :title="entry.nodeID">{{ entry.nodeID }}</small></td>
+                <td>
+                  <strong :title="entry.label">{{ entry.label }}</strong>
+                  <small class="mono" :title="entry.lineHashID">{{ entry.lineHashID }}<span v-if="!entry.resolved"> · no longer in the fleet listing</span></small>
+                </td>
+                <td class="num">{{ entry.users }}</td>
+                <td class="mono num">{{ formatBytes(entry.bytes) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="empty-state">
+          <Gauge :size="24" aria-hidden="true" />
+          <strong>No collector attributes traffic to a line</strong>
+          <p>{{ usage.rows.length }} usage rows arrived and every one of them is a node total for an account, with no line attached. Per-line accounting needs a collector that reports per-inbound counters: the sing-box experimental stats API, or the Xray API with a stat pattern that names the inbound. Set one under Node Profiles.</p>
+        </div>
+        <p v-if="lineUsage.lines.length && lineUsage.unattributedBytes > 0" class="permission-note">
+          {{ formatBytes(lineUsage.unattributedBytes) }} of {{ formatBytes(lineUsage.attributedBytes + lineUsage.unattributedBytes) }} is not in this table: {{ lineUsage.unattributedNodes.join(', ') }} report node totals without a line, so their traffic cannot be placed on an inbound.
+        </p>
       </section>
       <section class="data-panel collectors"><header class="panel-header"><div><h2>Collectors</h2><p>Source health and last checks</p></div></header><div v-if="usage.collectors.length" class="collector-grid"><div v-for="collector in usage.collectors" :key="collector.node_id"><span class="status-dot" :data-tone="collector.status === 'error' ? 'error' : collector.status === 'ok' ? 'healthy' : 'neutral'">{{ collector.status || 'unknown' }}</span><strong>{{ collector.node_name || collector.node_id }}</strong><small>{{ collector.source || 'unspecified' }} / {{ formatDate(collector.checked_at) }}</small><p v-if="collector.error" class="error-text">{{ collector.error }}</p></div></div>
         <div v-else class="empty-state"><Gauge :size="24" aria-hidden="true" /><strong>No collector is configured</strong><p>Usage stays at zero until at least one node profile points at a usage source. Open Node Profiles, edit a node, and set a usage file, collector URL, Xray API or sing-box stats API.</p></div>

@@ -138,8 +138,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .empty-state { flex-direction: column; gap: var(--sp-3); }
 .empty-state strong { color: var(--foreground, #17191c); font-size: var(--text-lg); }
 .empty-state p { margin: 0; max-width: var(--measure); font-size: var(--text-sm); line-height: 1.6; }
-.empty-state ol { display: grid; gap: var(--sp-2); margin: 0; padding-left: var(--sp-4); max-width: var(--measure); font-size: var(--text-sm); line-height: 1.55; text-align: left; }
+.empty-state ol, .empty-state ul { display: grid; gap: var(--sp-2); margin: 0; padding-left: var(--sp-4); max-width: var(--measure); font-size: var(--text-sm); line-height: 1.55; text-align: left; }
 .empty-state ol code, .empty-state p code { font-family: var(--font-mono); font-size: var(--text-xs); }
+/* Endpoints an operator has to read character by character, so they get the
+   mono face and full contrast rather than the muted body colour. */
+.empty-state .unmatched-upstreams { gap: var(--sp-1); color: var(--foreground, #17191c); font-size: var(--text-xs); }
 .empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-2); }
 .empty-inline { margin: 0; color: var(--muted-foreground, #65707b); font-size: var(--text-sm); }
 
@@ -231,6 +234,12 @@ th[aria-sort="ascending"] .sort-button, th[aria-sort="descending"] .sort-button 
 .chain-plan-form select { width: 100%; min-height: 34px; border: 1px solid var(--border, #cfd4da); border-radius: var(--radius); padding: 7px var(--sp-3); color: var(--foreground, #17191c); background: var(--card, #fff); }
 .chain-plan-actions { display: flex; gap: var(--sp-2); }
 .chain-plan-form .permission-note { grid-column: 1 / -1; }
+/* Not .permission-note: that is an inline-flex single line, and this states a
+   precondition, counts what fails it, and says what to do about it. */
+.chain-plan-form .chain-target-note { display: grid; gap: var(--sp-2); grid-column: 1 / -1; max-width: var(--measure); color: var(--muted-foreground, #65707b); font-size: var(--text-xs); line-height: 1.6; }
+.chain-plan-form .chain-target-note p { margin: 0; }
+.chain-plan-form .chain-target-note .target-blockers { display: grid; gap: var(--sp-1); margin: 0; padding-left: var(--sp-4); }
+.chain-plan-form .chain-target-note .target-blockers strong { color: var(--foreground, #17191c); font-variant-numeric: tabular-nums; }
 
 .evidence-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0; border-bottom: 1px solid var(--border, #d9dde2); }
 .evidence-cell { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3) var(--sp-4); border: 0; border-right: 1px solid var(--border, #d9dde2); background: var(--card, #fff); color: inherit; text-align: left; }

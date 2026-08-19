@@ -11,7 +11,14 @@ export type TopologyEdgeKind =
   | "discovered_inferred";
 
 export interface TopologyTarget {
+  /**
+   * Control-plane identity. Empty when the edge names a line the fleet knows by
+   * `line_hash_id` alone, which happens while a rediscovered line is still
+   * waiting for its `line_uuid` allocation.
+   */
   lineUUID: string;
+  /** Set when the edge came from discovery, which addresses lines by hash. */
+  lineHashID?: string;
   label: string;
   nodeID?: string;
   resolved: boolean;
@@ -82,6 +89,15 @@ export function normalizeChainTopology(
   workCounters?: ChainTopologyWorkCounters,
 ): ChainTopology {
   const lineByUUID = new Map<string, { line: Line; nodeName?: string }>();
+  /**
+   * The second identifier domain. `jump_edges` and `declared_jump_edges` name
+   * their target by `line_hash_id`, not by `line_uuid`: see the server's Line
+   * struct, "line_hash_ids this line relays to". Chains name their target by
+   * `line_uuid`. Resolving a discovery edge through the uuid map silently
+   * yields nothing, which is how a fleet with real relay structure can report
+   * zero edges.
+   */
+  const lineByHash = new Map<string, { line: Line; nodeName?: string }>();
   const sourceOrder: string[] = [];
   const graphNodes: TopologyTarget[] = [];
   const boundedUUIDs = new Set<string>();
@@ -90,6 +106,8 @@ export function normalizeChainTopology(
   for (const group of groups) {
     for (const line of group.lines) {
       scannedLines++;
+      const hash = line.line_hash_id?.trim();
+      if (hash && !lineByHash.has(hash)) lineByHash.set(hash, { line, nodeName: group.node_name });
       const uuid = line.line_uuid?.trim();
       if (uuid && !lineByUUID.has(uuid)) {
         lineByUUID.set(uuid, { line, nodeName: group.node_name });
@@ -168,13 +186,21 @@ export function normalizeChainTopology(
         scannedDeclaredEdges++;
         declared.add(target);
       }
-      for (const target of source?.line.jump_edges ?? []) {
+      for (const hash of source?.line.jump_edges ?? []) {
         scannedDiscoveryEdges++;
-        const kind = declared.has(target) ? "discovered_declared" : "discovered_inferred";
-        const discoveredEdge = edge(sourceUUID, target, kind, lineByUUID);
-        edges.push(discoveredEdge);
+        const kind = declared.has(hash) ? "discovered_declared" : "discovered_inferred";
+        const target = discoveredTargetFor(hash, lineByHash);
+        edges.push({
+          id: `${kind}:${sourceUUID}:${hash}`,
+          from: sourceUUID,
+          // The drawing is keyed by line_uuid, so an edge onto a line that has
+          // no uuid yet stays out of it and is named in the table instead.
+          to: target.lineUUID || hash,
+          kind,
+          targetResolved: target.resolved,
+        });
         constructedDiscoveryEdges++;
-        row.discoveredTargets.push({ kind, target: targetFor(target, lineByUUID) });
+        row.discoveredTargets.push({ kind, target });
       }
     }
     rows.push(row);
@@ -231,6 +257,26 @@ function targetFor(uuid: string, lines: Map<string, { line: Line; nodeName?: str
   };
 }
 
+/**
+ * Resolve one discovery edge target, which is addressed by `line_hash_id`.
+ *
+ * A hit names the real line and carries its `line_uuid` across so the drawing
+ * and the chain edges share one identifier domain. A miss keeps the hash
+ * visible rather than inventing a label, because an edge onto a line this
+ * control plane cannot see is a fact worth showing, not one worth hiding.
+ */
+function discoveredTargetFor(hash: string, byHash: Map<string, { line: Line; nodeName?: string }>): TopologyTarget {
+  const found = byHash.get(hash);
+  if (!found) return { lineUUID: "", lineHashID: hash, label: hash, resolved: false };
+  return {
+    lineUUID: found.line.line_uuid?.trim() ?? "",
+    lineHashID: hash,
+    label: found.line.name || hash,
+    nodeID: found.line.node_id,
+    resolved: true,
+  };
+}
+
 function edge(from: string, to: string, kind: TopologyEdgeKind, lines: Map<string, { line: Line; nodeName?: string }>): TopologyEdge {
   return { id: `${kind}:${from}:${to}`, from, to, kind, targetResolved: lines.has(to) };
 }
@@ -238,10 +284,12 @@ function edge(from: string, to: string, kind: TopologyEdgeKind, lines: Map<strin
 /**
  * What one source row actually knows, as one of five disjoint states.
  *
- * This is the honest reading of the data the server can supply today. There is
- * no `jump_edges` producer deployed, so `discoveredTargets` is empty on every
- * real fleet, and a fleet with no planned chains has every row in "unlinked".
- * Saying that plainly beats drawing a hundred disconnected boxes.
+ * "discovered" is reachable without anyone approving anything: the server
+ * resolves relay edges fleet-wide from the committed configuration each line
+ * reports, so a line whose outbound lands on another line's endpoint arrives
+ * here already carrying `jump_edges`. "unlinked" therefore means the fleet
+ * really has no relationship to show for that line, not that the evidence is
+ * merely unread.
  */
 export type RowEvidence = "attention" | "proposed" | "linked" | "discovered" | "unlinked";
 
@@ -391,3 +439,127 @@ export function layoutChainGraph(
     dropped: Math.max(0, nodes.length - kept.length),
   };
 }
+
+/**
+ * Why the drawing is empty, decided from data the panel already holds.
+ *
+ * Six zeroes and a paragraph of guesswork is the failure this replaces. The
+ * server derives relay edges from each line's own outbound (host, port) and
+ * from a sidecar-declared downstream, so "no edges" has distinct causes that
+ * the operator can act on differently, and the line records say which one
+ * applies. Nothing here invents an edge: an unmatched upstream is reported as
+ * an unmatched upstream.
+ */
+export type TopologyAbsenceReason =
+  /** Edges exist and at least one is drawn. */
+  | "drawn"
+  /** No line carries a line_uuid, so nothing can be an end of a chain. */
+  | "no_identity"
+  /** No line routes through anything: every outbound on the fleet is direct. */
+  | "no_relay"
+  /** Lines relay, but every upstream they name is outside this control plane. */
+  | "upstream_off_fleet"
+  /** Edges exist, and every one of them falls outside the drawing bound. */
+  | "beyond_cap"
+  /** Edges exist and would draw, but not at a size anyone can read. */
+  | "too_dense";
+
+export interface TopologyAbsence {
+  reason: TopologyAbsenceReason;
+  /** Lines whose outbound names a real upstream rather than routing direct. */
+  relayCandidates: number;
+  /** Distinct host:port upstreams that matched no line on this fleet. */
+  unmatchedUpstreams: string[];
+}
+
+export const UNMATCHED_UPSTREAM_SAMPLE = 6;
+
+/** True when this line routes through a named upstream rather than exiting directly. */
+export function isRelayCandidate(line: Line): boolean {
+  const ref = (line.outbound_ref ?? "").trim().toLowerCase();
+  if (!ref || ref === "direct") return false;
+  return !!(line.outbound_server ?? "").trim() && (line.outbound_port ?? 0) > 0;
+}
+
+export function diagnoseTopologyAbsence(
+  groups: readonly LineGroup[],
+  topology: ChainTopology,
+  drawing: { edges: number; legible: boolean },
+): TopologyAbsence {
+  const upstreams = new Set<string>();
+  let relayCandidates = 0;
+  for (const group of groups) {
+    for (const line of group.lines) {
+      if (!isRelayCandidate(line)) continue;
+      relayCandidates += 1;
+      if (line.jump_edges?.length) continue;
+      upstreams.add(`${(line.outbound_server ?? "").trim()}:${line.outbound_port}`);
+    }
+  }
+  const unmatchedUpstreams = [...upstreams].sort().slice(0, UNMATCHED_UPSTREAM_SAMPLE);
+  const absence = (reason: TopologyAbsenceReason): TopologyAbsence => ({ reason, relayCandidates, unmatchedUpstreams });
+  if (drawing.edges > 0) return absence(drawing.legible ? "drawn" : "too_dense");
+  if (!topology.rows.length) return absence("no_identity");
+  if (topology.edges.length > 0) return absence("beyond_cap");
+  if (relayCandidates === 0) return absence("no_relay");
+  return absence("upstream_off_fleet");
+}
+
+/**
+ * Why one line cannot be the target of a chain, in the server's own order.
+ *
+ * The server compiles a VLESS+REALITY outbound onto the target, which needs the
+ * target's private descriptor: its Reality public key, short id, and the bound
+ * account's credential. It only holds those for a line it rolled out itself, so
+ * "the target must be Lattice-managed" is a real constraint and not a UI habit.
+ * Mirroring the full precondition here stops the picker offering a target the
+ * plan call will refuse. Keep this in step with compileLineChainSnapshot in
+ * lattice-server internal/server/server_linechain.go.
+ */
+/**
+ * Whether the drawing can be rendered at a size anyone can read.
+ *
+ * `.topology-graph` in styles.css is `width: 100%; height: auto; max-height:
+ * 420px` over a viewBox, so a drawing larger than its box is scaled down
+ * uniformly rather than clipped. A 62-rank relay graph is 18524 by 2602 user
+ * units, which lands at about seven percent scale: 12px labels under a pixel
+ * tall, and every edge a smear. That is worse than no picture, because it
+ * looks like an answer.
+ *
+ * So the drawing is rendered only at 1:1 or smaller, and the canonical table
+ * carries the topology otherwise, which is what this panel has always said it
+ * is for. `availableWidth` is the shell's measured inner width; the fallback
+ * is a conservative desktop value for callers that cannot measure.
+ */
+export const GRAPH_LEGIBLE_HEIGHT = 420;
+export const GRAPH_ASSUMED_WIDTH = 1000;
+
+export function isGraphLegible(layout: GraphLayout, availableWidth = GRAPH_ASSUMED_WIDTH): boolean {
+  return layout.nodes.length > 0
+    && layout.width <= availableWidth
+    && layout.height <= GRAPH_LEGIBLE_HEIGHT;
+}
+
+export type ChainTargetRejection =
+  | "no_identity"
+  | "same_node"
+  | "not_reality_vless"
+  | "not_managed_overlay";
+
+export function chainTargetRejection(line: Line, sourceNodeID?: string): ChainTargetRejection | null {
+  if (!line.line_uuid?.trim()) return "no_identity";
+  if (sourceNodeID && line.node_id === sourceNodeID) return "same_node";
+  if (line.core !== "sing-box" || line.type !== "vless" || line.security !== "reality" || line.transport !== "tcp") {
+    return "not_reality_vless";
+  }
+  if (!line.overlay || line.overlay_status !== "applied" || line.status !== "ok") return "not_managed_overlay";
+  return null;
+}
+
+/** Adjective phrases, so they read correctly after any count. */
+export const CHAIN_TARGET_REJECTION_TEXT: Record<ChainTargetRejection, string> = {
+  no_identity: "without a line_uuid",
+  same_node: "on the source node",
+  not_reality_vless: "not sing-box VLESS+REALITY+TCP",
+  not_managed_overlay: "not rolled out by Lattice and reporting healthy",
+};
