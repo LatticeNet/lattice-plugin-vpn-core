@@ -185,9 +185,28 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .panel-header { display: flex; flex-wrap: wrap; min-height: 52px; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border, #d9dde2); }
 .panel-header h2 { font-size: var(--text-md); }
 
-.table-wrap { width: 100%; overflow-x: auto; }
+/* A table is bounded by the window, never by its own row count.
+ *
+ * Left unbounded, 111 fleet lines made this box 5900px tall and the plugin
+ * document 8800px tall. On a 2400px-wide console that is around 21 megapixels
+ * of composited content in one scrolling document, and the compositor stops
+ * producing frames entirely: measured at one animation frame per 21 seconds,
+ * with the last painted state left on screen as a few complete rows, a few
+ * half-painted ones and then nothing. Layout was never the cost (13-40ms);
+ * the painted area was.
+ *
+ * Capping the box against the window keeps the document near 3500px and the
+ * same page runs at 60fps. Every row stays in the DOM, so the count in the
+ * panel header, the sort and the search all still speak for the whole set.
+ * `dvh` is correct here only because the host frame is a viewport now. */
+.table-wrap { width: 100%; max-height: calc(100dvh - var(--sp-7)); overflow: auto; }
 table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: var(--text-sm); }
 th { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border, #d9dde2); color: var(--muted-foreground, #65707b); background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); font-size: var(--text-2xs); font-weight: 650; text-align: left; text-transform: uppercase; }
+/* Column headers stay with the rows they name. Row 90 of a fleet table is
+   unreadable without them. The border is drawn as an inset shadow because a
+   collapsed border belongs to the row rather than the cell, so it does not
+   travel with a sticky header. */
+thead th { position: sticky; top: 0; z-index: 2; box-shadow: inset 0 -1px 0 var(--border, #d9dde2); }
 td { padding: var(--sp-3); border-bottom: 1px solid var(--border, #e3e6e9); vertical-align: middle; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: color-mix(in srgb, var(--muted, #eef0f2) 52%, transparent); }
@@ -199,13 +218,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    column impossible to scan. Every one of these cells carries a title. */
 td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The row action is pinned to the right edge of the scroll container.
-   A wide table inside a frame the host sizes to content puts its only
-   horizontal scrollbar thousands of pixels below the first row, so an action
-   that lives past the fold is an action nobody can reach. `sticky` works here,
-   unlike on the page itself, because .table-wrap is a real scrollport. */
+/* The row action is pinned to the right edge of the scroll container, so a
+   table wider than the console still offers its action without a horizontal
+   scroll. .table-wrap is a real scrollport in both axes, so this sticks. */
 .actions-cell { position: sticky; right: 0; z-index: 1; text-align: right; background: var(--card, #fff); box-shadow: -1px 0 0 var(--border, #d9dde2); }
-th.actions-cell { background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); }
+/* The corner cell is sticky in both axes and has to sit above both edges. */
+th.actions-cell { z-index: 3; background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); box-shadow: -1px 0 0 var(--border, #d9dde2), inset 0 -1px 0 var(--border, #d9dde2); }
 tbody tr:hover .actions-cell { background: color-mix(in srgb, var(--muted, #eef0f2) 52%, var(--card, #fff)); }
 
 /* Sortable headers. A 111-row table that cannot be ordered is a list. */
