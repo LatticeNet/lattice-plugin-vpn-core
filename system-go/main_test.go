@@ -208,7 +208,21 @@ func TestManifestDeclaresLineChainContract(t *testing.T) {
 	t.Fatal("lines service is missing")
 }
 
-func TestVersionContractIsAlpha10AndUnsignedForHandoff(t *testing.T) {
+// The version the sidecar reports and the version the manifest declares must be
+// the same number, and the manifest must be unsigned when it reaches the
+// signer.
+//
+// This used to assert the literal "0.8.0-alpha.10" and an unsigned manifest,
+// which described one afternoon rather than a rule: the plugin moved on four
+// alphas, the manifest got signed, and the test stayed red for long enough that
+// a whole suite was being ignored. The rule it was reaching for survives without
+// the literal.
+//
+// The unsigned half is kept for the reason SIGNING-HANDOFF.md gives: for a v2
+// manifest it is hygiene rather than a technical requirement, because
+// SigningPayload blanks the field before marshalling anyway, but a populated
+// field means you are about to sign something you did not just build.
+func TestVersionContractIsConsistentAndUnsignedBeforeHandoff(t *testing.T) {
 	raw, err := os.ReadFile("../manifest.json")
 	if err != nil {
 		t.Fatal(err)
@@ -219,9 +233,6 @@ func TestVersionContractIsAlpha10AndUnsignedForHandoff(t *testing.T) {
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
-	}
-	if manifest.Version != "0.8.0-alpha.10" {
-		t.Fatalf("manifest version = %q", manifest.Version)
 	}
 	if pluginVersion != manifest.Version {
 		t.Fatalf("version drift: manifest=%q go=%q", manifest.Version, pluginVersion)
@@ -250,11 +261,25 @@ func TestSigningHandoffMatchesManifestVersionAndBundleDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	handoff := string(handoffRaw)
-	if !strings.Contains(handoff, "# vpn-core "+manifest.Version+" signature handoff") {
-		t.Fatalf("signing handoff does not name manifest version %q", manifest.Version)
-	}
+
+	// The title is deliberately NOT required to name a version. This test used
+	// to require it, which is the very thing SIGNING-HANDOFF.md now tells the
+	// signer not to do: pinning the checklist to one version is what made it
+	// wrong the moment the plugin moved on, and a test that enforces the
+	// mistake the document warns against is worse than no test.
+	//
+	// What is worth enforcing is that the checklist and the manifest cannot name
+	// different bundles. A signer reading a digest that is not the one being
+	// released is how the wrong bytes get signed.
 	digests := regexp.MustCompile("`[0-9a-f]{64}`").FindAllString(handoff, -1)
-	if len(digests) != 1 || strings.Trim(digests[0], "`") != manifest.Bundle.Digest {
+	switch {
+	case manifest.Bundle.Digest == "":
+		// Pre-pack: nothing has been built yet, so the checklist must not carry
+		// a digest either, or it is quoting a build that is not this one.
+		if len(digests) != 0 {
+			t.Fatalf("manifest declares no bundle digest yet, but the handoff names %v", digests)
+		}
+	case len(digests) != 1 || strings.Trim(digests[0], "`") != manifest.Bundle.Digest:
 		t.Fatalf("signing handoff digests = %v, manifest bundle digest = %q", digests, manifest.Bundle.Digest)
 	}
 }

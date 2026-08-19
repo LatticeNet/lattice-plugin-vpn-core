@@ -32,5 +32,9 @@ line. At the time of writing they were server floor `0.2.2-alpha.19`, dashboard
 host bridge `1`, node-agent `0.3.4-alpha.1`. The plugin version is whatever the
 manifest declares.
 
-Verified complete-bundle SHA-256:
-`ab220f6fdd57a20d5c320887e11bded1af6e251a9c43eff3391dc78e0c651959`.
+Verified complete-bundle SHA-256: none yet. The digest above was removed when
+the plugin moved to a new version, because it named the previous build and a
+signer reading it would have verified the wrong bytes. Pack first, then write
+the digest here and into `manifest.json`; the two must be the same string, and
+a test in `system-go` enforces that and refuses a digest here while the
+manifest declares none.
