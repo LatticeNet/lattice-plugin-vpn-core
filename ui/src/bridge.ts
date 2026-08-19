@@ -190,7 +190,7 @@ function readChannel(hash: string): { nonce: string; hostOrigin: string } {
   if (!nonce || nonce.length < 16 || nonce.length > 128) throw new Error("Missing plugin channel nonce");
   const hostOrigin = params.get("host_origin")?.trim();
   if (!hostOrigin) throw new Error("Missing plugin host origin");
-  // Must be an exact absolute http(s) origin — anything else is a host bug
+  // Must be an exact absolute http(s) origin. Anything else is a host bug
   // or a tampered frame URL, and neither is a reason to silently downgrade.
   let parsed: URL;
   try {

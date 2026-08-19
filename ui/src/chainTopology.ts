@@ -234,3 +234,160 @@ function targetFor(uuid: string, lines: Map<string, { line: Line; nodeName?: str
 function edge(from: string, to: string, kind: TopologyEdgeKind, lines: Map<string, { line: Line; nodeName?: string }>): TopologyEdge {
   return { id: `${kind}:${from}:${to}`, from, to, kind, targetResolved: lines.has(to) };
 }
+
+/**
+ * What one source row actually knows, as one of five disjoint states.
+ *
+ * This is the honest reading of the data the server can supply today. There is
+ * no `jump_edges` producer deployed, so `discoveredTargets` is empty on every
+ * real fleet, and a fleet with no planned chains has every row in "unlinked".
+ * Saying that plainly beats drawing a hundred disconnected boxes.
+ */
+export type RowEvidence = "attention" | "proposed" | "linked" | "discovered" | "unlinked";
+
+export function rowEvidence(row: TopologyRow): RowEvidence {
+  if (row.lastError || row.status === "failed" || row.status === "drifted") return "attention";
+  if (row.proposal) return "proposed";
+  if (row.currentTarget || row.observedTarget || row.removalTombstone) return "linked";
+  if (row.discoveredTargets.length) return "discovered";
+  return "unlinked";
+}
+
+export interface TopologySummary {
+  sources: number;
+  attention: number;
+  proposed: number;
+  linked: number;
+  discovered: number;
+  unlinked: number;
+  edges: number;
+}
+
+export function summarizeTopology(topology: ChainTopology): TopologySummary {
+  const summary: TopologySummary = {
+    sources: topology.rows.length,
+    attention: 0,
+    proposed: 0,
+    linked: 0,
+    discovered: 0,
+    unlinked: 0,
+    edges: topology.edges.length,
+  };
+  for (const row of topology.rows) summary[rowEvidence(row)] += 1;
+  return summary;
+}
+
+export function filterTopologyRows(rows: readonly TopologyRow[], filter: RowEvidence | "all"): TopologyRow[] {
+  if (filter === "all") return [...rows];
+  return rows.filter((row) => rowEvidence(row) === filter);
+}
+
+/**
+ * The part of the bounded graph that is actually a graph.
+ *
+ * `normalizeChainTopology` bounds the node set so a 10k-line fleet cannot melt
+ * the browser, but a node with no edge carries no topology: rendering it draws
+ * a label that the canonical table already prints, in nine truncated
+ * characters. Only nodes that participate in an edge are drawn.
+ */
+export function connectedSubgraph(graph: TopologyGraph): { nodes: TopologyTarget[]; edges: TopologyEdge[] } {
+  const touched = new Set<string>();
+  for (const value of graph.edges) {
+    touched.add(value.from);
+    if (value.to) touched.add(value.to);
+  }
+  return { nodes: graph.nodes.filter((node) => touched.has(node.lineUUID)), edges: [...graph.edges] };
+}
+
+export interface GraphLayoutNode extends TopologyTarget {
+  rank: number;
+  x: number;
+  y: number;
+}
+
+export interface GraphLayout {
+  nodes: GraphLayoutNode[];
+  edges: Array<TopologyEdge & { x1: number; y1: number; x2: number; y2: number }>;
+  width: number;
+  height: number;
+  dropped: number;
+}
+
+/* User-space units are rendered close to 1:1 (the drawing is capped at its own
+ * intrinsic width so a small graph is not blown up), so these are effectively
+ * px and the labels have to be legible at this size. */
+const RANK_WIDTH = 300;
+const ROW_HEIGHT = 54;
+const PAD_X = 112;
+const PAD_Y = 32;
+/** Half the node box width; edges stop at the box edge rather than its centre. */
+export const NODE_HALF_WIDTH = 100;
+
+/**
+ * Lay a chain graph out left to right by rank, so a chain reads as a chain.
+ *
+ * Rank is the longest path from a source with no inbound edge. Anything left
+ * unranked is part of a cycle and lands in one trailing column rather than
+ * being dropped silently. `maxNodes` bounds the drawing; the caller reports
+ * `dropped` rather than pretending the picture is complete.
+ */
+export function layoutChainGraph(
+  nodes: readonly TopologyTarget[],
+  edges: readonly TopologyEdge[],
+  maxNodes = 60,
+): GraphLayout {
+  const kept = nodes.slice(0, Math.max(0, maxNodes));
+  const keptIDs = new Set(kept.map((node) => node.lineUUID));
+  const keptEdges = edges.filter((value) => keptIDs.has(value.from) && !!value.to && keptIDs.has(value.to));
+
+  const incoming = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const value of keptEdges) {
+    if (!value.to) continue;
+    (outgoing.get(value.from) ?? outgoing.set(value.from, []).get(value.from)!).push(value.to);
+    (incoming.get(value.to) ?? incoming.set(value.to, []).get(value.to)!).push(value.from);
+  }
+
+  const rank = new Map<string, number>();
+  let frontier = kept.filter((node) => !incoming.has(node.lineUUID)).map((node) => node.lineUUID);
+  for (const id of frontier) rank.set(id, 0);
+  // Bounded by the node count: a longer walk means a cycle, handled below.
+  for (let depth = 0; depth < kept.length && frontier.length; depth += 1) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const target of outgoing.get(id) ?? []) {
+        const candidate = (rank.get(id) ?? 0) + 1;
+        if ((rank.get(target) ?? -1) < candidate) {
+          rank.set(target, candidate);
+          next.push(target);
+        }
+      }
+    }
+    frontier = next;
+  }
+  const maxRank = kept.reduce((value, node) => Math.max(value, rank.get(node.lineUUID) ?? 0), 0);
+  for (const node of kept) if (!rank.has(node.lineUUID)) rank.set(node.lineUUID, maxRank + 1);
+
+  const perRank = new Map<number, number>();
+  const placed: GraphLayoutNode[] = kept.map((node) => {
+    const nodeRank = rank.get(node.lineUUID) ?? 0;
+    const index = perRank.get(nodeRank) ?? 0;
+    perRank.set(nodeRank, index + 1);
+    return { ...node, rank: nodeRank, x: PAD_X + nodeRank * RANK_WIDTH, y: PAD_Y + index * ROW_HEIGHT };
+  });
+  const byID = new Map(placed.map((node) => [node.lineUUID, node]));
+
+  const columns = Math.max(...placed.map((node) => node.rank), 0) + 1;
+  const tallest = Math.max(...[...perRank.values()], 1);
+  return {
+    nodes: placed,
+    edges: keptEdges.map((value) => {
+      const from = byID.get(value.from)!;
+      const to = byID.get(value.to!)!;
+      return { ...value, x1: from.x + NODE_HALF_WIDTH, y1: from.y, x2: to.x - NODE_HALF_WIDTH, y2: to.y };
+    }),
+    width: PAD_X * 2 + (columns - 1) * RANK_WIDTH,
+    height: PAD_Y * 2 + (tallest - 1) * ROW_HEIGHT,
+    dropped: Math.max(0, nodes.length - kept.length),
+  };
+}

@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeChainTopology, pageTopologyRows, type ChainTopologyWorkCounters, type TopologyEdge } from "./chainTopology";
+import {
+  connectedSubgraph,
+  filterTopologyRows,
+  layoutChainGraph,
+  normalizeChainTopology,
+  pageTopologyRows,
+  rowEvidence,
+  summarizeTopology,
+  type ChainTopologyWorkCounters,
+  type TopologyEdge,
+  type TopologyRow,
+  type TopologyTarget,
+} from "./chainTopology";
 import type { Line, LineChain, LineGroup } from "./vpnModel";
 
 const line = (uuid: string, over: Partial<Line> = {}): Line => ({
@@ -129,5 +141,95 @@ describe("normalizeChainTopology", () => {
     expect(pageTopologyRows(result.rows, 2).rows).toHaveLength(100);
     expect(pageTopologyRows(result.rows, 100).rows).toHaveLength(100);
     expect(pageTopologyRows(result.rows, 101).page).toBe(100);
+  });
+});
+
+describe("topology evidence", () => {
+  const row = (over: Partial<TopologyRow>): TopologyRow => ({
+    sourceLineUUID: "source", sourceLabel: "source", status: "discovered",
+    removalTombstone: false, discoveredTargets: [], chain: null, ...over,
+  });
+  const target = (uuid: string): TopologyTarget => ({ lineUUID: uuid, label: uuid, resolved: true });
+
+  it("classifies each source by the strongest evidence it carries", () => {
+    expect(rowEvidence(row({ lastError: "apply refused" }))).toBe("attention");
+    expect(rowEvidence(row({ status: "drifted" }))).toBe("attention");
+    expect(rowEvidence(row({ proposal: { operation: "set", approvalID: "a", status: "planned", isEdge: false } }))).toBe("proposed");
+    expect(rowEvidence(row({ currentTarget: target("t") }))).toBe("linked");
+    expect(rowEvidence(row({ removalTombstone: true }))).toBe("linked");
+    expect(rowEvidence(row({ discoveredTargets: [{ kind: "discovered_inferred", target: target("t") }] }))).toBe("discovered");
+    expect(rowEvidence(row({}))).toBe("unlinked");
+  });
+
+  it("counts the production shape honestly: many sources, no chains, no edges", () => {
+    const lines = Array.from({ length: 111 }, (_, index) => line(`line-${index}`));
+    const summary = summarizeTopology(normalizeChainTopology(groups(...lines), []));
+    expect(summary.sources).toBe(111);
+    expect(summary.unlinked).toBe(111);
+    expect(summary.linked).toBe(0);
+    expect(summary.edges).toBe(0);
+  });
+
+  it("filters rows down to one evidence state and keeps every row under all", () => {
+    const topology = normalizeChainTopology(groups(line("a"), line("b")), [chain({
+      source_line_uuid: "a", status: "converged",
+      current: { target_line_uuid: "b", status: "converged" },
+      observed_downstream_line_uuid: "b",
+    })]);
+    expect(filterTopologyRows(topology.rows, "all")).toHaveLength(2);
+    expect(filterTopologyRows(topology.rows, "linked").map((value) => value.sourceLineUUID)).toEqual(["a"]);
+    expect(filterTopologyRows(topology.rows, "unlinked").map((value) => value.sourceLineUUID)).toEqual(["b"]);
+  });
+});
+
+describe("connectedSubgraph", () => {
+  it("drops nodes that carry no edge, so an edgeless fleet draws nothing", () => {
+    const topology = normalizeChainTopology(groups(line("a"), line("b"), line("c")), []);
+    expect(topology.graph.nodes).toHaveLength(3);
+    expect(connectedSubgraph(topology.graph).nodes).toEqual([]);
+  });
+
+  it("keeps both ends of every drawn edge", () => {
+    const topology = normalizeChainTopology(groups(line("a"), line("b"), line("c")), [chain({
+      source_line_uuid: "a", status: "converged",
+      current: { target_line_uuid: "b", status: "converged" },
+      observed_downstream_line_uuid: "b",
+    })]);
+    const connected = connectedSubgraph(topology.graph);
+    expect(connected.nodes.map((node) => node.lineUUID)).toEqual(["a", "b"]);
+    expect(connected.edges).toHaveLength(1);
+  });
+});
+
+describe("layoutChainGraph", () => {
+  const target = (uuid: string): TopologyTarget => ({ lineUUID: uuid, label: uuid, resolved: true });
+  const link = (from: string, to: string): TopologyEdge => ({ id: `verified:${from}:${to}`, from, to, kind: "verified", targetResolved: true });
+
+  it("ranks a chain left to right so hops read as hops", () => {
+    const layout = layoutChainGraph([target("a"), target("b"), target("c")], [link("a", "b"), link("b", "c")]);
+    expect(layout.nodes.map((node) => [node.lineUUID, node.rank])).toEqual([["a", 0], ["b", 1], ["c", 2]]);
+    expect(layout.nodes[0].x).toBeLessThan(layout.nodes[2].x);
+    expect(layout.dropped).toBe(0);
+  });
+
+  it("stacks siblings of one rank instead of overlapping them", () => {
+    const layout = layoutChainGraph([target("hub"), target("x"), target("y")], [link("hub", "x"), link("hub", "y")]);
+    const [x, y] = [layout.nodes[1], layout.nodes[2]];
+    expect(x.rank).toBe(1);
+    expect(y.rank).toBe(1);
+    expect(x.y).not.toBe(y.y);
+  });
+
+  it("places a cycle in a trailing column rather than dropping it", () => {
+    const layout = layoutChainGraph([target("a"), target("b")], [link("a", "b"), link("b", "a")]);
+    expect(layout.nodes).toHaveLength(2);
+    expect(layout.edges).toHaveLength(2);
+  });
+
+  it("reports what it dropped when the graph exceeds the drawing bound", () => {
+    const nodes = Array.from({ length: 12 }, (_, index) => target(`n${index}`));
+    const layout = layoutChainGraph(nodes, [link("n0", "n1")], 5);
+    expect(layout.nodes).toHaveLength(5);
+    expect(layout.dropped).toBe(7);
   });
 });

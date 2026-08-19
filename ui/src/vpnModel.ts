@@ -227,7 +227,7 @@ export function overlayTone(status: string | undefined): "success" | "warning" |
   }
 }
 
-// overlayCoverage counts node groups that have an applied overlay line —
+// overlayCoverage counts node groups that have an applied overlay line:
 // the fleet-coverage headline ("N of M nodes carry the managed line").
 export function overlayCoverage(groups: LineGroup[]): { covered: number; total: number } {
   let covered = 0;
@@ -237,7 +237,7 @@ export function overlayCoverage(groups: LineGroup[]): { covered: number; total: 
   return { covered, total: groups.length };
 }
 
-// unresolvedOverlayDefs are definitions with no visible line yet — planned
+// unresolvedOverlayDefs are definitions with no visible line yet: planned
 // (awaiting approval/apply) or failed. They surface in their own strip
 // because there is no line row to hang the badge on.
 export function unresolvedOverlayDefs(defs: ManagedLineDef[], groups: LineGroup[]): ManagedLineDef[] {
@@ -254,7 +254,52 @@ export function unresolvedOverlayDefs(defs: ManagedLineDef[], groups: LineGroup[
 export function rolloutSummaryLine(result: RolloutResult): string {
   const planned = result.planned?.length ?? 0;
   const skipped = result.skipped?.length ?? 0;
-  if (planned === 0 && skipped === 0) return "No eligible nodes — every node is already planned or applied.";
-  if (skipped === 0) return `Planned for ${planned} node${planned === 1 ? "" : "s"} — review and approve the batch to apply.`;
-  return `Planned for ${planned} node${planned === 1 ? "" : "s"}, skipped ${skipped} (reasons below) — approve the batch to apply.`;
+  if (planned === 0 && skipped === 0) return "No eligible nodes. Every node is already planned or applied.";
+  if (skipped === 0) return `Planned for ${planned} node${planned === 1 ? "" : "s"}. Review and approve the batch to apply.`;
+  return `Planned for ${planned} node${planned === 1 ? "" : "s"}, skipped ${skipped} (reasons below). Approve the batch to apply.`;
+}
+
+// ── line table ordering ──────────────────────────────────────────────────
+// A fleet view that lists 111 rows in server order is a list, not a table.
+// Sorting is pure so it can be tested without a DOM and reused by the header.
+
+export interface LineRow {
+  group: LineGroup;
+  line: Line;
+}
+
+export type LineSortKey = "node" | "line" | "core" | "ownership" | "endpoint" | "users" | "status";
+export type SortDirection = "asc" | "desc";
+
+const STATUS_ORDER: Record<string, number> = { error: 0, warning: 1, healthy: 2 };
+
+function lineSortValue(row: LineRow, key: LineSortKey): string | number {
+  switch (key) {
+    case "node": return (row.group.node_name || row.group.node_id).toLowerCase();
+    case "line": return row.line.name.toLowerCase();
+    case "core": return (row.line.core || "").toLowerCase();
+    case "ownership": return lineOwnership(row.line);
+    case "endpoint": return formatLineEndpoint(row.line).toLowerCase();
+    // Unknown user counts sort last in either direction rather than as zero,
+    // which would read as "this line has no users" when it means "not known".
+    case "users": return row.line.user_known ? row.line.user_count : Number.MAX_SAFE_INTEGER;
+    case "status": return STATUS_ORDER[lineStatus(row.line)] ?? 3;
+  }
+}
+
+export function sortLineRows(rows: readonly LineRow[], key: LineSortKey | "", direction: SortDirection): LineRow[] {
+  if (!key) return [...rows];
+  const sign = direction === "desc" ? -1 : 1;
+  return [...rows].sort((left, right) => {
+    const a = lineSortValue(left, key);
+    const b = lineSortValue(right, key);
+    if (a === b) {
+      // Ties fall back to node then line, so the order never wobbles between
+      // renders of the same data.
+      const tie = (left.group.node_id + left.line.name).localeCompare(right.group.node_id + right.line.name);
+      return tie;
+    }
+    if (typeof a === "number" && typeof b === "number") return (a - b) * sign;
+    return String(a).localeCompare(String(b)) * sign;
+  });
 }
