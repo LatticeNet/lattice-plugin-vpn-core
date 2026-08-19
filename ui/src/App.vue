@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import {
   Activity,
   CircleAlert,
@@ -22,6 +22,7 @@ import {
 import { BridgeClient, canCall, type HostInit } from "./bridge";
 import LineChainWorkspace from "./LineChainWorkspace.vue";
 import { LineWorkspaceLoader } from "./lineWorkspace";
+import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
 import {
   filterLineGroups,
   formatBytes,
@@ -35,8 +36,13 @@ import {
   overlayTone,
   rolloutSummaryLine,
   safeErrorMessage,
+  sortLineRows,
   unresolvedOverlayDefs,
+  quotaBytesFromInput,
   type Line,
+  type LineRow,
+  type LineSortKey,
+  type SortDirection,
   type LineChain,
   type LineGroup,
   type ManagedLineDef,
@@ -168,10 +174,49 @@ const routeMeta = computed(() => ({
   usage: { title: "Usage", description: "Traffic accounting by user and reporting node.", icon: Gauge },
 }[route.value] ?? { title: "VPN Core", description: "sing-box management", icon: Radar }));
 const visibleLineGroups = computed(() => filterLineGroups(lines.value, search.value));
-const visibleLines = computed(() => visibleLineGroups.value.flatMap((group) => group.lines.map((line) => ({
+const matchedLines = computed<LineRow[]>(() => visibleLineGroups.value.flatMap((group) => group.lines.map((line) => ({
   group,
   line,
 }))));
+
+// ── line table ordering ──────────────────────────────────────────────────
+// 111 rows in server order is a list. The header sorts; the sort is stable and
+// survives a background refresh because it is derived, not stored on the rows.
+const sortKey = ref<LineSortKey | "">("");
+const sortDirection = ref<SortDirection>("asc");
+const visibleLines = computed(() => sortLineRows(matchedLines.value, sortKey.value, sortDirection.value));
+
+const LINE_COLUMNS: Array<{ key: LineSortKey | ""; label: string; numeric?: boolean }> = [
+  { key: "node", label: "Node" },
+  { key: "line", label: "Line" },
+  { key: "core", label: "Core" },
+  { key: "", label: "Source" },
+  { key: "ownership", label: "Ownership" },
+  { key: "endpoint", label: "Endpoint" },
+  { key: "", label: "Reality SNI" },
+  { key: "users", label: "Users", numeric: true },
+  { key: "", label: "Outbound ref" },
+  { key: "status", label: "Status" },
+];
+
+function toggleSort(key: LineSortKey): void {
+  if (sortKey.value === key) {
+    sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
+    return;
+  }
+  sortKey.value = key;
+  sortDirection.value = "asc";
+}
+
+function ariaSort(key: LineSortKey | ""): "ascending" | "descending" | "none" {
+  if (!key || sortKey.value !== key) return "none";
+  return sortDirection.value === "asc" ? "ascending" : "descending";
+}
+
+function sortMark(key: LineSortKey | ""): string {
+  if (!key || sortKey.value !== key) return "\u2195";
+  return sortDirection.value === "asc" ? "\u2191" : "\u2193";
+}
 const allLines = computed(() => lines.value.flatMap((group) => group.lines));
 const healthyLines = computed(() => allLines.value.filter((line) => lineStatus(line) === "healthy").length);
 const managedLines = computed(() => allLines.value.filter((line) => line.managed).length);
@@ -323,7 +368,7 @@ async function loadCurrent(background = false): Promise<void> {
 }
 
 // design-17 S3: the managed-line rollout. The modal collects the account and
-// candidate port; the compile only files approvals — nothing touches a node
+// candidate port; the compile only files approvals. Nothing touches a node
 // until the operator approves the batch (the result panel says exactly that).
 const rolloutOpen = ref(false);
 const rolloutBusy = ref(false);
@@ -332,16 +377,28 @@ const rolloutResult = ref<RolloutResult>();
 const rolloutUserId = ref("");
 const rolloutPort = ref(24443);
 
+// The rollout touches every eligible node in the fleet at once, so it gets a
+// second step that names the nodes it will file approvals against. The first
+// step collects the inputs; nothing is sent until the named list is confirmed.
+const rolloutConfirm = ref(false);
+const rolloutNodeNames = computed(() => lines.value.map((group) => group.node_name || group.node_id));
+
 function openRollout(): void {
   rolloutUserId.value = rolloutableUsers.value[0]?.id ?? "";
   rolloutPort.value = 24443;
   rolloutError.value = "";
   rolloutResult.value = undefined;
+  rolloutConfirm.value = false;
   rolloutOpen.value = true;
 }
 
+function closeRollout(): void {
+  rolloutOpen.value = false;
+  rolloutConfirm.value = false;
+}
+
 async function runRollout(): Promise<void> {
-  if (!rolloutUserId.value || rolloutBusy.value) return;
+  if (!rolloutUserId.value || rolloutBusy.value || !rolloutConfirm.value) return;
   rolloutBusy.value = true;
   rolloutError.value = "";
   try {
@@ -404,12 +461,15 @@ async function saveUser(): Promise<void> {
   savingUser.value = true;
   error.value = "";
   try {
-    const quota = Number(userForm.quotaGiB);
     const payload: Record<string, unknown> = {
       email: userForm.email.trim(), name: userForm.name.trim(), enabled: userForm.enabled,
-      quota_bytes: Number.isFinite(quota) && quota > 0 ? Math.round(quota * 1024 * 1024 * 1024) : 0,
       group: userForm.group.trim(), comment: userForm.comment.trim(),
     };
+    // Blank means "leave it alone", the way the expiry field below already
+    // behaves. Sending 0 for a box the operator never touched is how renaming
+    // a quota'd account made it unlimited.
+    const quota = quotaBytesFromInput(userForm.quotaGiB);
+    if (quota !== undefined) payload.quota_bytes = quota;
     const expiresAt = parseDateTimeLocal(userForm.expiresAt);
     if (expiresAt) payload.expires_at = expiresAt;
     if (editingUser.value) {
@@ -595,7 +655,7 @@ async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", user
   try {
     const result = await pluginCall<LinePlanResult>(SERVICES.admin, op, { user_id: userId, line_hash_id: line.line_hash_id });
     recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
-    notice.value = "On-node action queued — approve it in the Approvals console, then rediscover";
+    notice.value = "On-node action queued. Approve it in the Approvals console, then rediscover";
     await loadCurrent(true);
   } catch (cause) {
     lineUsersError.value = safeErrorMessage(cause, "The on-node action could not be planned");
@@ -625,7 +685,7 @@ async function syncSidecar(): Promise<void> {
   try {
     const result = await pluginCall<LinePlanResult>(SERVICES.lines, "sync_metadata", { node_id: line.node_id });
     recordLineApproval(result, "queue sidecar sync");
-    notice.value = "Sidecar sync queued — approve it in the Approvals console";
+    notice.value = "Sidecar sync queued. Approve it in the Approvals console";
   } catch (cause) {
     lineUsersError.value = safeErrorMessage(cause, "Sidecar sync could not be queued");
   } finally {
@@ -642,7 +702,7 @@ async function reattachLineUUID(): Promise<void> {
   lineUsersError.value = "";
   try {
     await pluginCall(SERVICES.lines, "reattach", { line_hash_id: line.line_hash_id, line_uuid: next });
-    notice.value = "Line identity reattached — approve the queued sidecar sync before treating it as converged";
+    notice.value = "Line identity reattached. Approve the queued sidecar sync before treating it as converged";
     reattachUUID.value = "";
     await loadCurrent(true);
     const refreshed = await pluginCall<{ line: Line }>(SERVICES.lines, "get", { line_hash_id: line.line_hash_id });
@@ -674,7 +734,7 @@ async function rotateCredential(): Promise<void> {
       SERVICES.admin, "rotate", { user_id: rotateUser.value.id, protocol: rotateProtocol.value });
     rotateRevealed.value = { email: rotateUser.value.email, protocol: result.protocol, secret: result.revealed_credential };
     rotateUser.value = undefined;
-    notice.value = `${result.protocol} credential rotated — re-apply it to its lines to take effect on nodes`;
+    notice.value = `${result.protocol} credential rotated. Re-apply it to its lines to take effect on nodes`;
     await loadCurrent(true);
   } catch (cause) {
     error.value = safeErrorMessage(cause, "Credential could not be rotated");
@@ -771,15 +831,91 @@ async function resize(): Promise<void> {
   bridge?.resize(document.documentElement.scrollHeight);
 }
 
+// ── overlays ─────────────────────────────────────────────────────────────
+// The frame is not a viewport: the host sizes it to this document, so a fixed,
+// "centred" sheet lands wherever the middle of a 2400px frame happens to be,
+// which on a 1500px window is far below the fold. Overlays are absolute and
+// anchored to the click, in document coordinates. See src/overlayAnchor.ts.
+// Whether the current route has anything to show. An empty screen after a
+// failed call is not an empty fleet, and telling the operator to go configure
+// discovery when the request 503'd sends them after the wrong problem.
+const hasRouteData = computed(() => ({
+  lines: allLines.value.length > 0,
+  users: users.value.length > 0,
+  profiles: profiles.value.length > 0,
+  usage: usage.value.by_user.length > 0 || usage.value.by_node.length > 0 || usage.value.collectors.length > 0,
+}[route.value] ?? false));
+
+const overlayAnchorTop = ref(MIN_ANCHOR_TOP);
+const overlayStyle = computed(() => ({ "--overlay-anchor-top": `${overlayAnchorTop.value}px` }));
+
+// Which overlay is open, not merely whether one is. Rotating a credential
+// closes the confirm dialog and opens the reveal in the same tick; a boolean
+// stays true across that swap, so the reveal would never be focused or
+// clamped. A changing key fires the watcher on every handover.
+const openOverlayKey = computed(() => {
+  if (rotateRevealed.value) return "rotate-revealed";
+  if (deleteTarget.value) return "delete";
+  if (rotateUser.value) return "rotate";
+  if (bindingUser.value) return "bindings";
+  if (rolloutOpen.value) return "rollout";
+  if (userDialogOpen.value) return "user";
+  if (profileSettingsOpen.value) return "profile-settings";
+  if (lineDetailOpen.value) return "line-detail";
+  return "";
+});
+const overlayOpen = computed(() => openOverlayKey.value !== "");
+
+function recordAnchor(event: Event): void {
+  // A click inside an open overlay must not move the anchor, or the next one
+  // opens against a place the operator never pointed at.
+  if (overlayOpen.value || isInsideOverlay(event.target)) return;
+  overlayAnchorTop.value = anchorTopFrom(event);
+}
+
+function closeTopOverlay(): void {
+  // rotateRevealed is deliberately not dismissible here: it is the one-time
+  // display of a secret, and losing it to a stray Escape means rotating again.
+  if (deleteTarget.value) deleteTarget.value = undefined;
+  else if (rotateUser.value) rotateUser.value = undefined;
+  else if (bindingUser.value) bindingUser.value = undefined;
+  else if (rolloutOpen.value) closeRollout();
+  else if (userDialogOpen.value) userDialogOpen.value = false;
+  else if (profileSettingsOpen.value) closeProfileSettings();
+  else if (lineDetailOpen.value) closeLineDetails();
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape" && overlayOpen.value) closeTopOverlay();
+}
+
+watch(openOverlayKey, async (key) => {
+  if (!key) return;
+  await nextTick();
+  const panel = document.querySelector<HTMLElement>(".overlay-scrim .modal");
+  if (!panel) return;
+  // Clamp only once the real height is known; clamping against a guessed
+  // height pushes short dialogs up for no reason.
+  overlayAnchorTop.value = clampAnchorTop(overlayAnchorTop.value, panel.offsetHeight, document.documentElement.scrollHeight);
+  // Escape only reaches a focused element, and a dialog the operator cannot
+  // dismiss with Escape is the worst one to get wrong.
+  panel.focus();
+  await resize();
+});
+
 let observer: ResizeObserver | undefined;
 onMounted(() => {
   observer = new ResizeObserver(() => { void resize(); });
   observer.observe(document.body);
+  document.addEventListener("pointerdown", recordAnchor, true);
+  window.addEventListener("keydown", onKeydown);
   void resize();
 });
 
 onBeforeUnmount(() => {
   observer?.disconnect();
+  document.removeEventListener("pointerdown", recordAnchor, true);
+  window.removeEventListener("keydown", onKeydown);
   bridge?.dispose();
 });
 </script>
@@ -800,7 +936,11 @@ onBeforeUnmount(() => {
     </header>
 
     <div v-if="bootError || error" class="alert" role="alert">
-      <CircleAlert :size="17" aria-hidden="true" /><span>{{ bootError || error }}</span>
+      <CircleAlert :size="17" aria-hidden="true" />
+      <span><strong>{{ bootError ? 'The plugin host is unavailable' : `${routeMeta.title} could not be loaded` }}</strong>{{ bootError || error }}</span>
+      <button v-if="!bootError" class="button button-secondary button-compact" type="button" :disabled="refreshing" @click="loadCurrent(true)">
+        <LoaderCircle v-if="refreshing" class="spin" :size="13" aria-hidden="true" /> Try again
+      </button>
       <button class="icon-button" type="button" aria-label="Dismiss error" title="Dismiss error" @click="error = ''; bootError = ''"><X :size="15" /></button>
     </div>
     <div v-if="notice" class="alert alert-success" aria-live="polite">
@@ -808,18 +948,39 @@ onBeforeUnmount(() => {
       <button class="icon-button" type="button" aria-label="Dismiss notice" title="Dismiss notice" @click="notice = ''"><X :size="15" /></button>
     </div>
 
-    <div v-if="loading" class="loading-state"><LoaderCircle class="spin" :size="20" /> Loading {{ routeMeta.title.toLowerCase() }}</div>
+    <div v-if="loading" class="stack" role="status" :aria-label="`Loading ${routeMeta.title.toLowerCase()}`">
+      <div class="skeleton-strip" aria-hidden="true">
+        <div v-for="cell in 4" :key="cell"><span class="skeleton-bar short" /><span class="skeleton-bar tall" /></div>
+      </div>
+      <div class="data-panel" aria-hidden="true">
+        <div class="skeleton-rows">
+          <div v-for="row in 8" :key="row">
+            <span class="skeleton-bar" /><span class="skeleton-bar short" /><span class="skeleton-bar short" /><span class="skeleton-bar short" />
+          </div>
+        </div>
+      </div>
+      <p class="empty-inline"><LoaderCircle class="spin" :size="14" /> Loading {{ routeMeta.title.toLowerCase() }}</p>
+    </div>
+
+    <div v-else-if="(bootError || error) && !hasRouteData" class="empty-state">
+      <CircleAlert :size="26" aria-hidden="true" />
+      <strong>Nothing could be loaded</strong>
+      <p>The request the page needs did not come back, so this is not an empty fleet: it is an unanswered question. The message above is what the control plane said.</p>
+      <div v-if="!bootError" class="empty-actions"><button class="button button-secondary" type="button" :disabled="refreshing" @click="loadCurrent(true)"><RefreshCw :size="15" aria-hidden="true" /> Try again</button></div>
+    </div>
 
     <template v-else-if="route === 'lines'">
-      <section class="summary-strip" aria-label="Line summary">
+      <section class="summary-strip" aria-label="Line summary" :style="{ '--stat-count': canReadManaged ? 5 : 4 }">
         <div><span>Total lines</span><strong>{{ allLines.length }}</strong></div>
-        <div><span>Healthy</span><strong>{{ healthyLines }}</strong></div>
-        <div><span>Managed</span><strong>{{ managedLines }}</strong></div>
+        <div><span>Healthy</span><strong>{{ healthyLines }}</strong><small>{{ allLines.length - healthyLines }} degraded or failing</small></div>
+        <div :data-tone="allLines.length && !managedLines ? 'warning' : undefined"><span>Lattice-managed lines</span><strong>{{ managedLines }}</strong><small>{{ allLines.length - managedLines }} observed only</small></div>
         <div><span>Nodes</span><strong>{{ lines.length }}</strong></div>
-        <div v-if="canReadManaged"><span>Lattice-managed</span><strong>{{ overlayStats.covered }} / {{ overlayStats.total }} nodes</strong></div>
+        <div v-if="canReadManaged" :data-tone="overlayStats.total && !overlayStats.covered ? 'warning' : undefined"><span>Nodes carrying a managed line</span><strong>{{ overlayStats.covered }} / {{ overlayStats.total }}</strong><small>{{ overlayStats.total - overlayStats.covered }} without one</small></div>
       </section>
       <section class="toolbar">
-        <input v-model="search" class="search-input" type="search" placeholder="Search node, line, status, outbound or error" />
+        <input v-model="search" class="search-input" type="search" aria-label="Search lines" placeholder="Search node, line, status, outbound or error" />
+        <span v-if="search.trim()" class="permission-note">{{ visibleLines.length }} of {{ allLines.length }} lines match</span>
+        <span class="toolbar-spacer" />
         <button v-if="canRollout" class="button button-primary" type="button" @click="openRollout"><Plus :size="15" /> Roll out managed lines</button>
       </section>
       <section v-if="unresolvedDefs.length" class="data-panel overlay-strip" aria-label="Managed line rollout status">
@@ -831,26 +992,52 @@ onBeforeUnmount(() => {
           <span v-else-if="def.status === 'planned'" class="muted">awaiting approval</span>
         </div>
       </section>
-      <LineChainWorkspace v-if="canReadChains" :groups="lines" :chains="chains" :can-plan="canPlanChain" :can-remove="canPlanRemoveChain" :busy-sources="busyChainSources" @plan="planLineChain" @remove="planLineChainRemoval" />
-      <section v-if="visibleLines.length" class="data-panel">
-        <div class="table-wrap"><table><thead><tr><th>Node</th><th>Line</th><th>Core</th><th>Source</th><th>Ownership</th><th>Endpoint</th><th>Listen</th><th>Reality SNI</th><th>Users</th><th>Outbound ref</th><th>Status</th><th>Error</th><th v-if="canViewLineDetails" class="actions-cell">Actions</th></tr></thead>
+      <section class="data-panel">
+        <header class="panel-header">
+          <div><h2>Fleet lines</h2><p>Every inbound the control plane can see, whether Lattice owns it or only observes it.</p></div>
+          <span class="count">{{ visibleLines.length }} shown</span>
+        </header>
+        <div v-if="visibleLines.length" class="table-wrap"><table>
+          <thead><tr>
+            <th v-for="column in LINE_COLUMNS" :key="column.label" :aria-sort="ariaSort(column.key)" :class="{ num: column.numeric }">
+              <button v-if="column.key" class="sort-button" type="button" @click="toggleSort(column.key as LineSortKey)">
+                {{ column.label }}<span class="sort-mark" aria-hidden="true">{{ sortMark(column.key) }}</span>
+              </button>
+              <template v-else>{{ column.label }}</template>
+            </th>
+            <th v-if="canViewLineDetails" class="actions-cell">Actions</th>
+          </tr></thead>
           <tbody><tr v-for="{ group, line } in visibleLines" :key="line.line_hash_id">
-            <td><strong>{{ group.node_name || group.node_id }}</strong><small>{{ group.node_id }}</small></td>
-            <td><strong>{{ line.name }}</strong><small>{{ line.type || 'unknown' }} / {{ line.line_hash_id }}</small></td>
+            <td><strong :title="group.node_name || group.node_id">{{ group.node_name || group.node_id }}</strong><small :title="group.node_id">{{ group.node_id }}</small></td>
+            <td><strong :title="line.name">{{ line.name }}</strong><small :title="`${line.type || 'unknown'} / ${line.line_hash_id}`">{{ line.type || 'unknown' }} / {{ line.line_hash_id }}</small></td>
             <td><span class="badge">{{ line.core || 'unknown' }}</span></td>
             <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ line.source }}</span></td>
-            <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ lineOwnership(line) }}</span><span v-if="line.overlay" class="badge" :data-tone="overlayTone(line.overlay_status)" :title="line.overlay_user ? `Bound account: ${line.overlay_user}` : undefined">lattice-managed</span></td>
-            <td class="mono">{{ formatLineEndpoint(line) }}</td>
-            <td class="mono">{{ formatLineListen(line) }}</td>
-            <td class="mono">{{ formatLineDomain(line) }}</td>
-            <td>{{ line.user_known ? line.user_count : 'unknown' }}</td>
-            <td class="mono">{{ line.outbound_ref || '-' }}<small v-if="line.outbound_server">{{ line.outbound_server }}<span v-if="line.outbound_port">:{{ line.outbound_port }}</span></small></td>
-            <td><span class="status-dot" :data-tone="lineStatus(line)">{{ line.status || (line.last_error ? 'error' : 'ok') }}</span></td>
-            <td :class="{ 'error-text': line.last_error }">{{ lineErrorText(line) }}</td>
+            <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ lineOwnership(line) }}</span><span v-if="line.overlay" class="badge" :data-tone="overlayTone(line.overlay_status)" :title="line.overlay_user ? `Bound account: ${line.overlay_user}` : 'Lattice-owned overlay line'">lattice-managed</span></td>
+            <td class="mono" :title="`public ${formatLineEndpoint(line)}, listen ${formatLineListen(line)}`">{{ formatLineEndpoint(line) }}<small>listen {{ formatLineListen(line) }}</small></td>
+            <td class="mono" :title="formatLineDomain(line)">{{ formatLineDomain(line) }}</td>
+            <td class="num" :title="line.user_known ? undefined : 'The node did not report a user count for this line'">{{ line.user_known ? line.user_count : 'unknown' }}</td>
+            <td class="mono" :title="line.outbound_ref || undefined">{{ line.outbound_ref || '-' }}<small v-if="line.outbound_server">{{ line.outbound_server }}<span v-if="line.outbound_port">:{{ line.outbound_port }}</span></small></td>
+            <td><span class="status-dot" :data-tone="lineStatus(line)" :title="line.status || (line.last_error ? 'error' : 'ok')">{{ line.status || (line.last_error ? 'error' : 'ok') }}</span><small v-if="line.last_error" class="error-text" :title="lineErrorText(line)">{{ lineErrorText(line) }}</small></td>
             <td v-if="canViewLineDetails" class="actions-cell"><button class="button button-secondary button-compact" type="button" @click="openLineDetails(group, line)">Details</button></td>
           </tr></tbody></table></div>
+        <div v-else-if="search.trim()" class="empty-state">
+          <Radar :size="26" aria-hidden="true" />
+          <strong>No line matches that search</strong>
+          <p>Nothing in {{ allLines.length }} lines across {{ lines.length }} nodes matches <span class="mono">{{ search.trim() }}</span>. The search covers node, line name, protocol, host, status, outbound reference and error text.</p>
+          <div class="empty-actions"><button class="button button-secondary" type="button" @click="search = ''">Clear the search</button></div>
+        </div>
+        <div v-else class="empty-state">
+          <Radar :size="26" aria-hidden="true" />
+          <strong>No lines are visible yet</strong>
+          <p>A line appears once a node agent reports its inbounds. If nodes are online and this stays empty, the usual causes are in this order:</p>
+          <ol>
+            <li>The node profile has sing-box discovery switched off. Turn it on under Node Profiles.</li>
+            <li>The agent cannot run the manager binary, so it has nothing to read. Check task execution on the profile.</li>
+            <li>The node has no inbound configured at all.</li>
+          </ol>
+        </div>
       </section>
-      <div v-else class="empty-state"><Radar :size="28" /><strong>No matching lines</strong><span>Managed or discovered endpoints will appear here.</span></div>
+      <LineChainWorkspace v-if="canReadChains" :groups="lines" :chains="chains" :can-plan="canPlanChain" :can-remove="canPlanRemoveChain" :busy-sources="busyChainSources" @plan="planLineChain" @remove="planLineChainRemoval" />
     </template>
 
     <template v-else-if="route === 'users'">
@@ -864,7 +1051,7 @@ onBeforeUnmount(() => {
         <span v-if="!hasUserMutations" class="permission-note"><KeyRound :size="14" /> Read-only session</span>
         <button v-if="canCreateUser" class="button button-primary" type="button" @click="openCreateUser"><Plus :size="15" /> New identity</button>
       </section>
-      <section class="data-panel"><div class="table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Credentials</th><th>Bindings</th><th>Quota</th><th>Expires</th><th v-if="showUserActions" class="actions-cell">Actions</th></tr></thead>
+      <section class="data-panel"><div v-if="users.length" class="table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Credentials</th><th>Bindings</th><th>Quota</th><th>Expires</th><th v-if="showUserActions" class="actions-cell">Actions</th></tr></thead>
         <tbody><tr v-for="user in users" :key="user.id">
           <td><strong>{{ user.email }}</strong><small>{{ user.name || user.id }}<span v-if="user.migrated"> / migrated</span></small></td>
           <td><span class="status-dot" :data-tone="user.enabled ? 'healthy' : 'warning'">{{ user.enabled ? 'enabled' : 'disabled' }}</span></td>
@@ -877,7 +1064,13 @@ onBeforeUnmount(() => {
             <button v-if="canDeleteUser" class="icon-button bordered destructive" type="button" aria-label="Delete identity" title="Delete identity" @click="deleteTarget = user"><Trash2 :size="14" /></button>
           </div></td>
         </tr></tbody></table></div>
-        <div v-if="!users.length" class="empty-state"><UserRound :size="28" /><strong>No VPN identities</strong><span>Create an identity to attach credentials and lines.</span></div>
+        <div v-else class="empty-state">
+          <UserRound :size="26" aria-hidden="true" />
+          <strong>No VPN identities yet</strong>
+          <p>An identity holds the protocol credential and the set of lines it may use. Nothing on a node changes when one is created: binding an identity to a line files an approval, and the node is only touched once that approval is granted.</p>
+          <div v-if="canCreateUser" class="empty-actions"><button class="button button-primary" type="button" @click="openCreateUser"><Plus :size="15" /> Create the first identity</button></div>
+          <p v-else class="empty-inline">This session cannot create identities.</p>
+        </div>
       </section>
     </template>
 
@@ -888,7 +1081,7 @@ onBeforeUnmount(() => {
         <div><span>Applied</span><strong>{{ profiles.filter((profile) => profile.applied).length }}</strong></div>
         <div><span>Runtime errors</span><strong>{{ profiles.filter((profile) => profile.last_error || profile.discovery_error || profile.collector?.status === 'error').length }}</strong></div>
       </section>
-      <section class="data-panel"><div class="table-wrap"><table><thead><tr><th>Node</th><th>Core</th><th>Ownership</th><th>Inbounds</th><th>Discovered</th><th>Collector</th><th>Runtime path</th><th v-if="canReadProfileSettings" class="actions-cell">Actions</th></tr></thead>
+      <section class="data-panel"><div v-if="profiles.length" class="table-wrap"><table><thead><tr><th>Node</th><th>Core</th><th>Ownership</th><th>Inbounds</th><th>Discovered</th><th>Collector</th><th>Runtime path</th><th v-if="canReadProfileSettings" class="actions-cell">Actions</th></tr></thead>
         <tbody><tr v-for="profile in profiles" :key="profile.node_id">
           <td><strong>{{ profile.node_name || profile.node_id }}</strong><small>{{ profile.node_id }}</small></td>
           <td><span class="badge">{{ profile.core || 'unknown' }} {{ profile.core_version || '' }}</span></td>
@@ -898,55 +1091,86 @@ onBeforeUnmount(() => {
           <td class="mono path-cell">{{ profile.config_path || '-' }}<small v-if="profile.last_error || profile.discovery_error" class="error-text">{{ profile.last_error || profile.discovery_error }}</small></td>
           <td v-if="canReadProfileSettings" class="actions-cell"><button class="icon-button bordered" type="button" aria-label="Configure sing-box integration" title="Configure sing-box integration" @click="openProfileSettings(profile)"><Pencil :size="14" /></button></td>
         </tr></tbody></table></div>
-        <div v-if="!profiles.length" class="empty-state"><ServerCog :size="28" /><strong>No node profiles</strong><span>Profiles appear when a node is managed or reports discovery.</span></div>
+        <div v-else class="empty-state">
+          <ServerCog :size="26" aria-hidden="true" />
+          <strong>No node profiles</strong>
+          <p>A profile appears once a node either runs a Lattice-managed core or reports a discovery result. If the fleet has nodes but this is empty, their agents have not reported a sing-box or Xray runtime yet.</p>
+        </div>
       </section>
     </template>
 
     <template v-else-if="route === 'usage'">
       <section class="summary-strip" aria-label="Usage summary"><div><span>Tracked users</span><strong>{{ usage.by_user.length }}</strong></div><div><span>Traffic</span><strong>{{ formatBytes(totalTraffic) }}</strong></div><div><span>Reporting nodes</span><strong>{{ usage.by_node.length }}</strong></div><div><span>Collector errors</span><strong>{{ usage.collectors.filter((collector) => collector.status === 'error').length }}</strong></div></section>
       <section class="split-layout">
-        <article class="data-panel"><header class="panel-header"><div><h2>By node</h2><p>Latest collector snapshots</p></div><Activity :size="17" /></header><div class="table-wrap"><table><thead><tr><th>Node</th><th>Users</th><th>Traffic</th><th>Reported</th></tr></thead><tbody><tr v-for="node in usage.by_node" :key="node.node_id"><td><strong>{{ node.node_name || node.node_id }}</strong><small>{{ node.node_id }}</small></td><td>{{ node.user_count }}</td><td class="mono">{{ formatBytes(node.used_bytes) }}</td><td>{{ formatDate(node.at) }}</td></tr></tbody></table></div></article>
-        <article class="data-panel"><header class="panel-header"><div><h2>By identity</h2><p>Monotonic account totals</p></div><Users :size="17" /></header><div class="table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Used</th><th>Quota</th></tr></thead><tbody><tr v-for="user in usage.by_user" :key="user.user_id"><td><strong>{{ user.email || user.user_id }}</strong><small>{{ user.user_id }}</small></td><td><span class="status-dot" :data-tone="user.status === 'active' ? 'healthy' : user.status === 'over_quota' ? 'error' : 'neutral'">{{ user.status || 'unknown' }}</span></td><td class="mono">{{ formatBytes(user.used_bytes) }}</td><td class="mono">{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'Unlimited' }}</td></tr></tbody></table></div></article>
+        <article class="data-panel"><header class="panel-header"><div><h2>By node</h2><p>Latest collector snapshots</p></div><Activity :size="17" aria-hidden="true" /></header>
+          <div v-if="usage.by_node.length" class="table-wrap"><table style="min-width: 420px"><thead><tr><th>Node</th><th class="num">Users</th><th class="num">Traffic</th><th>Reported</th></tr></thead><tbody><tr v-for="node in usage.by_node" :key="node.node_id"><td><strong :title="node.node_name || node.node_id">{{ node.node_name || node.node_id }}</strong><small :title="node.node_id">{{ node.node_id }}</small></td><td class="num">{{ node.user_count }}</td><td class="mono num">{{ formatBytes(node.used_bytes) }}</td><td>{{ formatDate(node.at) }}</td></tr></tbody></table></div>
+          <div v-else class="empty-state"><Activity :size="24" aria-hidden="true" /><strong>No node has reported traffic</strong><p>A node reports once its profile names a usage source: a stats file, a collector URL, the Xray API, or the sing-box experimental API. Set one under Node Profiles.</p></div>
+        </article>
+        <article class="data-panel"><header class="panel-header"><div><h2>By identity</h2><p>Monotonic account totals</p></div><Users :size="17" aria-hidden="true" /></header>
+          <div v-if="usage.by_user.length" class="table-wrap"><table style="min-width: 420px"><thead><tr><th>Identity</th><th>Status</th><th class="num">Used</th><th class="num">Quota</th></tr></thead><tbody><tr v-for="user in usage.by_user" :key="user.user_id"><td><strong :title="user.email || user.user_id">{{ user.email || user.user_id }}</strong><small :title="user.user_id">{{ user.user_id }}</small></td><td><span class="status-dot" :data-tone="user.status === 'active' ? 'healthy' : user.status === 'over_quota' ? 'error' : 'neutral'">{{ user.status || 'unknown' }}</span></td><td class="mono num">{{ formatBytes(user.used_bytes) }}</td><td class="mono num">{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'Unlimited' }}</td></tr></tbody></table></div>
+          <div v-else class="empty-state"><Users :size="24" aria-hidden="true" /><strong>No per-identity totals</strong><p>Per-identity accounting needs a collector that reports per-user counters. Without one, only node totals are available.</p></div>
+        </article>
       </section>
-      <section v-if="usage.collectors.length" class="data-panel collectors"><header class="panel-header"><div><h2>Collectors</h2><p>Source health and last checks</p></div></header><div class="collector-grid"><div v-for="collector in usage.collectors" :key="collector.node_id"><span class="status-dot" :data-tone="collector.status === 'error' ? 'error' : collector.status === 'ok' ? 'healthy' : 'neutral'">{{ collector.status || 'unknown' }}</span><strong>{{ collector.node_name || collector.node_id }}</strong><small>{{ collector.source || 'unspecified' }} / {{ formatDate(collector.checked_at) }}</small><p v-if="collector.error" class="error-text">{{ collector.error }}</p></div></div></section>
+      <section class="data-panel collectors"><header class="panel-header"><div><h2>Collectors</h2><p>Source health and last checks</p></div></header><div v-if="usage.collectors.length" class="collector-grid"><div v-for="collector in usage.collectors" :key="collector.node_id"><span class="status-dot" :data-tone="collector.status === 'error' ? 'error' : collector.status === 'ok' ? 'healthy' : 'neutral'">{{ collector.status || 'unknown' }}</span><strong>{{ collector.node_name || collector.node_id }}</strong><small>{{ collector.source || 'unspecified' }} / {{ formatDate(collector.checked_at) }}</small><p v-if="collector.error" class="error-text">{{ collector.error }}</p></div></div>
+        <div v-else class="empty-state"><Gauge :size="24" aria-hidden="true" /><strong>No collector is configured</strong><p>Usage stays at zero until at least one node profile points at a usage source. Open Node Profiles, edit a node, and set a usage file, collector URL, Xray API or sing-box stats API.</p></div>
+      </section>
     </template>
 
-    <div v-if="userDialogOpen" class="modal-backdrop" @mousedown.self="userDialogOpen = false"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><header><div><h2 id="user-dialog-title">{{ editingUser ? 'Edit identity' : 'New identity' }}</h2><p>{{ editingUser ? 'Existing secrets stay unchanged.' : 'Create one initial protocol credential.' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="userDialogOpen = false"><X :size="17" /></button></header><div class="form-grid">
+    <div v-if="userDialogOpen" class="overlay-scrim" :style="overlayStyle" @mousedown.self="userDialogOpen = false"><section tabindex="-1" class="modal" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><header><div><h2 id="user-dialog-title">{{ editingUser ? 'Edit identity' : 'New identity' }}</h2><p>{{ editingUser ? 'Existing secrets stay unchanged.' : 'Create one initial protocol credential.' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="userDialogOpen = false"><X :size="17" /></button></header><div class="form-grid">
       <label class="field field-wide"><span>Email identity</span><input v-model="userForm.email" type="email" autocomplete="off" /></label><label class="field"><span>Display name</span><input v-model="userForm.name" type="text" /></label><label class="field"><span>Group</span><input v-model="userForm.group" type="text" /></label><label class="field"><span>Quota (GiB)</span><input v-model="userForm.quotaGiB" type="number" min="0" step="1" placeholder="Unlimited" /></label><label class="field"><span>Expires at</span><input v-model="userForm.expiresAt" type="datetime-local" /><small class="field-help">{{ editingUser ? 'Blank leaves the current expiry unchanged.' : 'Optional expiry for this identity.' }}</small></label><label class="toggle-field"><input v-model="userForm.enabled" type="checkbox" /><span>Identity enabled</span></label>
       <template v-if="!editingUser"><label class="field"><span>Protocol</span><select v-model="userForm.protocol"><option v-for="protocol in ['vless','vmess','trojan','shadowsocks','hysteria2','tuic','anytls']" :key="protocol" :value="protocol">{{ protocol }}</option></select></label><label class="field"><span>{{ ['vless','vmess','tuic'].includes(userForm.protocol) ? 'UUID' : 'Password' }}</span><input v-model="userForm.secret" type="password" autocomplete="new-password" /></label><label class="field field-wide"><span>Flow override</span><input v-model="userForm.flow" type="text" placeholder="Optional" /></label></template>
       <label class="field field-wide"><span>Comment</span><textarea v-model="userForm.comment" rows="3" /></label></div><footer><button class="button button-secondary" type="button" @click="userDialogOpen = false">Cancel</button><button class="button button-primary" type="button" :disabled="savingUser || !userForm.email.trim()" @click="saveUser"><LoaderCircle v-if="savingUser" class="spin" :size="15" />{{ editingUser ? 'Save changes' : 'Create identity' }}</button></footer></section></div>
 
-    <div v-if="rolloutOpen" class="modal-backdrop" @mousedown.self="rolloutOpen = false"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="rollout-title"><header><div><h2 id="rollout-title">Roll out managed lines</h2><p>One lattice-owned VLESS+REALITY line per node, bound to one account. This only files an approval batch — nothing changes on any node until you approve it.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rolloutOpen = false"><X :size="17" /></button></header>
-      <template v-if="!rolloutResult">
+    <div v-if="rolloutOpen" class="overlay-scrim" :style="overlayStyle" @mousedown.self="closeRollout"><section tabindex="-1" class="modal" role="dialog" aria-modal="true" aria-labelledby="rollout-title"><header><div><h2 id="rollout-title">Roll out managed lines</h2><p>One lattice-owned VLESS+REALITY line per node, bound to one account. This only files an approval batch: nothing changes on any node until you approve it.</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeRollout"><X :size="17" /></button></header>
+      <template v-if="!rolloutResult && !rolloutConfirm">
         <div class="form-grid">
-          <label>Account to bind<select v-model="rolloutUserId"><option value="" disabled>Select an account</option><option v-for="user in rolloutableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select></label>
-          <label>Candidate port<input v-model.number="rolloutPort" type="number" min="1" max="65535" /><small>Used on every node when free; taken ports plan upward per node.</small></label>
+          <label class="field"><span>Account to bind</span><select v-model="rolloutUserId"><option value="" disabled>Select an account</option><option v-for="user in rolloutableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select><small v-if="!rolloutableUsers.length" class="field-help">No enabled identity carries a VLESS credential, so there is nothing to bind a managed line to. Create one under Users first.</small></label>
+          <label class="field"><span>Candidate port</span><input v-model.number="rolloutPort" type="number" min="1" max="65535" /><small class="field-help">Used on every node when free; taken ports plan upward per node.</small></label>
         </div>
-        <p v-if="rolloutError" class="alert" role="alert">{{ rolloutError }}</p>
-        <footer><button class="button button-primary" type="button" :disabled="!rolloutUserId || rolloutBusy" @click="runRollout"><LoaderCircle v-if="rolloutBusy" class="spin" :size="15" /> Plan the rollout</button></footer>
+        <div v-if="rolloutError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ rolloutError }}</span></div>
+        <footer>
+          <button class="button button-secondary" type="button" @click="closeRollout">Cancel</button>
+          <button class="button button-primary" type="button" :disabled="!rolloutUserId || !rolloutNodeNames.length" @click="rolloutConfirm = true">Review {{ rolloutNodeNames.length }} nodes</button>
+        </footer>
+      </template>
+      <template v-else-if="!rolloutResult">
+        <p>This files one approval per eligible node, binding <strong>{{ rolloutableUsers.find((user) => user.id === rolloutUserId)?.email || rolloutUserId }}</strong> to a new VLESS with REALITY line on candidate port <strong class="mono">{{ rolloutPort }}</strong>. Nothing is applied until the batch is approved.</p>
+        <ul class="confirm-names" aria-label="Nodes this rollout files approvals against">
+          <li v-for="name in rolloutNodeNames" :key="name">{{ name }}</li>
+        </ul>
+        <div v-if="rolloutError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ rolloutError }}</span></div>
+        <footer>
+          <button class="button button-secondary" type="button" :disabled="rolloutBusy" @click="rolloutConfirm = false">Back</button>
+          <button class="button button-primary" type="button" :disabled="!rolloutUserId || rolloutBusy" @click="runRollout"><LoaderCircle v-if="rolloutBusy" class="spin" :size="15" /> Plan for {{ rolloutNodeNames.length }} nodes</button>
+        </footer>
       </template>
       <template v-else>
-        <p class="alert alert-success" aria-live="polite">{{ rolloutSummaryLine(rolloutResult) }}</p>
-        <ul v-if="rolloutResult.skipped?.length" class="detail-list">
-          <li v-for="item in rolloutResult.skipped" :key="item.node_id"><strong>{{ item.node_id }}</strong> — {{ item.reason }}</li>
+        <div class="alert" :class="rolloutResult.planned?.length ? 'alert-success' : 'alert-warning'" aria-live="polite">
+          <ShieldCheck v-if="rolloutResult.planned?.length" :size="17" aria-hidden="true" />
+          <CircleAlert v-else :size="17" aria-hidden="true" />
+          <span>{{ rolloutSummaryLine(rolloutResult) }}</span>
+        </div>
+        <p v-if="rolloutResult.skipped?.length" class="muted">Skipped nodes, with the reason the server gave:</p>
+        <ul v-if="rolloutResult.skipped?.length" class="confirm-names" aria-label="Skipped nodes">
+          <li v-for="item in rolloutResult.skipped" :key="item.node_id">{{ item.node_id }}: {{ item.reason }}</li>
         </ul>
-        <p class="muted">Next: Operations → Approvals — one event card covers the whole batch.</p>
-        <footer><button class="button button-secondary" type="button" @click="rolloutOpen = false">Done</button></footer>
+        <p class="muted">Next: Operations, then Approvals. One event card covers the whole batch.</p>
+        <footer><button class="button button-secondary" type="button" @click="closeRollout">Done</button></footer>
       </template>
     </section></div>
-    <div v-if="bindingUser" class="modal-backdrop" @mousedown.self="bindingUser = undefined"><section class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div v-if="canBindUser" class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button v-if="canUnbindUser" class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines bound to this identity.</p><p v-if="!canBindUser && !canUnbindUser" class="empty-inline">This session cannot change bindings.</p></div></section></div>
+    <div v-if="bindingUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="bindingUser = undefined"><section tabindex="-1" class="modal" role="dialog" aria-modal="true"><header><div><h2>Line bindings</h2><p>{{ bindingUser.email }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingUser = undefined"><X :size="17" /></button></header><div v-if="canBindUser" class="binding-add"><select v-model="bindingLine"><option value="">Select an unbound line</option><option v-for="line in lineOptions.filter((option) => !currentBindingUser()?.bindings.some((binding) => binding.line_hash_id === option.id))" :key="line.id" :value="line.id">{{ line.label }}</option></select><button class="button button-primary" type="button" :disabled="!bindingLine || bindingBusy" @click="bindLine"><Plus :size="15" /> Bind</button></div><div class="binding-list"><div v-for="binding in currentBindingUser()?.bindings" :key="binding.line_hash_id"><span>{{ lineOptions.find((line) => line.id === binding.line_hash_id)?.label || binding.line_hash_id }}</span><button v-if="canUnbindUser" class="icon-button bordered destructive" type="button" aria-label="Remove binding" title="Remove binding" @click="unbindLine(binding.line_hash_id)"><Trash2 :size="14" /></button></div><p v-if="!currentBindingUser()?.bindings.length" class="empty-inline">No lines bound to this identity.</p><p v-if="!canBindUser && !canUnbindUser" class="empty-inline">This session cannot change bindings.</p></div></section></div>
 
-    <div v-if="deleteTarget" class="modal-backdrop" @mousedown.self="deleteTarget = undefined"><section class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes plugin-owned credentials and line bindings.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong>?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>
+    <div v-if="deleteTarget" class="overlay-scrim" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true"><header><div><h2>Delete identity</h2><p>This removes plugin-owned credentials and line bindings.</p></div></header><p>Delete <strong>{{ deleteTarget.email }}</strong>?</p><footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" @click="deleteUser"><Trash2 :size="15" /> Delete</button></footer></section></div>
 
-    <div v-if="rotateUser" class="modal-backdrop" @mousedown.self="rotateUser = undefined"><section class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>Rotate credential</h2><p>{{ rotateUser.email }} — the old secret stops working once the new one is applied to its lines.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
+    <div v-if="rotateUser" class="overlay-scrim" :style="overlayStyle" @mousedown.self="rotateUser = undefined"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>Rotate credential</h2><p>{{ rotateUser.email }}. The old secret stops working once the new one is applied to its lines.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
       <label class="field"><span>Protocol credential</span><select v-model="rotateProtocol"><option v-for="credential in rotateUser.credentials" :key="credential.protocol" :value="credential.protocol">{{ credential.protocol }}</option></select></label>
       <footer><button class="button button-secondary" type="button" @click="rotateUser = undefined">Cancel</button><button class="button button-primary" type="button" :disabled="rotateBusy || !rotateProtocol" @click="rotateCredential"><LoaderCircle v-if="rotateBusy" class="spin" :size="15" /> Rotate</button></footer></section></div>
 
-    <div v-if="rotateRevealed" class="modal-backdrop"><section class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>New {{ rotateRevealed.protocol }} credential</h2><p>{{ rotateRevealed.email }} — shown once and never retrievable again.</p></div></header>
+    <div v-if="rotateRevealed" class="overlay-scrim" :style="overlayStyle"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>New {{ rotateRevealed.protocol }} credential</h2><p>{{ rotateRevealed.email }}. Shown once and never retrievable again.</p></div></header>
       <label class="field field-wide"><span>Secret (copy now)</span><textarea class="command-output mono" :value="rotateRevealed.secret" readonly rows="2" @focus="($event.target as HTMLTextAreaElement).select()" /></label>
       <footer><button class="button button-primary" type="button" @click="rotateRevealed = undefined">I have saved it</button></footer></section></div>
 
-    <div v-if="lineDetailOpen && lineDetail" class="modal-backdrop" @mousedown.self="closeLineDetails()"><section class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="line-detail-title"><header><div><h2 id="line-detail-title">Line details</h2><p>{{ lineDetailNodeName }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeLineDetails()"><X :size="17" /></button></header><div class="detail-body">
+    <div v-if="lineDetailOpen && lineDetail" class="overlay-scrim" :style="overlayStyle" @mousedown.self="closeLineDetails()"><section tabindex="-1" class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="line-detail-title"><header><div><h2 id="line-detail-title">Line details</h2><p>{{ lineDetailNodeName }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeLineDetails()"><X :size="17" /></button></header><div class="detail-body">
       <div v-if="lineDetailError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineDetailError }}</span></div>
       <div class="detail-grid">
         <div><span>Line</span><strong>{{ lineDetail.name }}</strong><small>{{ lineDetail.line_hash_id }}</small></div>
@@ -981,7 +1205,7 @@ onBeforeUnmount(() => {
           <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Queue add</button>
         </div>
         <ul v-if="lineApprovals.length" class="detail-list">
-          <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span> — {{ item.summary }} <em>(pending approval)</em></li>
+          <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span>: {{ item.summary }} <em>(pending approval)</em></li>
         </ul>
       </section>
       <section class="detail-section"><h3>Error</h3><p :class="{ 'error-text': lineDetail.last_error }">{{ lineErrorText(lineDetail) }}</p></section>
@@ -989,7 +1213,7 @@ onBeforeUnmount(() => {
       <section v-if="lineDetail.metadata && Object.keys(lineDetail.metadata).length" class="detail-section"><h3>Metadata</h3><dl class="detail-pairs"><template v-for="(value, key) in lineDetail.metadata" :key="key"><dt class="mono">{{ key }}</dt><dd>{{ value || '-' }}</dd></template></dl></section>
     </div></section></div>
 
-    <div v-if="profileSettingsOpen" class="modal-backdrop" @mousedown.self="closeProfileSettings()"><section class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="profile-settings-title"><header><div><h2 id="profile-settings-title">sing-box integration</h2><p>{{ profileSettings?.node_name || profileSettings?.node_id || 'Node profile' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeProfileSettings()"><X :size="17" /></button></header>
+    <div v-if="profileSettingsOpen" class="overlay-scrim" :style="overlayStyle" @mousedown.self="closeProfileSettings()"><section tabindex="-1" class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="profile-settings-title"><header><div><h2 id="profile-settings-title">sing-box integration</h2><p>{{ profileSettings?.node_name || profileSettings?.node_id || 'Node profile' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeProfileSettings()"><X :size="17" /></button></header>
       <div class="detail-body">
         <div v-if="profileSettingsError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ profileSettingsError }}</span></div>
         <div v-if="profileSettingsBusy" class="loading-state loading-inline"><LoaderCircle class="spin" :size="18" /> Loading node settings</div>
@@ -1007,7 +1231,7 @@ onBeforeUnmount(() => {
             <label class="field"><span>Xray API</span><input v-model="profileForm.proxy_usage_xray_api" class="mono" type="text" placeholder="127.0.0.1:10085" autocomplete="off" /></label>
             <label class="field"><span>Xray binary</span><input v-model="profileForm.proxy_usage_xray_bin" class="mono" type="text" placeholder="/usr/local/bin/xray" autocomplete="off" /></label>
             <label class="field field-wide"><span>Xray stat pattern</span><input v-model="profileForm.proxy_usage_xray_pattern" class="mono" type="text" autocomplete="off" /></label>
-            <label class="field field-wide"><span>sing-box stats API</span><input v-model="profileForm.singbox_stats_api" class="mono" type="text" placeholder="127.0.0.1:8080" autocomplete="off" /><small class="field-help">Loopback experimental API (sb stats on) — enables per-user stats (ADR-004).</small></label>
+            <label class="field field-wide"><span>sing-box stats API</span><input v-model="profileForm.singbox_stats_api" class="mono" type="text" placeholder="127.0.0.1:8080" autocomplete="off" /><small class="field-help">Loopback experimental API (sb stats on). Enables per-user stats (ADR-004).</small></label>
           </div>
           <section v-if="profileReconfigureCommand" class="detail-section"><h3>Generated agent command</h3><textarea class="command-output mono" :value="profileReconfigureCommand" readonly aria-label="Generated agent reconfiguration command" /></section>
         </template>

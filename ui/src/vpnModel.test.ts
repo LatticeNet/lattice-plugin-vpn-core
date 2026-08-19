@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  quotaBytesFromInput,
   filterLineGroups,
   formatBytes,
   formatLineDomain,
@@ -8,8 +9,10 @@ import {
   formatLineListen,
   lineStatus,
   lineChainTone,
+  sortLineRows,
   type LineGroup,
   type LineChain,
+  type LineRow,
 } from "./vpnModel";
 
 const groups: LineGroup[] = [{
@@ -123,5 +126,65 @@ describe("managed-line overlay model", () => {
     expect(rolloutSummaryLine({ ok: true, planned: [{} as never, {} as never], skipped: [] })).toContain("2 nodes");
     expect(rolloutSummaryLine({ ok: true, planned: [], skipped: [{ node_id: "n", reason: "x" }] })).toContain("skipped 1");
     expect(rolloutSummaryLine({ ok: true, planned: [], skipped: [] })).toContain("No eligible nodes");
+  });
+});
+
+describe("sortLineRows", () => {
+  const row = (node: string, name: string, over: Partial<Line> = {}): LineRow => ({
+    group: { node_id: node, node_name: node, lines: [] },
+    line: {
+      id: name, line_hash_id: name, node_id: node, core: "sing-box", source: "discovery",
+      managed: false, name, user_count: 0, user_known: true, ...over,
+    },
+  });
+
+  it("orders by node name in both directions", () => {
+    const rows = [row("beta", "b"), row("alpha", "a"), row("gamma", "c")];
+    expect(sortLineRows(rows, "node", "asc").map((value) => value.group.node_id)).toEqual(["alpha", "beta", "gamma"]);
+    expect(sortLineRows(rows, "node", "desc").map((value) => value.group.node_id)).toEqual(["gamma", "beta", "alpha"]);
+  });
+
+  it("puts failing lines first when sorting by status ascending", () => {
+    const rows = [
+      row("n", "ok"),
+      row("n", "broken", { last_error: "listen: address in use" }),
+      row("n", "pending", { status: "pending" }),
+    ];
+    expect(sortLineRows(rows, "status", "asc").map((value) => value.line.name)).toEqual(["broken", "pending", "ok"]);
+  });
+
+  it("sorts unknown user counts last instead of treating them as zero", () => {
+    const rows = [row("n", "five", { user_count: 5 }), row("n", "unknown", { user_known: false }), row("n", "one", { user_count: 1 })];
+    expect(sortLineRows(rows, "users", "asc").map((value) => value.line.name)).toEqual(["one", "five", "unknown"]);
+  });
+
+  it("returns a stable copy and leaves the input untouched without a key", () => {
+    const rows = [row("b", "b"), row("a", "a")];
+    const result = sortLineRows(rows, "", "asc");
+    expect(result).not.toBe(rows);
+    expect(result.map((value) => value.line.name)).toEqual(["b", "a"]);
+  });
+});
+
+describe("quotaBytesFromInput", () => {
+  it("leaves the stored quota alone when the box is blank", () => {
+    expect(quotaBytesFromInput("")).toBeUndefined();
+    expect(quotaBytesFromInput("   ")).toBeUndefined();
+  });
+
+  it("leaves it alone when the box cannot be read as a number", () => {
+    // Number("abc") is NaN, and NaN serialises to null, which the server used
+    // to take as zero. Neither is an instruction to remove the limit.
+    expect(quotaBytesFromInput("abc")).toBeUndefined();
+    expect(quotaBytesFromInput("-4")).toBeUndefined();
+  });
+
+  it("keeps a zero the operator actually typed, so a quota stays removable", () => {
+    expect(quotaBytesFromInput("0")).toBe(0);
+  });
+
+  it("converts GiB to bytes", () => {
+    expect(quotaBytesFromInput("5")).toBe(5 * 1024 * 1024 * 1024);
+    expect(quotaBytesFromInput("1.5")).toBe(Math.round(1.5 * 1024 * 1024 * 1024));
   });
 });

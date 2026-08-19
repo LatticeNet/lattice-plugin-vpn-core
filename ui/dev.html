@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VPN Core dev harness</title>
+    <style>
+      :root { color-scheme: dark; --chrome: #12161c; --chrome-fg: #e6ebf2; --chrome-line: #2a323d; --page: #0d1117; }
+      :root[data-theme="light"] { color-scheme: light; --chrome: #eceff3; --chrome-fg: #1b2027; --chrome-line: #d3d9e0; --page: #f7f8f9; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 12px ui-sans-serif, system-ui, sans-serif; background: var(--chrome); color: var(--chrome-fg); }
+      .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--chrome-line); }
+      .bar label { display: inline-flex; align-items: center; gap: 6px; }
+      .bar select, .bar button { border: 1px solid var(--chrome-line); border-radius: 5px; padding: 3px 7px; background: transparent; color: inherit; font: inherit; }
+      /* The console window. The frame inside it is taller, and this box is what
+         scrolls, exactly as the real dashboard behaves. */
+      .viewport { overflow: auto; border-bottom: 1px solid var(--chrome-line); background: var(--page); resize: vertical; }
+      .frame-wrap { margin: 0 auto; }
+      iframe { display: block; width: 100%; border: 0; }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="/dev/host.ts"></script>
+  </body>
+</html>
