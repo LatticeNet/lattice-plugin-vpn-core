@@ -4,3 +4,6 @@ ui/dist/
 dist/
 .DS_Store
 .build/
+
+# OMC orchestration tool state (not part of the project)
+.omc/
