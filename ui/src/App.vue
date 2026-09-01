@@ -32,6 +32,7 @@ import {
   lineErrorText,
   lineOwnership,
   lineStatus,
+  lineServiceTone,
   overlayCoverage,
   overlayTone,
   pageRows,
@@ -1058,7 +1059,7 @@ onBeforeUnmount(() => {
             <td class="mono" :title="formatLineDomain(line)">{{ formatLineDomain(line) }}</td>
             <td class="num" :title="line.user_known ? undefined : 'The node did not report a user count for this line'">{{ line.user_known ? line.user_count : 'unknown' }}</td>
             <td class="mono" :title="line.outbound_ref || undefined">{{ line.outbound_ref || '-' }}<small v-if="line.outbound_server">{{ line.outbound_server }}<span v-if="line.outbound_port">:{{ line.outbound_port }}</span></small></td>
-            <td><span class="status-dot" :data-tone="lineStatus(line)" :title="line.status || (line.last_error ? 'error' : 'not reported')">{{ line.status || (line.last_error ? 'error' : 'not reported') }}</span><small v-if="line.last_error" class="error-text" :title="lineErrorText(line)">{{ lineErrorText(line) }}</small></td>
+            <td><span class="status-dot" :data-tone="lineStatus(line)" :title="line.status || (line.last_error ? 'error' : 'not reported')">{{ line.status || (line.last_error ? 'error' : 'not reported') }}</span><span v-if="line.service_state && line.service_state !== 'unknown'" class="badge" :data-tone="lineServiceTone(line)" :title="line.service_checked_at ? `service ${line.service_state}, checked ${line.service_checked_at}` : `service ${line.service_state}`">svc {{ line.service_state }}</span><small v-if="line.last_error" class="error-text" :title="lineErrorText(line)">{{ lineErrorText(line) }}</small></td>
             <td v-if="canViewLineDetails" class="actions-cell"><button class="button button-secondary button-compact" type="button" @click="openLineDetails(group, line)">Details</button></td>
           </tr></tbody></table></div>
         <div v-else-if="search.trim()" class="empty-state">

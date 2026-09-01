@@ -38,6 +38,12 @@ describe("vpnModel", () => {
   it("formats traffic values and classifies failures", () => {
     expect(formatBytes(1024 * 1024)).toBe("1.0 MiB");
     expect(lineStatus({ ...groups[0].lines[0], last_error: "probe failed" })).toBe("error");
+    // design-19: a dead or flapping service outranks a clean config, and an
+    // unprobed one changes nothing (old agents must not paint the fleet yellow).
+    expect(lineStatus({ ...groups[0].lines[0], service_state: "down" })).toBe("error");
+    expect(lineStatus({ ...groups[0].lines[0], service_state: "restarting" })).toBe("warning");
+    expect(lineStatus({ ...groups[0].lines[0], service_state: "running" })).toBe("healthy");
+    expect(lineStatus({ ...groups[0].lines[0], service_state: "unknown" })).toBe("healthy");
   });
 
   it("formats endpoint, listen address, and reality domain with distinct semantics", () => {

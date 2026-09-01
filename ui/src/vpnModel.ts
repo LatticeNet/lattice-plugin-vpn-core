@@ -28,6 +28,11 @@ export interface Line {
   user_known: boolean;
   status?: string;
   last_error?: string;
+  // design-19: what the service is doing, as opposed to what the config says.
+  // running | down | restarting | unknown; absent from servers or agents that
+  // predate the probe.
+  service_state?: string;
+  service_checked_at?: string;
 }
 
 export interface LineGroup {
@@ -143,9 +148,25 @@ export function filterLineGroups(groups: LineGroup[], query: string): LineGroup[
 }
 
 export function lineStatus(line: Line): "healthy" | "warning" | "error" {
+  // design-19: a dead service outranks a clean config. "Config ok" rendering
+  // healthy while sing-box crash-looped 220k times is the incident this
+  // ordering exists to prevent. Unknown keeps the config verdict: an old
+  // agent must not paint the fleet yellow.
+  if (line.service_state === "down") return "error";
   if (line.status === "error" || line.last_error) return "error";
+  if (line.service_state === "restarting") return "warning";
   if (line.status === "pending" || line.status === "stale") return "warning";
   return "healthy";
+}
+
+/** Tone for the service-state badge; neutral when nothing was probed. */
+export function lineServiceTone(line: Line): "healthy" | "warning" | "error" | "neutral" {
+  switch (line.service_state) {
+    case "running": return "healthy";
+    case "restarting": return "warning";
+    case "down": return "error";
+    default: return "neutral";
+  }
 }
 
 export function formatLineEndpoint(line: Line): string {
