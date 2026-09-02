@@ -483,3 +483,4 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
      and must wrap rather than clip to "101 relay · 3". */
   .summary-strip strong { white-space: normal; font-size: 17px; }
 }
+.row-actions { display: inline-flex; align-items: center; gap: var(--sp-1); }

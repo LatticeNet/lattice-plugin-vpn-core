@@ -17,12 +17,14 @@ import {
   Trash2,
   UserRound,
   Users,
+  Waypoints,
   X,
 } from "@lucide/vue";
 
 import { BridgeClient, canCall, type HostInit } from "./bridge";
 import { attentionItems, buildNodeRows, lineRole, summarizeFleet, type AttentionItem, type Bank, type NodeRow, type ServiceVerdict } from "./fleetRows";
 import LineChainWorkspace from "./LineChainWorkspace.vue";
+import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
 import {
@@ -305,6 +307,16 @@ function attentionRow(item: AttentionItem): { group: LineGroup; line: Line } | u
   }
   return undefined;
 }
+/* A line's evidence lives in the host: the Connections lens filtered to the
+ * node and, where the line has a uuid, to that line. The host decides whether
+ * the route is one a plugin may open; this side only asks. */
+const hostOrigin = hostOriginFromHash(typeof location === "undefined" ? "" : location.hash);
+const canOpenEvidence = !!hostOrigin;
+function openEvidence(nodeID: string, lens: EvidenceLens, line?: Line): void {
+  if (!hostOrigin) return;
+  postNavigate(window, evidenceRoute(nodeID, lens, line?.line_uuid), hostOrigin);
+}
+
 function openAttention(item: AttentionItem): void {
   if (item.action === "rollout") {
     openRollout();
@@ -1160,7 +1172,9 @@ onBeforeUnmount(() => {
               </td>
               <td><span class="status-dot" :data-tone="row.config">{{ row.config === 'healthy' ? 'ok' : row.config }}</span></td>
               <td><span class="badge" :data-tone="serviceTone(row.service)">{{ serviceLabel(row.service) }}</span></td>
-              <td v-if="canViewLineDetails" class="actions-cell" />
+              <td v-if="canViewLineDetails" class="actions-cell">
+                <button v-if="canOpenEvidence" class="button button-secondary button-compact" type="button" :title="`Connections observed on ${row.group.node_name || row.group.node_id}`" @click="openEvidence(row.group.node_id, 'connections')"><Waypoints :size="13" aria-hidden="true" /> Evidence</button>
+              </td>
             </tr>
             <template v-if="nodeOpen(row)">
               <template v-for="entry in fleetEntries(row)" :key="entry.kind === 'bank' ? entry.bank.key : entry.line.line_hash_id">
@@ -1194,7 +1208,12 @@ onBeforeUnmount(() => {
                   <td class="mono outbound-cell" :title="entry.line.outbound_ref || undefined">{{ entry.line.outbound_ref || '-' }}<small v-if="entry.line.outbound_server">{{ entry.line.outbound_server }}<span v-if="entry.line.outbound_port">:{{ entry.line.outbound_port }}</span></small></td>
                   <td><span class="status-dot" :data-tone="lineStatus(entry.line)" :title="entry.line.status || (entry.line.last_error ? 'error' : 'not reported')">{{ entry.line.status || (entry.line.last_error ? 'error' : 'not reported') }}</span><small v-if="entry.line.last_error" class="error-text" :title="lineErrorText(entry.line)">{{ lineErrorText(entry.line) }}</small></td>
                   <td><span class="badge" :data-tone="lineServiceTone(entry.line)" :title="entry.line.service_checked_at ? `checked ${entry.line.service_checked_at}` : undefined">{{ lineServiceLabel(entry.line) }}</span></td>
-                  <td v-if="canViewLineDetails" class="actions-cell"><button class="button button-secondary button-compact" type="button" @click="openLineDetails(row.group, entry.line)">Details</button></td>
+                  <td v-if="canViewLineDetails" class="actions-cell">
+                    <div class="row-actions">
+                      <button class="button button-secondary button-compact" type="button" @click="openLineDetails(row.group, entry.line)">Details</button>
+                      <button v-if="canOpenEvidence" class="icon-button bordered" type="button" :aria-label="`Connections through ${entry.line.name}`" :title="`Connections through ${entry.line.name}`" @click="openEvidence(row.group.node_id, 'connections', entry.line)"><Waypoints :size="14" aria-hidden="true" /></button>
+                    </div>
+                  </td>
                 </tr>
               </template>
             </template>
