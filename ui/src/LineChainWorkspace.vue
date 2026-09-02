@@ -180,8 +180,12 @@ const FILTERS: Array<{ key: RowEvidence | "all"; label: string; hint: string }> 
   { key: "unlinked", label: "No chain", hint: "Nothing committed, proposed, or observed" },
 ];
 
+/* The counters describe the rows the strip filters, which is the selection
+ * when a box or an arrow is picked; fleet-wide numbers over a sixteen-row
+ * table read as a mismatch. */
+const selectionSummary = computed(() => summarizeTopology({ ...topology.value, rows: selectedRows.value }));
 function countFor(key: RowEvidence | "all"): number {
-  return key === "all" ? summary.value.sources : summary.value[key];
+  return key === "all" ? selectionSummary.value.sources : selectionSummary.value[key];
 }
 
 watch([sources, targets], () => {
@@ -233,13 +237,17 @@ function labelOfMember(id: string): string {
  * once sit on top of each other where the fan-outs cross. The count is
  * always in the accessible name. */
 function edgeStroke(edge: NodeLayoutEdge): number {
-  return Math.min(4, 1.5 + Math.log2(edge.count) * 0.7);
+  return Math.min(3, 1.25 + Math.log2(edge.count) * 0.45);
 }
 
 /* Edge labels sit on the edge's midpoint; a straight edge between two ranks
  * never crosses a box, so the label is always over empty space. */
 function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
-  return { x: (edge.x1 + edge.x2) / 2, y: (edge.y1 + edge.y2) / 2 - 6 };
+  // A fan of edges out of one box is bunched at the source and spread at
+  // the targets; a label at the midpoint of each sits on its neighbours.
+  // Two thirds of the way along, the edges have separated by a row.
+  const t = 0.66;
+  return { x: edge.x1 + (edge.x2 - edge.x1) * t, y: edge.y1 + (edge.y2 - edge.y1) * t - 6 };
 }
 </script>
 

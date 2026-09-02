@@ -303,7 +303,7 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 /* The kind rules address the visible line only: the invisible hit line under
    it is 14 units wide, and a kind rule that matched it painted a striped band
    across the drawing. */
-.graph-edge line:not(.graph-edge-hit) { stroke: var(--muted-foreground, #85919d); stroke-width: 1.5; stroke-dasharray: calc(var(--edge-w, 1.5) * 3px) calc(var(--edge-w, 1.5) * 2px); }
+.graph-edge line:not(.graph-edge-hit) { stroke: var(--muted-foreground, #85919d); stroke-width: 1.5; stroke-dasharray: 5 4; }
 .graph-edge[data-kind="verified"] line:not(.graph-edge-hit) { stroke: var(--tone-ok); stroke-dasharray: none; }
 .graph-edge[data-kind="committed"] line:not(.graph-edge-hit) { stroke: var(--tone-info); stroke-dasharray: none; }
 .graph-edge[data-kind="observed"] line:not(.graph-edge-hit) { stroke: var(--tone-warn); stroke-dasharray: none; }
@@ -492,7 +492,12 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
   .fleet-table th.fleet-name, .fleet-table td.fleet-name { position: sticky; left: 0; z-index: 1; background: var(--card, #fff); box-shadow: 1px 0 0 var(--border, #e3e6e9); }
   .node-row td.fleet-name { background: color-mix(in srgb, var(--muted, #eef0f2) 34%, var(--card, #fff)); }
   .bank-row td.fleet-name { background: color-mix(in srgb, var(--tone-info-surface) 55%, var(--card, #fff)); }
-  .narrow-status { display: inline-flex; align-items: center; gap: var(--sp-2); margin-top: 4px; }
+  .narrow-status { display: inline-flex; align-items: center; gap: var(--sp-2); margin-top: 4px; flex-wrap: wrap; }
+  /* Two sticky columns summed to the viewport and left every other column
+     with no width to scroll into. The name column narrows and the actions
+     column scrolls with the row. */
+  .fleet-table th.fleet-name, .fleet-table td.fleet-name { min-width: 168px; max-width: 200px; }
+  .fleet-table .actions-cell { position: static; box-shadow: none; }
   /* Five tiles in two columns: the roles tile reads "101 relay · 36 exit"
      and must wrap rather than clip to "101 relay · 3". */
   .summary-strip strong { white-space: normal; font-size: 17px; }
