@@ -33,7 +33,7 @@ host bridge `1`, node-agent `0.3.4-alpha.1`. The plugin version is whatever the
 manifest declares.
 
 Verified complete-bundle SHA-256:
-`22866157c3a22359ea785d78200a295f458a0ac1611b4e8161c7fc89ece8036f`.
+`5786d74fec47cabe51e52277132b6bad28e8d1edb9388415cdc6862e7c64b5ee`.
 
 That digest is the previous build's, and so is the one in `manifest.json`; they
 match each other and neither describes the version now declared. `pluginsign
