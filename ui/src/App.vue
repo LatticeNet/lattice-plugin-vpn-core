@@ -22,7 +22,7 @@ import {
 } from "@lucide/vue";
 
 import { BridgeClient, canCall, type HostInit } from "./bridge";
-import { attentionItems, buildNodeRows, lineRole, livenessSummary, summarizeFleet, type AttentionItem, type Bank, type NodeRow, type ServiceVerdict } from "./fleetRows";
+import { attentionItems, buildNodeRows, lineRole, livenessSummary, normalizeServiceNote, summarizeFleet, type AttentionItem, type Bank, type NodeRow, type ServiceVerdict } from "./fleetRows";
 import LineChainWorkspace from "./LineChainWorkspace.vue";
 import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
 import { LineWorkspaceLoader } from "./lineWorkspace";
@@ -281,7 +281,24 @@ function serviceTone(verdict: ServiceVerdict): "healthy" | "warning" | "error" |
 }
 function lineServiceLabel(line: Line): string {
   const state = (line.service_state ?? "").trim();
-  return state && state !== "unknown" ? state : "not reported";
+  if (state && state !== "unknown") return state;
+  // "not reported" is a probe that never ran; "unproven" is a probe that ran
+  // and refused to guess. The tile and the proof line say unproven, so the
+  // cell has to say it too, and the note is the evidence on hover.
+  return line.service_note ? "unproven" : "not reported";
+}
+function lineServiceTitle(line: Line): string | undefined {
+  if (line.service_note) return normalizeServiceNote(line.service_note).text;
+  return line.service_checked_at ? `checked ${line.service_checked_at}` : undefined;
+}
+/** The node row's verdict word, with the same unproven rule as its lines. */
+function nodeServiceLabel(row: NodeRow): string {
+  if (row.service === "unknown" && row.group.lines.some((line) => line.service_note)) return "unproven";
+  return serviceLabel(row.service);
+}
+function nodeServiceTitle(row: NodeRow): string | undefined {
+  const noted = row.group.lines.find((line) => line.service_note);
+  return noted?.service_note ? normalizeServiceNote(noted.service_note).text : undefined;
 }
 
 /* The proof line: when the page last heard from the control plane. The
@@ -1183,7 +1200,7 @@ onBeforeUnmount(() => {
                      red state has to be readable without a sideways scroll. -->
                 <span class="narrow-status">
                   <span class="status-dot" :data-tone="row.config">{{ row.config === 'healthy' ? 'ok' : row.config }}</span>
-                  <span class="badge" :data-tone="serviceTone(row.service)">{{ serviceLabel(row.service) }}</span>
+                  <span class="badge" :data-tone="serviceTone(row.service)" :title="nodeServiceTitle(row)">{{ nodeServiceLabel(row) }}</span>
                 </span>
               </td>
               <td colspan="5" class="node-summary">
@@ -1195,7 +1212,7 @@ onBeforeUnmount(() => {
                 <span v-for="bank in row.banks" :key="bank.key" class="muted">· bank of {{ bank.lines.length }} {{ bank.type }} → {{ bank.targetNodeIDs.length }} {{ bank.targetNodeIDs.length === 1 ? 'node' : 'nodes' }}</span>
               </td>
               <td><span class="status-dot" :data-tone="row.config">{{ row.config === 'healthy' ? 'ok' : row.config }}</span></td>
-              <td><span class="badge" :data-tone="serviceTone(row.service)">{{ serviceLabel(row.service) }}</span></td>
+              <td><span class="badge" :data-tone="serviceTone(row.service)" :title="nodeServiceTitle(row)">{{ nodeServiceLabel(row) }}</span></td>
               <td v-if="canViewLineDetails" class="actions-cell">
                 <button v-if="canOpenEvidence" class="button button-secondary button-compact" type="button" :title="`Connections observed on ${row.group.node_name || row.group.node_id}`" @click="openEvidence(row.group.node_id, 'connections')"><Waypoints :size="13" aria-hidden="true" /> Evidence</button>
               </td>
@@ -1220,7 +1237,15 @@ onBeforeUnmount(() => {
                   <td v-if="canViewLineDetails" class="actions-cell" />
                 </tr>
                 <tr v-else class="line-row" :class="{ 'line-in-bank': !!entry.bank }">
-                  <td class="fleet-name"><strong :title="entry.line.name">{{ entry.line.name }}</strong><small :title="`${entry.line.type || 'unknown'} / ${entry.line.line_hash_id}`">{{ entry.line.type || 'unknown' }} / {{ entry.line.line_hash_id }}</small></td>
+                  <td class="fleet-name">
+                    <strong :title="entry.line.name">{{ entry.line.name }}</strong>
+                    <small :title="`${entry.line.type || 'unknown'} / ${entry.line.line_hash_id}`">{{ entry.line.type || 'unknown' }} / {{ entry.line.line_hash_id }}</small>
+                    <span class="narrow-status">
+                      <span class="mono">:{{ entry.line.listen_port || '?' }}</span>
+                      <span class="status-dot" :data-tone="lineStatus(entry.line)">{{ entry.line.status || (entry.line.last_error ? 'error' : 'not reported') }}</span>
+                      <span class="badge" :data-tone="lineServiceTone(entry.line)" :title="lineServiceTitle(entry.line)">{{ lineServiceLabel(entry.line) }}</span>
+                    </span>
+                  </td>
                   <td><span class="badge" :data-tone="lineRole(entry.line) === 'orphan' ? 'error' : 'neutral'">{{ roleLabel(entry.line) }}</span><span v-if="entry.line.managed" class="badge" data-tone="info" :title="entry.line.overlay_user ? `Bound account: ${entry.line.overlay_user}` : lineOwnership(entry.line)">{{ entry.line.overlay ? 'lattice-managed' : lineOwnership(entry.line) }}</span></td>
                   <!-- The port is the distinguishing value on a node that
                        carries twelve lines of one host; it leads. -->
@@ -1229,7 +1254,7 @@ onBeforeUnmount(() => {
                   <td class="num" :title="entry.line.user_known ? undefined : 'The node did not report a user count for this line'">{{ entry.line.user_known ? entry.line.user_count : 'unknown' }}</td>
                   <td class="mono outbound-cell" :title="entry.line.outbound_ref || undefined">{{ entry.line.outbound_ref || '-' }}<small v-if="entry.line.outbound_server">{{ entry.line.outbound_server }}<span v-if="entry.line.outbound_port">:{{ entry.line.outbound_port }}</span></small></td>
                   <td><span class="status-dot" :data-tone="lineStatus(entry.line)" :title="entry.line.status || (entry.line.last_error ? 'error' : 'not reported')">{{ entry.line.status || (entry.line.last_error ? 'error' : 'not reported') }}</span><small v-if="entry.line.last_error" class="error-text" :title="lineErrorText(entry.line)">{{ lineErrorText(entry.line) }}</small></td>
-                  <td><span class="badge" :data-tone="lineServiceTone(entry.line)" :title="entry.line.service_checked_at ? `checked ${entry.line.service_checked_at}` : undefined">{{ lineServiceLabel(entry.line) }}</span></td>
+                  <td><span class="badge" :data-tone="lineServiceTone(entry.line)" :title="lineServiceTitle(entry.line)">{{ lineServiceLabel(entry.line) }}</span></td>
                   <td v-if="canViewLineDetails" class="actions-cell">
                     <div class="row-actions">
                       <button class="button button-secondary button-compact" type="button" @click="openLineDetails(row.group, entry.line)">Details</button>
