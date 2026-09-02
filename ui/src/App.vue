@@ -22,7 +22,7 @@ import {
 } from "@lucide/vue";
 
 import { BridgeClient, canCall, type HostInit } from "./bridge";
-import { attentionItems, buildNodeRows, lineRole, summarizeFleet, type AttentionItem, type Bank, type NodeRow, type ServiceVerdict } from "./fleetRows";
+import { attentionItems, buildNodeRows, lineRole, livenessSummary, summarizeFleet, type AttentionItem, type Bank, type NodeRow, type ServiceVerdict } from "./fleetRows";
 import LineChainWorkspace from "./LineChainWorkspace.vue";
 import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
 import { LineWorkspaceLoader } from "./lineWorkspace";
@@ -203,6 +203,11 @@ const fleetSummary = computed(() => summarizeFleet(lines.value));
 const nodeRows = computed(() => buildNodeRows(visibleLineGroups.value));
 const attention = computed(() => attentionItems(lines.value));
 const attentionErrors = computed(() => attention.value.filter((item) => item.severity === "error").length);
+const attentionWarnings = computed(() => attention.value.filter((item) => item.severity === "warning").length);
+const attentionTone = computed(() => attentionErrors.value ? "error" : attentionWarnings.value ? "warning" : "neutral");
+/* One statement of what the probes said, so the tile, the proof line and
+ * the attention row cannot disagree about it. */
+const liveness = computed(() => livenessSummary(lines.value));
 const searching = computed(() => search.value.trim().length > 0);
 
 /* 25 node rows is one screen and, today, the whole fleet. Lines open under a
@@ -291,6 +296,11 @@ const observedAtLabel = computed(() => {
 });
 const livenessLine = computed(() => {
   const service = fleetSummary.value.service;
+  if (!service.reported && liveness.value.unprovenNodes) {
+    return liveness.value.refusedPath
+      ? `liveness unproven: the probe refused ${liveness.value.refusedPath} on ${liveness.value.unprovenNodes} nodes`
+      : `liveness unproven on ${liveness.value.unprovenNodes} nodes`;
+  }
   if (!service.reported) return "liveness not reported by any node";
   const parts = [`${service.running} running`];
   if (service.down) parts.push(`${service.down} down`);
@@ -317,9 +327,17 @@ function openEvidence(nodeID: string, lens: EvidenceLens, line?: Line): void {
   postNavigate(window, evidenceRoute(nodeID, lens, line?.line_uuid), hostOrigin);
 }
 
+function openProfiles(): void {
+  if (!hostOrigin) return;
+  postNavigate(window, "/plugins/latticenet.vpn-core/profiles", hostOrigin);
+}
 function openAttention(item: AttentionItem): void {
   if (item.action === "rollout") {
     openRollout();
+    return;
+  }
+  if (item.action === "profiles") {
+    openProfiles();
     return;
   }
   const found = attentionRow(item);
@@ -1103,11 +1121,13 @@ onBeforeUnmount(() => {
         <div :data-tone="fleetSummary.lines && !fleetSummary.managed ? 'warning' : undefined"><span>Lattice-managed</span><strong>{{ fleetSummary.managed }}</strong><small>{{ fleetSummary.lines - fleetSummary.managed }} discovered only</small></div>
         <div><span>Roles</span><strong>{{ fleetSummary.relays }} relay · {{ fleetSummary.exits }} exit</strong><small>{{ fleetSummary.orphans ? `${fleetSummary.orphans} with no outbound` : 'every line has an outbound' }}</small></div>
         <div><span>Nodes</span><strong>{{ fleetSummary.nodes }}</strong><small v-if="canReadManaged">{{ overlayStats.covered }} of {{ overlayStats.total }} carry a managed line</small></div>
-        <div :data-tone="fleetSummary.service.down ? 'error' : fleetSummary.service.reported ? undefined : 'neutral'">
+        <div :data-tone="fleetSummary.service.down ? 'error' : fleetSummary.service.reported ? undefined : liveness.unprovenNodes ? 'warning' : 'neutral'">
           <span>Service</span>
           <strong v-if="fleetSummary.service.reported">{{ fleetSummary.service.running }} running<template v-if="fleetSummary.service.down"> · {{ fleetSummary.service.down }} down</template></strong>
+          <strong v-else-if="liveness.unprovenNodes">unproven</strong>
           <strong v-else>not reported</strong>
           <small v-if="fleetSummary.service.reported">{{ fleetSummary.service.unknown ? `${fleetSummary.service.unknown} lines not reported` : 'every line reported' }}</small>
+          <small v-else-if="liveness.unprovenNodes">{{ liveness.refusedPath ? `the probe refused ${liveness.refusedPath} on ${liveness.unprovenNodes} nodes` : `the probe could not prove it on ${liveness.unprovenNodes} nodes` }}</small>
           <small v-else>config verdict only; the probe ships with agent 0.3.9</small>
         </div>
       </section>
@@ -1116,7 +1136,7 @@ onBeforeUnmount(() => {
           <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'fleet'" @click="lens = 'fleet'">Fleet</button>
           <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'topology'" @click="lens = 'topology'">Topology</button>
           <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'attention'" @click="lens = 'attention'">
-            Attention<span v-if="attention.length" class="lens-count" :data-tone="attentionErrors ? 'error' : 'neutral'">{{ attention.length }}</span>
+            Attention<span v-if="attention.length" class="lens-count" :data-tone="attentionTone">{{ attention.length }}</span>
           </button>
         </div>
         <input v-model="search" class="search-input" type="search" aria-label="Search lines" placeholder="Search node, line, endpoint, outbound or error" />
@@ -1143,8 +1163,6 @@ onBeforeUnmount(() => {
           <thead><tr>
             <th class="fleet-name">Node / line</th>
             <th>Role</th>
-            <th>Core</th>
-            <th>Ownership</th>
             <th>Endpoint</th>
             <th>Reality SNI</th>
             <th class="num">Users</th>
@@ -1161,8 +1179,14 @@ onBeforeUnmount(() => {
                   <strong :title="row.group.node_name || row.group.node_id">{{ row.group.node_name || row.group.node_id }}</strong>
                 </button>
                 <small :title="row.group.node_id">{{ row.group.node_id }}</small>
+                <!-- On a phone the verdict columns sit off to the right; the
+                     red state has to be readable without a sideways scroll. -->
+                <span class="narrow-status">
+                  <span class="status-dot" :data-tone="row.config">{{ row.config === 'healthy' ? 'ok' : row.config }}</span>
+                  <span class="badge" :data-tone="serviceTone(row.service)">{{ serviceLabel(row.service) }}</span>
+                </span>
               </td>
-              <td colspan="7" class="node-summary">
+              <td colspan="5" class="node-summary">
                 <span>{{ row.lines.length }} {{ row.lines.length === 1 ? 'line' : 'lines' }}</span>
                 <span v-if="row.counts.relays">· {{ row.counts.relays }} relay</span>
                 <span v-if="row.counts.exits">· {{ row.counts.exits }} exit</span>
@@ -1187,9 +1211,7 @@ onBeforeUnmount(() => {
                     <small class="mono">ports {{ entry.bank.portRange.min }} to {{ entry.bank.portRange.max }}</small>
                   </td>
                   <td><span class="badge" data-tone="info">bank</span></td>
-                  <td><span class="badge">{{ entry.bank.lines[0].core || 'unknown' }}</span></td>
-                  <td><span class="badge" data-tone="neutral">{{ lineOwnership(entry.bank.lines[0]) }}</span></td>
-                  <td class="mono">{{ formatLineEndpoint(entry.bank.lines[0]).split(':')[0] }}<small>{{ entry.bank.lines.length }} listeners</small></td>
+                  <td class="mono endpoint-cell">{{ formatLineEndpoint(entry.bank.lines[0]).split(':')[0] }}<small>{{ entry.bank.lines.length }} listeners, ports {{ entry.bank.portRange.min }} to {{ entry.bank.portRange.max }}</small></td>
                   <td class="mono">{{ formatLineDomain(entry.bank.lines[0]) }}</td>
                   <td class="num">{{ entry.bank.lines.reduce((sum, line) => sum + (line.user_known ? line.user_count : 0), 0) }}</td>
                   <td :title="bankTargets(entry.bank)">→ {{ entry.bank.targetNodeIDs.length }} {{ entry.bank.targetNodeIDs.length === 1 ? 'node' : 'nodes' }}<small>{{ bankTargets(entry.bank) }}</small></td>
@@ -1199,10 +1221,10 @@ onBeforeUnmount(() => {
                 </tr>
                 <tr v-else class="line-row" :class="{ 'line-in-bank': !!entry.bank }">
                   <td class="fleet-name"><strong :title="entry.line.name">{{ entry.line.name }}</strong><small :title="`${entry.line.type || 'unknown'} / ${entry.line.line_hash_id}`">{{ entry.line.type || 'unknown' }} / {{ entry.line.line_hash_id }}</small></td>
-                  <td><span class="badge" :data-tone="lineRole(entry.line) === 'orphan' ? 'error' : 'neutral'">{{ roleLabel(entry.line) }}</span></td>
-                  <td><span class="badge">{{ entry.line.core || 'unknown' }}</span></td>
-                  <td><span class="badge" :data-tone="entry.line.managed ? 'info' : 'neutral'">{{ lineOwnership(entry.line) }}</span><span v-if="entry.line.overlay" class="badge" :data-tone="overlayTone(entry.line.overlay_status)" :title="entry.line.overlay_user ? `Bound account: ${entry.line.overlay_user}` : 'Lattice-owned overlay line'">lattice-managed</span></td>
-                  <td class="mono" :title="`public ${formatLineEndpoint(entry.line)}, listen ${formatLineListen(entry.line)}`">{{ formatLineEndpoint(entry.line) }}<small>listen {{ formatLineListen(entry.line) }}</small></td>
+                  <td><span class="badge" :data-tone="lineRole(entry.line) === 'orphan' ? 'error' : 'neutral'">{{ roleLabel(entry.line) }}</span><span v-if="entry.line.managed" class="badge" data-tone="info" :title="entry.line.overlay_user ? `Bound account: ${entry.line.overlay_user}` : lineOwnership(entry.line)">{{ entry.line.overlay ? 'lattice-managed' : lineOwnership(entry.line) }}</span></td>
+                  <!-- The port is the distinguishing value on a node that
+                       carries twelve lines of one host; it leads. -->
+                  <td class="mono endpoint-cell" :title="`public ${formatLineEndpoint(entry.line)}, listen ${formatLineListen(entry.line)}`"><span class="endpoint-port">:{{ entry.line.listen_port || '?' }}</span> {{ formatLineEndpoint(entry.line).split(':')[0] }}<small>listen {{ formatLineListen(entry.line) }}</small></td>
                   <td class="mono" :title="formatLineDomain(entry.line)">{{ formatLineDomain(entry.line) }}</td>
                   <td class="num" :title="entry.line.user_known ? undefined : 'The node did not report a user count for this line'">{{ entry.line.user_known ? entry.line.user_count : 'unknown' }}</td>
                   <td class="mono outbound-cell" :title="entry.line.outbound_ref || undefined">{{ entry.line.outbound_ref || '-' }}<small v-if="entry.line.outbound_server">{{ entry.line.outbound_server }}<span v-if="entry.line.outbound_port">:{{ entry.line.outbound_port }}</span></small></td>
@@ -1269,7 +1291,8 @@ onBeforeUnmount(() => {
             <div class="attention-actions">
               <button v-if="item.action === 'details' && canViewLineDetails" class="button button-secondary button-compact" type="button" @click="openAttention(item)">Details</button>
               <button v-else-if="item.action === 'rollout' && canRollout" class="button button-secondary button-compact" type="button" @click="openAttention(item)">Roll out</button>
-              <span v-else-if="item.action === 'profiles'" class="muted">Node Profiles, in the sidebar</span>
+              <button v-else-if="item.action === 'profiles' && canOpenEvidence" class="button button-secondary button-compact" type="button" title="Open Node Profiles, where each node's sing-box integration is configured" @click="openAttention(item)">Node Profiles</button>
+              <span v-else-if="item.action === 'profiles'" class="muted">Node Profiles, in this plugin's navigation</span>
             </div>
           </li>
         </ol>

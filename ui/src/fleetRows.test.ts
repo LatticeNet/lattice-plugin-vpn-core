@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { attentionItems, buildNodeRows, lineRole, serviceNotes, serviceVerdict, summarizeFleet } from "./fleetRows";
+import { attentionItems, buildNodeRows, lineRole, livenessSummary, normalizeServiceNote, serviceNotes, serviceVerdict, summarizeFleet } from "./fleetRows";
 import type { Line, LineGroup } from "./vpnModel";
 
 const line = (name: string, over: Partial<Line> = {}): Line => ({
@@ -112,19 +112,41 @@ describe("summarizeFleet and attentionItems", () => {
 
 describe("serviceNotes", () => {
   const note = "refused sing-box candidate /etc/sing-box/bin/sing-box (pid 3917185): outside the trusted executable directories (/usr/local/bin); owned by uid 1001, not root";
+  const sentence = "sing-box runs from /etc/sing-box/bin/sing-box, owned by uid 1001, not root; the probe refuses it: outside the trusted executable directories (/usr/local/bin)";
+
+  it("drops the per-host pid and leads with the path and the owner", () => {
+    expect(normalizeServiceNote(note)).toEqual({ text: sentence, refusedPath: "/etc/sing-box/bin/sing-box" });
+    expect(normalizeServiceNote("ss: exit status 1 (pid 4)")).toEqual({ text: "ss: exit status 1" });
+  });
 
   it("folds one probe account given by many nodes into one sentence with the node count", () => {
+    const other = note.replace("3917185", "77");
     const groups: LineGroup[] = [
       { node_id: "a", node_name: "a", lines: [exit("a1", { service_note: note }), exit("a2", { service_note: note })] },
-      { node_id: "b", node_name: "b", lines: [exit("b1", { service_note: note })] },
+      { node_id: "b", node_name: "b", lines: [exit("b1", { service_note: other })] },
       { node_id: "c", node_name: "c", lines: [exit("c1", { service_note: "ss: exit status 1" })] },
       { node_id: "d", node_name: "d", lines: [exit("d1")] },
     ];
-    expect(serviceNotes(groups)).toEqual([{ text: note, nodes: 2 }, { text: "ss: exit status 1", nodes: 1 }]);
+    expect(serviceNotes(groups)).toEqual([
+      { text: sentence, nodes: 2, refusedPath: "/etc/sing-box/bin/sing-box" },
+      { text: "ss: exit status 1", nodes: 1, refusedPath: undefined },
+    ]);
     const liveness = attentionItems(groups).find((item) => item.key === "fleet:liveness");
     expect(liveness?.severity).toBe("warning");
     expect(liveness?.claim).toBe("Service liveness is unproven on 3 nodes");
-    expect(liveness?.evidence).toContain("2 nodes: refused sing-box candidate");
+    expect(liveness?.evidence).toContain("2 nodes: sing-box runs from");
     expect(liveness?.evidence).toContain("1 node: ss: exit status 1");
+  });
+
+  it("names the fix when every account is the same refusal, and feeds the tile", () => {
+    const groups: LineGroup[] = [
+      { node_id: "a", node_name: "a", lines: [exit("a1", { service_note: note })] },
+      { node_id: "b", node_name: "b", lines: [exit("b1", { service_note: note.replace("3917185", "9") })] },
+    ];
+    const liveness = attentionItems(groups).find((item) => item.key === "fleet:liveness");
+    expect(liveness?.evidence).toContain("On every one of them sing-box runs from /etc/sing-box/bin/sing-box, owned by uid 1001");
+    expect(liveness?.evidence).toContain("Move the binary into a trusted directory owned by root");
+    expect(livenessSummary(groups)).toEqual({ reported: 0, unprovenNodes: 2, refusedPath: "/etc/sing-box/bin/sing-box" });
+    expect(livenessSummary([{ node_id: "d", node_name: "d", lines: [exit("d1", { service_state: "running" })] }])).toEqual({ reported: 1, unprovenNodes: 0, refusedPath: undefined });
   });
 });

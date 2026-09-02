@@ -245,16 +245,68 @@ const SEVERITY_RANK: Record<AttentionSeverity, number> = { error: 0, warning: 1,
  * installing sing-box the same way on 25 nodes yields one entry, which is
  * the sentence the operator needs rather than 25 copies of it.
  */
-export function serviceNotes(groups: readonly LineGroup[]): Array<{ text: string; nodes: number }> {
-  const byNote = new Map<string, Set<string>>();
+export interface ServiceNote {
+  /** The account with the per-host process id removed, so one note can stand for many nodes. */
+  text: string;
+  nodes: number;
+  /** The refused binary path when the note is a refusal, for the tile and the proof line. */
+  refusedPath?: string;
+}
+
+const REFUSAL = /^refused sing-box candidate (\S+)(?: \(pid \d+\))?: (.+)$/;
+
+/**
+ * Turn the probe's account into a sentence about the fleet. The raw note is
+ * "refused sing-box candidate /etc/sing-box/bin/sing-box (pid 3917185):
+ * outside the trusted executable directories (…); owned by uid 1001, not
+ * root". The pid belongs to one host and cannot describe twenty-five, and the
+ * directory list is the least important clause, so the sentence leads with
+ * the path and the owner and keeps the rule after.
+ */
+export function normalizeServiceNote(raw: string): { text: string; refusedPath?: string } {
+  const note = raw.trim();
+  const match = REFUSAL.exec(note);
+  if (!match) return { text: note.replace(/ \(pid \d+\)/g, "") };
+  const [, path, reason] = match;
+  const clauses = reason.split(";").map((clause) => clause.trim()).filter(Boolean);
+  const owner = clauses.find((clause) => clause.startsWith("owned by"));
+  const rest = clauses.filter((clause) => clause !== owner);
+  const lead = owner ? `sing-box runs from ${path}, ${owner}` : `sing-box runs from ${path}`;
+  return { text: `${lead}; the probe refuses it: ${rest.join("; ") || reason}`, refusedPath: path };
+}
+
+export function serviceNotes(groups: readonly LineGroup[]): ServiceNote[] {
+  const byNote = new Map<string, { nodes: Set<string>; refusedPath?: string }>();
   for (const group of groups) {
     for (const line of group.lines) {
-      const note = (line.service_note ?? "").trim();
-      if (!note) continue;
-      (byNote.get(note) ?? byNote.set(note, new Set()).get(note)!).add(group.node_id);
+      const raw = (line.service_note ?? "").trim();
+      if (!raw) continue;
+      const { text, refusedPath } = normalizeServiceNote(raw);
+      const entry = byNote.get(text) ?? byNote.set(text, { nodes: new Set(), refusedPath }).get(text)!;
+      entry.nodes.add(group.node_id);
     }
   }
-  return [...byNote].map(([text, nodes]) => ({ text, nodes: nodes.size })).sort((a, b) => b.nodes - a.nodes || a.text.localeCompare(b.text));
+  return [...byNote]
+    .map(([text, entry]) => ({ text, nodes: entry.nodes.size, refusedPath: entry.refusedPath }))
+    .sort((a, b) => b.nodes - a.nodes || a.text.localeCompare(b.text));
+}
+
+export interface LivenessSummary {
+  /** Lines whose service state was reported. */
+  reported: number;
+  /** Nodes that gave a probe account instead of a verdict. */
+  unprovenNodes: number;
+  /** The refused binary path when every account is the same refusal. */
+  refusedPath?: string;
+}
+
+/** One statement the tile, the proof line and the attention row all derive from. */
+export function livenessSummary(groups: readonly LineGroup[]): LivenessSummary {
+  const summary = summarizeFleet(groups);
+  const notes = serviceNotes(groups);
+  const unprovenNodes = notes.reduce((sum, note) => sum + note.nodes, 0);
+  const refusedPath = notes.length && notes.every((note) => note.refusedPath && note.refusedPath === notes[0].refusedPath) ? notes[0].refusedPath : undefined;
+  return { reported: summary.service.reported, unprovenNodes, refusedPath };
 }
 
 export function attentionItems(groups: readonly LineGroup[]): AttentionItem[] {
@@ -271,11 +323,15 @@ export function attentionItems(groups: readonly LineGroup[]): AttentionItem[] {
   }
   if (summary.lines > 0 && summary.service.reported === 0) {
     const notes = serviceNotes(groups);
+    const unproven = notes.reduce((sum, note) => sum + note.nodes, 0);
+    const refusal = notes.length && notes.every((note) => note.refusedPath) ? notes[0] : undefined;
     items.push(notes.length ? {
       key: "fleet:liveness",
       severity: "warning",
-      claim: `Service liveness is unproven on ${notes.reduce((sum, note) => sum + note.nodes, 0)} ${notes.reduce((sum, note) => sum + note.nodes, 0) === 1 ? "node" : "nodes"}`,
-      evidence: notes.map((note) => `${note.nodes} ${note.nodes === 1 ? "node" : "nodes"}: ${note.text}`).join(" · "),
+      claim: `Service liveness is unproven on ${unproven} ${unproven === 1 ? "node" : "nodes"}`,
+      evidence: refusal
+        ? `On ${refusal.nodes === unproven ? "every one of them" : `${refusal.nodes} of them`} ${refusal.text}. Move the binary into a trusted directory owned by root (for example /usr/local/bin/sing-box), or change the trust rule; until then the service verdict stays unknown while the config verdict is real.`
+        : notes.map((note) => `${note.nodes} ${note.nodes === 1 ? "node" : "nodes"}: ${note.text}`).join(" · "),
       action: "profiles",
     } : {
       key: "fleet:liveness",

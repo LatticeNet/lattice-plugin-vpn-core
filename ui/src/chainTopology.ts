@@ -352,6 +352,8 @@ export interface NodeBox {
   relays: number;
   /** Lines on this node that exit directly. */
   exits: number;
+  /** Set on a cluster box: the node ids folded into it, in label order. */
+  members?: string[];
 }
 
 export interface NodeEdge {
@@ -365,6 +367,8 @@ export interface NodeEdge {
   kinds: Partial<Record<TopologyEdgeKind, number>>;
   /** Members whose target no fleet line resolved to. */
   unresolved: number;
+  /** Members matched to the target node by host alone, port unverified. */
+  unverified: number;
   /** Source line uuids, so a selection can narrow the canonical table. */
   sourceLineUUIDs: string[];
 }
@@ -442,7 +446,7 @@ export function aggregateNodeGraph(groups: readonly LineGroup[], topology: Chain
     const key = `${from} ${to}`;
     let pair = edgesByPair.get(key);
     if (!pair) {
-      pair = { id: `${from}->${to}`, from, to, count: 0, kind: value.kind, kinds: {}, unresolved: 0, sourceLineUUIDs: [] };
+      pair = { id: `${from}->${to}`, from, to, count: 0, kind: value.kind, kinds: {}, unresolved: 0, unverified: 0, sourceLineUUIDs: [] };
       edgesByPair.set(key, pair);
     }
     pair.count += 1;
@@ -452,8 +456,106 @@ export function aggregateNodeGraph(groups: readonly LineGroup[], topology: Chain
     if (!pair.sourceLineUUIDs.includes(value.from)) pair.sourceLineUUIDs.push(value.from);
   }
 
+  // Relays the server could not resolve by endpoint still relay somewhere.
+  // On this fleet those are the NAT exits dialed by a forwarding hostname:
+  // the host matches a fleet node's public host, the port does not. Match by
+  // host and say the port is unverified; a host nobody on the fleet owns is
+  // an off-fleet box, because a relay onto something this control plane
+  // cannot see is a fact worth a box, not a reason to draw nothing.
+  const nodeOfHost = new Map<string, string>();
+  for (const group of groups) {
+    for (const line of group.lines) {
+      for (const host of [line.public_host, line.domain]) {
+        const key = (host ?? "").trim().toLowerCase();
+        if (key && !nodeOfHost.has(key)) nodeOfHost.set(key, group.node_id);
+      }
+    }
+  }
+  for (const group of groups) {
+    for (const line of group.lines) {
+      if (line.jump_edges?.length || !isRelayCandidate(line)) continue;
+      const server = (line.outbound_server ?? "").trim();
+      const label = `${server}${line.outbound_port ? `:${line.outbound_port}` : ""}`;
+      const byHost = nodeOfHost.get(server.toLowerCase());
+      const to = byHost && byHost !== group.node_id ? byHost : `off:${label}`;
+      if (!byHost && !offFleet.has(to)) offFleet.set(to, { id: to, label, offFleet: true, lines: 0, relays: 0, exits: 0 });
+      touched.add(group.node_id);
+      touched.add(to);
+      const key = `${group.node_id} ${to}`;
+      let pair = edgesByPair.get(key);
+      if (!pair) {
+        pair = { id: `${group.node_id}->${to}`, from: group.node_id, to, count: 0, kind: "discovered_inferred", kinds: {}, unresolved: 0, unverified: 0, sourceLineUUIDs: [] };
+        edgesByPair.set(key, pair);
+      }
+      pair.count += 1;
+      pair.kinds.discovered_inferred = (pair.kinds.discovered_inferred ?? 0) + 1;
+      if (byHost) pair.unverified += 1;
+      else pair.unresolved += 1;
+      const uuid = line.line_uuid?.trim();
+      if (uuid && !pair.sourceLineUUIDs.includes(uuid)) pair.sourceLineUUIDs.push(uuid);
+    }
+  }
+
   const nodes = [...boxes.values(), ...offFleet.values()].filter((box) => touched.has(box.id));
-  return { nodes, edges: [...edgesByPair.values()] };
+  return clusterHubs({ nodes, edges: [...edgesByPair.values()] });
+}
+
+/**
+ * Fold hubs that relay to the same set of nodes into one box.
+ *
+ * Six hubs each dialing the same seven exits are forty-two edges that say one
+ * thing. A cluster box says it once: "6 hubs" with the member names in its
+ * title, and each edge out of it carries the summed count. A hub qualifies
+ * when nothing relays into it and it has more than one target; two hubs make
+ * a cluster. Everything else is left as it was.
+ */
+export function clusterHubs(graph: NodeGraph): NodeGraph {
+  const incoming = new Set(graph.edges.map((edge) => edge.to));
+  const signature = new Map<string, string[]>();
+  for (const node of graph.nodes) {
+    if (node.offFleet || incoming.has(node.id)) continue;
+    const targets = graph.edges.filter((edge) => edge.from === node.id).map((edge) => edge.to).sort();
+    if (targets.length < 2) continue;
+    const key = targets.join("|");
+    (signature.get(key) ?? signature.set(key, []).get(key)!).push(node.id);
+  }
+  const clusterOf = new Map<string, string>();
+  const clusters: NodeBox[] = [];
+  for (const [, members] of signature) {
+    if (members.length < 2) continue;
+    const boxes = members.map((id) => graph.nodes.find((node) => node.id === id)!).sort((a, b) => a.label.localeCompare(b.label));
+    const id = `cluster:${boxes.map((box) => box.id).join("+")}`;
+    clusters.push({
+      id,
+      label: `${boxes.length} hubs`,
+      offFleet: false,
+      lines: boxes.reduce((sum, box) => sum + box.lines, 0),
+      relays: boxes.reduce((sum, box) => sum + box.relays, 0),
+      exits: boxes.reduce((sum, box) => sum + box.exits, 0),
+      members: boxes.map((box) => box.id),
+    });
+    for (const box of boxes) clusterOf.set(box.id, id);
+  }
+  if (!clusters.length) return graph;
+  const nodes = [...graph.nodes.filter((node) => !clusterOf.has(node.id)), ...clusters];
+  const merged = new Map<string, NodeEdge>();
+  for (const edge of graph.edges) {
+    const from = clusterOf.get(edge.from) ?? edge.from;
+    const key = `${from} ${edge.to}`;
+    let pair = merged.get(key);
+    if (!pair) {
+      pair = { ...edge, id: `${from}->${edge.to}`, from, kinds: { ...edge.kinds }, sourceLineUUIDs: [...edge.sourceLineUUIDs] };
+      merged.set(key, pair);
+      continue;
+    }
+    pair.count += edge.count;
+    pair.unresolved += edge.unresolved;
+    pair.unverified += edge.unverified;
+    for (const [kind, count] of Object.entries(edge.kinds)) pair.kinds[kind as TopologyEdgeKind] = (pair.kinds[kind as TopologyEdgeKind] ?? 0) + (count ?? 0);
+    if (KIND_STRENGTH[edge.kind] > KIND_STRENGTH[pair.kind]) pair.kind = edge.kind;
+    for (const uuid of edge.sourceLineUUIDs) if (!pair.sourceLineUUIDs.includes(uuid)) pair.sourceLineUUIDs.push(uuid);
+  }
+  return { nodes, edges: [...merged.values()] };
 }
 
 export interface NodeLayoutBox extends NodeBox {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateNodeGraph,
   chainTargetRejection,
+  clusterHubs,
   diagnoseTopologyAbsence,
   filterTopologyRows,
   fitNodeLayout,
@@ -270,6 +271,22 @@ describe("aggregateNodeGraph", () => {
     expect(graph.edges[0]).toMatchObject({ to: "off:vendor.example.invalid:8443", unresolved: 1 });
   });
 
+  it("draws a relay the server could not resolve: by host with the port unverified, or as an off-fleet box", () => {
+    const groups: LineGroup[] = [
+      { node_id: "hub", node_name: "hub-01", lines: [
+        relay("h1", "hub", "", { jump_edges: undefined, outbound_server: "nat-us.aproxy.top", outbound_port: 27944 }),
+        relay("h2", "hub", "", { jump_edges: undefined, outbound_server: "vendor.example.invalid", outbound_port: 443 }),
+      ] },
+      { node_id: "nat", node_name: "nat-exit", lines: [line("n1", { node_id: "nat", outbound_ref: "direct", public_host: "nat-us.aproxy.top", listen_port: 22918 })] },
+    ];
+    const graph = aggregateNodeGraph(groups, normalizeChainTopology(groups, []));
+    expect(graph.nodes.map((node) => node.id)).toEqual(["hub", "nat", "off:vendor.example.invalid:443"]);
+    const byHost = graph.edges.find((edge) => edge.to === "nat")!;
+    expect(byHost).toMatchObject({ count: 1, unverified: 1, unresolved: 0, sourceLineUUIDs: ["h1"] });
+    const offFleet = graph.edges.find((edge) => edge.to === "off:vendor.example.invalid:443")!;
+    expect(offFleet).toMatchObject({ count: 1, unresolved: 1, unverified: 0 });
+  });
+
   it("is not bounded by the per-line drawing cap", () => {
     const groups = fleet();
     const graph = aggregateNodeGraph(groups, normalizeChainTopology(groups, [], 1));
@@ -277,10 +294,37 @@ describe("aggregateNodeGraph", () => {
   });
 });
 
+describe("clusterHubs", () => {
+  const box = (id: string, over: Partial<NodeBox> = {}): NodeBox => ({ id, label: id, offFleet: false, lines: 13, relays: 12, exits: 1, ...over });
+  const link = (from: string, to: string, count: number): NodeEdge =>
+    ({ id: `${from}->${to}`, from, to, count, kind: "discovered_inferred", kinds: { discovered_inferred: count }, unresolved: 0, unverified: 0, sourceLineUUIDs: [`${from}:${to}`] });
+
+  it("folds hubs with the same target set into one box with summed edges", () => {
+    const exits = ["cd2", "cd3", "att"].map((id) => box(id, { relays: 0, exits: 2, lines: 2 }));
+    const hubs = ["DMIT-1", "DMIT-2", "hk-turin"].map((id) => box(id));
+    const edges = hubs.flatMap((hub) => exits.map((exit) => link(hub.id, exit.id, 2)));
+    edges.push(link("mkcloud", "cd2", 1));
+    const graph = clusterHubs({ nodes: [...hubs, ...exits, box("mkcloud", { relays: 1 })], edges });
+    const cluster = graph.nodes.find((node) => node.members)!;
+    expect(cluster).toMatchObject({ label: "3 hubs", members: ["DMIT-1", "DMIT-2", "hk-turin"], lines: 39, relays: 36 });
+    expect(graph.nodes.map((node) => node.id)).toEqual(["cd2", "cd3", "att", "mkcloud", cluster.id]);
+    expect(graph.edges).toHaveLength(4);
+    const toCd2 = graph.edges.find((edge) => edge.from === cluster.id && edge.to === "cd2")!;
+    expect(toCd2).toMatchObject({ count: 6, kinds: { discovered_inferred: 6 } });
+    expect(toCd2.sourceLineUUIDs).toEqual(["DMIT-1:cd2", "DMIT-2:cd2", "hk-turin:cd2"]);
+    expect(graph.edges.find((edge) => edge.from === "mkcloud")).toBeDefined();
+  });
+
+  it("leaves a lone hub and anything that is relayed into alone", () => {
+    const graph = { nodes: [box("a"), box("b"), box("c", { relays: 0 })], edges: [link("a", "b", 1), link("a", "c", 1), link("b", "c", 1)] };
+    expect(clusterHubs(graph)).toBe(graph);
+  });
+});
+
 describe("layoutNodeGraph", () => {
   const box = (id: string): NodeBox => ({ id, label: id, offFleet: false, lines: 1, relays: 1, exits: 0 });
   const link = (from: string, to: string, count = 1): NodeEdge =>
-    ({ id: `${from}->${to}`, from, to, count, kind: "discovered_inferred", kinds: { discovered_inferred: count }, unresolved: 0, sourceLineUUIDs: [] });
+    ({ id: `${from}->${to}`, from, to, count, kind: "discovered_inferred", kinds: { discovered_inferred: count }, unresolved: 0, unverified: 0, sourceLineUUIDs: [] });
 
   it("ranks a chain left to right so a hop reads as a hop", () => {
     const layout = layoutNodeGraph({ nodes: [box("a"), box("b"), box("c")], edges: [link("a", "b"), link("b", "c")] });

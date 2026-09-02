@@ -66,6 +66,30 @@ onBeforeUnmount(() => { observer?.disconnect(); observer = undefined; });
 const graphWidthBudget = computed(() => Math.max(0, Math.floor(panelWidth.value) - SHELL_PADDING));
 const fit = computed(() => fitNodeLayout(layout.value, graphWidthBudget.value));
 const hasDrawing = computed(() => layout.value.edges.length > 0);
+/* Counts are the point of the drawing. They sit on every edge while the
+ * drawing is sparse enough to read them; past that they wait for a hover,
+ * a focus or a selection, and the accessible name carries them regardless. */
+const LABELS_AT_REST = 24;
+const labelsAtRest = computed(() => layout.value.edges.length <= LABELS_AT_REST);
+const KIND_ORDER: TopologyEdgeKind[] = ["verified", "committed", "observed", "discovered_declared", "discovered_inferred"];
+const legend = computed(() => {
+  const present = new Set(layout.value.edges.map((edge) => edge.kind));
+  const items = KIND_ORDER.filter((kind) => present.has(kind)).map((kind) => ({
+    key: kind,
+    label: ({ verified: "Verified", committed: "Committed", observed: "Observed", discovered_declared: "Declared", discovered_inferred: "Discovered" } as const)[kind],
+    style: ({
+      verified: "border-top-color: var(--tone-ok);",
+      committed: "border-top-color: var(--tone-info);",
+      observed: "border-top-color: var(--tone-warn);",
+      discovered_declared: "border-top-color: var(--tone-info); border-top-style: dashed;",
+      discovered_inferred: "border-top-color: var(--muted-foreground); border-top-style: dashed;",
+    } as const)[kind],
+  }));
+  if (layout.value.nodes.some((node) => node.offFleet)) items.push({ key: "off", label: "Off-fleet endpoint", style: "border-top-color: var(--muted-foreground); border-top-style: dotted;" } as never);
+  if (layout.value.edges.some((edge) => edge.unverified)) items.push({ key: "unverified", label: "Host matched, port unverified", style: "border-top-color: var(--tone-warn); border-top-style: dotted;" } as never);
+  if (layout.value.nodes.some((node) => node.members)) items.push({ key: "cluster", label: "Hubs with the same exits, folded", style: "border-top-color: var(--primary); border-top-width: 3px;" } as never);
+  return items;
+});
 
 const absence = computed(() => diagnoseTopologyAbsence(props.groups, topology.value, layout.value.edges.length));
 
@@ -105,6 +129,8 @@ const selectedRows = computed(() => {
     return rows.filter((row) => wanted.has(row.sourceLineUUID));
   }
   const nodeID = selection.value.id;
+  const members = selectedNode.value?.members;
+  if (members?.length) return rows.filter((row) => members.some((member) => rowTouches(row, member)));
   return rows.filter((row) => rowTouches(row, nodeID));
 });
 const filteredRows = computed(() => filterTopologyRows(selectedRows.value, filter.value));
@@ -146,8 +172,8 @@ function targetHandle(target: TopologyTarget): string {
 }
 
 const FILTERS: Array<{ key: RowEvidence | "all"; label: string; hint: string }> = [
-  { key: "all", label: "Sources", hint: "Every line that can carry a chain" },
-  { key: "attention", label: "Needs attention", hint: "Failed, drifted, or carrying an error" },
+  { key: "all", label: "Chain sources", hint: "Every line that can carry a chain" },
+  { key: "attention", label: "Chain problems", hint: "Failed, drifted, or carrying an error" },
   { key: "proposed", label: "Proposed", hint: "An approval is filed and not yet executed" },
   { key: "linked", label: "Linked", hint: "A committed or observed downstream target" },
   { key: "discovered", label: "Discovery only", hint: "Runtime evidence with no committed chain" },
@@ -181,10 +207,11 @@ function edgeLabel(kind: TopologyEdgeKind): string {
 function edgeTitle(edge: NodeLayoutEdge): string {
   const parts = Object.entries(edge.kinds).map(([kind, count]) => `${count} ${edgeLabel(kind as TopologyEdgeKind).toLowerCase()}`);
   const unresolved = edge.unresolved ? `, ${edge.unresolved} onto an endpoint no fleet line owns` : "";
-  return `${labelOf(edge.from)} to ${labelOf(edge.to)}: ${edge.count} ${edge.count === 1 ? "line" : "lines"} (${parts.join(", ")})${unresolved}`;
+  const unverified = edge.unverified ? `, ${edge.unverified} matched by host with the port unverified` : "";
+  return `${labelOf(edge.from)} to ${labelOf(edge.to)}: ${edge.count} ${edge.count === 1 ? "line" : "lines"} (${parts.join(", ")})${unresolved}${unverified}`;
 }
 
-function nodeMeta(node: { offFleet: boolean; lines: number; relays: number; exits: number }): string {
+function nodeMeta(node: { offFleet: boolean; lines: number; relays: number; exits: number; members?: string[] }): string {
   if (node.offFleet) return "outside the fleet";
   const parts: string[] = [];
   if (node.relays) parts.push(`${node.relays} relay`);
@@ -192,12 +219,21 @@ function nodeMeta(node: { offFleet: boolean; lines: number; relays: number; exit
   return `${node.lines} ${node.lines === 1 ? "line" : "lines"}${parts.length ? ` · ${parts.join(" · ")}` : ""}`;
 }
 
+/** The names behind a cluster box, for its title and its selection line. */
+function membersOf(node: { members?: string[] }): string {
+  return (node.members ?? []).map((id) => nodeGraph.value.nodes.find((box) => box.id === id)?.label ?? labelOfMember(id)).join(", ");
+}
+function labelOfMember(id: string): string {
+  const group = props.groups.find((entry) => entry.node_id === id);
+  return group?.node_name || id;
+}
+
 /* Weight says count at a glance; the exact number is the label, shown when
  * the edge is hovered, focused or selected, because forty-seven labels at
  * once sit on top of each other where the fan-outs cross. The count is
  * always in the accessible name. */
 function edgeStroke(edge: NodeLayoutEdge): number {
-  return Math.min(4.5, 1.5 + Math.log2(edge.count) * 0.9);
+  return Math.min(4, 1.5 + Math.log2(edge.count) * 0.7);
 }
 
 /* Edge labels sit on the edge's midpoint; a straight edge between two ranks
@@ -219,17 +255,14 @@ function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
 
     <div v-if="hasDrawing" class="topology-graph-shell">
       <ul class="graph-legend">
-        <li><i style="border-top-color: var(--tone-ok);" /> Verified</li>
-        <li><i style="border-top-color: var(--tone-info);" /> Committed</li>
-        <li><i style="border-top-color: var(--tone-warn);" /> Observed</li>
-        <li><i style="border-top-color: var(--muted-foreground); border-top-style: dashed;" /> Discovered</li>
-        <li><i style="border-top-color: var(--muted-foreground); border-top-style: dotted;" /> Off-fleet endpoint</li>
+        <li v-for="item in legend" :key="item.key"><i :style="item.style" /> {{ item.label }}</li>
       </ul>
       <div class="topology-graph-scroll">
         <!-- Capped at its own intrinsic width: stretched to fill 1440px a
              four-node graph renders 12px labels at triple size. -->
         <svg
           class="topology-graph"
+          :data-labels="labelsAtRest ? 'always' : 'hover'"
           :width="fit.renderWidth"
           :height="fit.renderHeight"
           :viewBox="`0 0 ${layout.width} ${layout.height}`"
@@ -239,7 +272,10 @@ function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
           <title id="graph-title">Node relay topology, ordered by depth from a node nothing relays into</title>
           <desc id="graph-desc">Each box is a node; each arrow is the set of lines on the left node that dial into the right node, labelled with the count. Select a box or an arrow to narrow the canonical table below to those lines.</desc>
           <defs>
-            <marker id="topology-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <!-- userSpaceOnUse keeps the head one size; by default it scales
+                 with the stroke, and a sixteen-line edge grew a head wider
+                 than the box it pointed at. -->
+            <marker id="topology-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
               <path d="M0,0 L8,4 L0,8 z" fill="currentColor" />
             </marker>
           </defs>
@@ -248,6 +284,7 @@ function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
             :key="edge.id"
             class="graph-edge"
             :data-kind="edge.kind"
+            :data-unverified="edge.unverified ? 'true' : 'false'"
             :data-selected="selection?.kind === 'edge' && selection.id === edge.id ? 'true' : 'false'"
             role="button"
             tabindex="0"
@@ -258,8 +295,8 @@ function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
             @keydown.space.prevent="select({ kind: 'edge', id: edge.id })"
           >
             <line class="graph-edge-hit" :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" />
-            <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" :style="{ strokeWidth: edgeStroke(edge) }" marker-end="url(#topology-arrow)" />
-            <text :x="edgeLabelPosition(edge).x" :y="edgeLabelPosition(edge).y" text-anchor="middle">{{ edge.count }} {{ edge.count === 1 ? 'line' : 'lines' }}</text>
+            <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" :style="{ strokeWidth: edgeStroke(edge), '--edge-w': edgeStroke(edge) }" marker-end="url(#topology-arrow)" />
+            <text :x="edgeLabelPosition(edge).x" :y="edgeLabelPosition(edge).y" text-anchor="middle">x{{ edge.count }}<template v-if="edge.unverified">?</template></text>
             <title>{{ edgeTitle(edge) }}</title>
           </g>
           <g
@@ -267,6 +304,7 @@ function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
             :key="node.id"
             class="graph-node"
             :data-off-fleet="node.offFleet ? 'true' : 'false'"
+            :data-role="node.members ? 'cluster' : node.relays && !node.exits ? 'relay' : node.relays ? 'mixed' : 'exit'"
             :data-selected="selection?.kind === 'node' && selection.id === node.id ? 'true' : 'false'"
             :transform="`translate(${node.x} ${node.y})`"
             role="button"
@@ -278,9 +316,10 @@ function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
             @keydown.space.prevent="select({ kind: 'node', id: node.id })"
           >
             <rect x="0" y="0" :width="NODE_BOX_WIDTH" :height="NODE_BOX_HEIGHT" rx="5" />
-            <text x="12" y="18">{{ clip(node.label, 30) }}</text>
-            <text class="graph-node-meta" x="12" y="34">{{ nodeMeta(node) }}</text>
-            <title>{{ node.label }} · {{ nodeMeta(node) }}</title>
+            <rect class="graph-node-bar" x="0" y="0" width="4" :height="NODE_BOX_HEIGHT" />
+            <text x="14" y="18">{{ clip(node.label, 30) }}</text>
+            <text class="graph-node-meta" x="14" y="34">{{ nodeMeta(node) }}</text>
+            <title>{{ node.label }} · {{ nodeMeta(node) }}<template v-if="node.members"> · {{ membersOf(node) }}</template></title>
           </g>
         </svg>
       </div>
@@ -295,7 +334,8 @@ function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
         </template>
         <template v-else-if="selectedNode">
           <strong>{{ selectedNode.label }}</strong>
-          <span>· {{ nodeMeta(selectedNode) }} · the table lists every line that starts or ends here</span>
+          <span v-if="selectedNode.members">· {{ membersOf(selectedNode) }} · {{ nodeMeta(selectedNode) }} · the table lists every line that starts on one of them</span>
+          <span v-else>· {{ nodeMeta(selectedNode) }} · the table lists every line that starts or ends here</span>
           <button class="button button-secondary button-compact" type="button" @click="selection = null">Show every source</button>
         </template>
         <template v-else>
@@ -357,7 +397,7 @@ function edgeLabelPosition(edge: NodeLayoutEdge): { x: number; y: number } {
       <p v-else class="permission-note">Planning files an approval through <span class="mono">lines.plan_chain</span> and changes nothing on either node. The link moves only after you approve it, the host executes it, and Lattice observes the result.</p>
     </form>
 
-    <div class="evidence-summary" role="group" aria-label="Filter the canonical table by evidence">
+    <div class="evidence-summary" role="group" aria-label="Filter the canonical chain table by evidence">
       <button
         v-for="item in FILTERS"
         :key="item.key"
