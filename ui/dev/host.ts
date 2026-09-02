@@ -144,6 +144,13 @@ const params = new URLSearchParams(location.search);
 let frameEpoch = 0;
 let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
+/* `zoom` magnifies the whole harness for screenshot review on a very wide
+ * display, where a 1440px frame is a postage stamp. Harness only. */
+const zoom = params.get("zoom");
+if (zoom) document.documentElement.style.zoom = zoom;
+/* `plugin` is forwarded to the plugin document's own query string, so a
+ * reviewer can open a lens or a node by URL (`plugin=lens%3Dtopology`). */
+const pluginQuery = params.get("plugin") ?? "";
 let dark = params.get("theme") !== "light";
 let width = params.get("width") ?? "1440";
 /** The height of the console's main region. The frame gets exactly this. */
@@ -155,7 +162,7 @@ shell.innerHTML = `
   <div class="bar">
     <strong>vpn-core dev harness</strong>
     <label>route <select id="route">${ROUTES.map((value) => `<option${value === route ? " selected" : ""}>${value}</option>`).join("")}</select></label>
-    <label>data <select id="scenario">${["production", "offfleet", "rich", "dense", "empty", "failing"].map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
+    <label>data <select id="scenario">${["production", "hubs", "offfleet", "rich", "dense", "empty", "failing"].map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>width <select id="width">${["1440", "2423", "375"].map((value) => `<option${value === width ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <button id="theme" type="button">${dark ? "light" : "dark"}</button>
     <span id="reported"></span>
@@ -190,7 +197,7 @@ function reload(): void {
   // same-document navigation, so the frame would keep running and the route or
   // data the operator just picked would never reach a fresh plugin.
   frameEpoch += 1;
-  frame.src = `/index.html?frame=${frameEpoch}#lattice_nonce=${NONCE}&host_origin=${encodeURIComponent(location.origin)}`;
+  frame.src = `/index.html?frame=${frameEpoch}${pluginQuery ? `&${pluginQuery}` : ""}#lattice_nonce=${NONCE}&host_origin=${encodeURIComponent(location.origin)}`;
 }
 
 function post(message: Record<string, unknown>): void {

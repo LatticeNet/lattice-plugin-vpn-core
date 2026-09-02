@@ -1,21 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aggregateNodeGraph,
   chainTargetRejection,
-  connectedSubgraph,
   diagnoseTopologyAbsence,
-  isRelayCandidate,
   filterTopologyRows,
-  isGraphLegible,
-  layoutChainGraph,
+  fitNodeLayout,
+  GRAPH_MIN_SCALE,
+  isRelayCandidate,
+  layoutNodeGraph,
+  NODE_BOX_HEIGHT,
+  NODE_BOX_WIDTH,
   normalizeChainTopology,
   pageTopologyRows,
   rowEvidence,
   summarizeTopology,
-  GRAPH_ASSUMED_WIDTH,
-  GRAPH_LEGIBLE_HEIGHT,
   type ChainTopologyWorkCounters,
-  type GraphLayout,
+  type NodeBox,
+  type NodeEdge,
+  type NodeLayout,
   type TopologyEdge,
   type TopologyRow,
   type TopologyTarget,
@@ -229,59 +232,117 @@ describe("topology evidence", () => {
   });
 });
 
-describe("connectedSubgraph", () => {
-  it("drops nodes that carry no edge, so an edgeless fleet draws nothing", () => {
-    const topology = normalizeChainTopology(groups(line("a"), line("b"), line("c")), []);
-    expect(topology.graph.nodes).toHaveLength(3);
-    expect(connectedSubgraph(topology.graph).nodes).toEqual([]);
+describe("aggregateNodeGraph", () => {
+  const relay = (uuid: string, node: string, targetHash: string, over: Partial<Line> = {}): Line => line(uuid, {
+    node_id: node, outbound_ref: `to-${targetHash}`, outbound_server: "10.0.0.9", outbound_port: 443, jump_edges: [targetHash], ...over,
+  });
+  const exit = (uuid: string, node: string): Line => line(uuid, { node_id: node, outbound_ref: "direct" });
+  const fleet = (): LineGroup[] => [
+    { node_id: "hub", node_name: "hub-01", lines: [relay("h1", "hub", "e1"), relay("h2", "hub", "e2"), relay("h3", "hub", "e1"), exit("h4", "hub")] },
+    { node_id: "exit-a", node_name: "exit-a", lines: [exit("e1", "exit-a"), exit("e2", "exit-a")] },
+    { node_id: "idle", node_name: "idle", lines: [exit("i1", "idle")] },
+  ];
+
+  it("folds line edges onto node pairs with the count and drops nodes that touch no edge", () => {
+    const groups = fleet();
+    const graph = aggregateNodeGraph(groups, normalizeChainTopology(groups, []));
+    expect(graph.nodes.map((node) => node.id)).toEqual(["hub", "exit-a"]);
+    expect(graph.nodes[0]).toMatchObject({ label: "hub-01", lines: 4, relays: 3, exits: 1, offFleet: false });
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.edges[0]).toMatchObject({ from: "hub", to: "exit-a", count: 3, kind: "discovered_inferred", unresolved: 0 });
+    expect(graph.edges[0].sourceLineUUIDs).toEqual(["h1", "h2", "h3"]);
   });
 
-  it("keeps both ends of every drawn edge", () => {
-    const topology = normalizeChainTopology(groups(line("a"), line("b"), line("c")), [chain({
-      source_line_uuid: "a", status: "converged",
-      current: { target_line_uuid: "b", status: "converged" },
-      observed_downstream_line_uuid: "b",
+  it("keeps the strongest evidence as the pair's kind", () => {
+    const groups = fleet();
+    const topology = normalizeChainTopology(groups, [chain({
+      source_line_uuid: "h1", source_node_id: "hub", status: "converged",
+      current: { target_line_uuid: "e1", status: "converged" }, observed_downstream_line_uuid: "e1",
     })]);
-    const connected = connectedSubgraph(topology.graph);
-    expect(connected.nodes.map((node) => node.lineUUID)).toEqual(["a", "b"]);
-    expect(connected.edges).toHaveLength(1);
+    const [edge] = aggregateNodeGraph(groups, topology).edges;
+    expect(edge).toMatchObject({ count: 3, kind: "verified", kinds: { verified: 1, discovered_inferred: 2 } });
+  });
+
+  it("draws an endpoint no fleet line owns as an off-fleet box named by what the source dials", () => {
+    const groups: LineGroup[] = [{ node_id: "hub", node_name: "hub-01", lines: [relay("h1", "hub", "lh_gone", { outbound_server: "vendor.example.invalid", outbound_port: 8443 })] }];
+    const graph = aggregateNodeGraph(groups, normalizeChainTopology(groups, []));
+    expect(graph.nodes.map((node) => [node.id, node.offFleet])).toEqual([["hub", false], ["off:vendor.example.invalid:8443", true]]);
+    expect(graph.edges[0]).toMatchObject({ to: "off:vendor.example.invalid:8443", unresolved: 1 });
+  });
+
+  it("is not bounded by the per-line drawing cap", () => {
+    const groups = fleet();
+    const graph = aggregateNodeGraph(groups, normalizeChainTopology(groups, [], 1));
+    expect(graph.edges[0].count).toBe(3);
   });
 });
 
-describe("layoutChainGraph", () => {
-  const target = (uuid: string): TopologyTarget => ({ lineUUID: uuid, label: uuid, resolved: true });
-  const link = (from: string, to: string): TopologyEdge => ({ id: `verified:${from}:${to}`, from, to, kind: "verified", targetResolved: true });
+describe("layoutNodeGraph", () => {
+  const box = (id: string): NodeBox => ({ id, label: id, offFleet: false, lines: 1, relays: 1, exits: 0 });
+  const link = (from: string, to: string, count = 1): NodeEdge =>
+    ({ id: `${from}->${to}`, from, to, count, kind: "discovered_inferred", kinds: { discovered_inferred: count }, unresolved: 0, sourceLineUUIDs: [] });
 
-  it("ranks a chain left to right so hops read as hops", () => {
-    const layout = layoutChainGraph([target("a"), target("b"), target("c")], [link("a", "b"), link("b", "c")]);
-    expect(layout.nodes.map((node) => [node.lineUUID, node.rank])).toEqual([["a", 0], ["b", 1], ["c", 2]]);
+  it("ranks a chain left to right so a hop reads as a hop", () => {
+    const layout = layoutNodeGraph({ nodes: [box("a"), box("b"), box("c")], edges: [link("a", "b"), link("b", "c")] });
+    expect(layout.nodes.map((node) => [node.id, node.rank])).toEqual([["a", 0], ["b", 1], ["c", 2]]);
     expect(layout.nodes[0].x).toBeLessThan(layout.nodes[2].x);
-    expect(layout.dropped).toBe(0);
+    expect(layout.ranks).toBe(3);
+    expect(layout.edges[0].x2).toBe(layout.nodes[1].x);
   });
 
-  it("stacks siblings of one rank instead of overlapping them", () => {
-    const layout = layoutChainGraph([target("hub"), target("x"), target("y")], [link("hub", "x"), link("hub", "y")]);
-    const [x, y] = [layout.nodes[1], layout.nodes[2]];
-    expect(x.rank).toBe(1);
-    expect(y.rank).toBe(1);
-    expect(x.y).not.toBe(y.y);
+  it("keeps a rank of twelve in one column and wraps the thirteenth", () => {
+    const exits = Array.from({ length: 13 }, (_, index) => box(`exit-${index.toString().padStart(2, "0")}`));
+    const twelve = layoutNodeGraph({ nodes: [box("hub"), ...exits.slice(0, 12)], edges: exits.slice(0, 12).map((exit) => link("hub", exit.id)) });
+    expect(new Set(twelve.nodes.filter((node) => node.rank === 1).map((node) => node.x)).size).toBe(1);
+    expect(twelve.height).toBe(24 * 2 + 12 * NODE_BOX_HEIGHT + 11 * 14);
+    const layout = layoutNodeGraph({ nodes: [box("hub"), ...exits], edges: exits.map((exit) => link("hub", exit.id)) });
+    const ranked = layout.nodes.filter((node) => node.rank === 1);
+    expect(new Set(ranked.map((node) => node.x)).size).toBe(2);
+    expect(Math.max(...ranked.map((node) => node.y))).toBe(layout.nodes.find((node) => node.id === "exit-11")!.y);
+    expect(layout.height).toBe(24 * 2 + 12 * NODE_BOX_HEIGHT + 11 * 14);
+    expect(layout.width).toBe(24 * 2 + NODE_BOX_WIDTH + 130 + 2 * NODE_BOX_WIDTH + 28);
   });
 
-  it("places a cycle in a trailing column rather than dropping it", () => {
-    const layout = layoutChainGraph([target("a"), target("b")], [link("a", "b"), link("b", "a")]);
+  it("places a cycle in a trailing rank rather than dropping it", () => {
+    const layout = layoutNodeGraph({ nodes: [box("a"), box("b")], edges: [link("a", "b"), link("b", "a")] });
     expect(layout.nodes).toHaveLength(2);
     expect(layout.edges).toHaveLength(2);
   });
 
-  it("reports what it dropped when the graph exceeds the drawing bound", () => {
-    const nodes = Array.from({ length: 12 }, (_, index) => target(`n${index}`));
-    const layout = layoutChainGraph(nodes, [link("n0", "n1")], 5);
-    expect(layout.nodes).toHaveLength(5);
-    expect(layout.dropped).toBe(7);
+  it("lays the production shape out as three ranks that fit a wide console at full scale", () => {
+    const hubs = ["DMIT-1", "DMIT-2", "DMIT-3", "DMIT-4", "hk-turin", "jp-pulse"].map(box);
+    const exits = ["qqpw-cd2", "qqpw-cd3", "att-vds", "frontier-vds", "frontier-nat", "softbank-nat", "vircs"].map(box);
+    const edges = hubs.flatMap((hub) => exits.map((exit) => link(hub.id, exit.id, 2)));
+    const cd = [box("mkcloud"), box("eb-wee"), box("frontier-nat-cd"), box("jp-nat"), box("ca-nat"), box("att-cd")];
+    edges.push(link("mkcloud", "eb-wee"), link("mkcloud", "jp-nat"), link("mkcloud", "ca-nat"), link("mkcloud", "att-cd"), link("eb-wee", "frontier-nat-cd"));
+    const layout = layoutNodeGraph({ nodes: [...hubs, ...exits, ...cd], edges });
+    expect(layout.ranks).toBe(3);
+    expect(layout.edges).toHaveLength(47);
+    const fit = fitNodeLayout(layout, 1995);
+    expect(fit.scale).toBe(1);
+    expect(fit.overflow).toBe(false);
   });
 });
 
-const NOTHING_DRAWN = { edges: 0, legible: false };
+describe("fitNodeLayout", () => {
+  const layout = (width: number): NodeLayout => ({ nodes: [], edges: [], width, height: 200, ranks: 1 });
+
+  it("draws at full scale when the panel is wide enough", () => {
+    expect(fitNodeLayout(layout(900), 1000)).toEqual({ scale: 1, overflow: false, renderWidth: 900, renderHeight: 200 });
+  });
+
+  it("scales down to the floor and then scrolls rather than refusing", () => {
+    expect(fitNodeLayout(layout(1200), 1000)).toMatchObject({ scale: 1000 / 1200, overflow: false, renderWidth: 1000 });
+    const wide = fitNodeLayout(layout(4000), 1000);
+    expect(wide.scale).toBe(GRAPH_MIN_SCALE);
+    expect(wide.overflow).toBe(true);
+    expect(wide.renderWidth).toBe(3000);
+  });
+
+  it("treats an unmeasured panel as full scale", () => {
+    expect(fitNodeLayout(layout(4000), 0)).toMatchObject({ scale: 1, overflow: false });
+  });
+});
 
 describe("diagnoseTopologyAbsence", () => {
   const relay = (uuid: string, over: Partial<Line> = {}) => line(uuid, {
@@ -292,12 +353,12 @@ describe("diagnoseTopologyAbsence", () => {
     const nameless = line("x");
     nameless.line_uuid = undefined;
     const topology = normalizeChainTopology(groups(nameless), []);
-    expect(diagnoseTopologyAbsence(groups(nameless), topology, NOTHING_DRAWN)).toMatchObject({ reason: "no_identity", relayCandidates: 0 });
+    expect(diagnoseTopologyAbsence(groups(nameless), topology, 0)).toMatchObject({ reason: "no_identity", relayCandidates: 0 });
   });
 
   it("reports no_relay when every outbound on the fleet is direct", () => {
     const fleet = groups(line("a", { outbound_ref: "direct" }), line("b"));
-    expect(diagnoseTopologyAbsence(fleet, normalizeChainTopology(fleet, []), NOTHING_DRAWN))
+    expect(diagnoseTopologyAbsence(fleet, normalizeChainTopology(fleet, []), 0))
       .toMatchObject({ reason: "no_relay", relayCandidates: 0, unmatchedUpstreams: [] });
   });
 
@@ -307,7 +368,7 @@ describe("diagnoseTopologyAbsence", () => {
       relay("b", { outbound_server: "vendor-b.example.invalid" }),
       relay("c", { outbound_server: "vendor-a.example.invalid" }),
     );
-    expect(diagnoseTopologyAbsence(fleet, normalizeChainTopology(fleet, []), NOTHING_DRAWN)).toEqual({
+    expect(diagnoseTopologyAbsence(fleet, normalizeChainTopology(fleet, []), 0)).toEqual({
       reason: "upstream_off_fleet",
       relayCandidates: 3,
       unmatchedUpstreams: ["vendor-a.example.invalid:443", "vendor-b.example.invalid:443"],
@@ -316,21 +377,8 @@ describe("diagnoseTopologyAbsence", () => {
 
   it("does not count a relay whose upstream already resolved as unmatched", () => {
     const fleet = groups(relay("a", { jump_edges: ["a"] }));
-    expect(diagnoseTopologyAbsence(fleet, normalizeChainTopology(fleet, []), { edges: 1, legible: true }))
+    expect(diagnoseTopologyAbsence(fleet, normalizeChainTopology(fleet, []), 1))
       .toMatchObject({ reason: "drawn", relayCandidates: 1, unmatchedUpstreams: [] });
-  });
-
-  it("calls a drawing that exists but cannot be read too dense, not absent", () => {
-    const fleet = groups(relay("a", { jump_edges: ["b"] }), line("b"));
-    expect(diagnoseTopologyAbsence(fleet, normalizeChainTopology(fleet, []), { edges: 1, legible: false }))
-      .toMatchObject({ reason: "too_dense" });
-  });
-
-  it("separates edges that exist but fall outside the drawing from edges that do not exist", () => {
-    const fleet = groups(relay("a", { jump_edges: ["b"] }), line("b"));
-    const topology = normalizeChainTopology(fleet, []);
-    expect(topology.edges.length).toBe(1);
-    expect(diagnoseTopologyAbsence(fleet, topology, NOTHING_DRAWN)).toMatchObject({ reason: "beyond_cap" });
   });
 
   it("treats a relay with no resolvable server or port as a direct exit", () => {
@@ -378,33 +426,5 @@ describe("chainTargetRejection", () => {
   it("refuses a merely managed line that is not a rolled-out overlay", () => {
     expect(chainTargetRejection(line("target", { managed: true, node_id: "node-target" }), "node-source"))
       .toBe("not_reality_vless");
-  });
-});
-
-describe("isGraphLegible", () => {
-  const layout = (over: Partial<GraphLayout>): GraphLayout =>
-    ({ nodes: [{ lineUUID: "a", label: "a", resolved: true, rank: 0, x: 0, y: 0 }], edges: [], width: 100, height: 100, dropped: 0, ...over });
-
-  it("draws a graph that fits the readable box", () => {
-    expect(isGraphLegible(layout({}))).toBe(true);
-    expect(isGraphLegible(layout({ width: GRAPH_ASSUMED_WIDTH, height: GRAPH_LEGIBLE_HEIGHT }))).toBe(true);
-  });
-
-  /* Scaled to fit, a 62-rank relay graph renders 12px labels under a pixel. */
-  it("refuses a graph too wide or too tall to read once scaled to fit", () => {
-    expect(isGraphLegible(layout({ width: GRAPH_ASSUMED_WIDTH + 1 }))).toBe(false);
-    expect(isGraphLegible(layout({ height: GRAPH_LEGIBLE_HEIGHT + 1 }))).toBe(false);
-    expect(isGraphLegible(layout({ width: 18524, height: 2602 }))).toBe(false);
-  });
-
-  /* A wider console gets to draw a wider graph; the bound is measured, not assumed. */
-  it("uses the measured width when the caller supplies one", () => {
-    expect(isGraphLegible(layout({ width: 1124 }), 1310)).toBe(true);
-    expect(isGraphLegible(layout({ width: 1124 }), 900)).toBe(false);
-  });
-
-  it("refuses an empty graph", () => {
-    expect(isGraphLegible(layout({ nodes: [] }))).toBe(false);
-    expect(isGraphLegible(layout({ nodes: [] }), 4000)).toBe(false);
   });
 });

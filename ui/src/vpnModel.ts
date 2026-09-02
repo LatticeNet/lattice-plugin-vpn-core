@@ -33,6 +33,9 @@ export interface Line {
   // predate the probe.
   service_state?: string;
   service_checked_at?: string;
+  // The probe's own account when the state is not running: the refused
+  // candidate and the rule it failed, or the command that could not run.
+  service_note?: string;
 }
 
 export interface LineGroup {

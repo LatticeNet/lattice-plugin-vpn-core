@@ -20,7 +20,7 @@
  * Never imported by src/; the shipped bundle is built from index.html alone.
  */
 
-export type Scenario = "production" | "offfleet" | "rich" | "dense" | "empty" | "failing";
+export type Scenario = "production" | "hubs" | "offfleet" | "rich" | "dense" | "empty" | "failing";
 
 const NODE_NAMES = [
   "hkg-edge-01", "hkg-edge-02", "sin-edge-01", "sin-edge-02", "nrt-edge-01",
@@ -51,6 +51,7 @@ interface FixtureLine {
   declared_jump_edges?: string[]; overlay?: boolean; overlay_status?: string;
   overlay_user?: string; metadata?: Record<string, string>; user_count: number;
   user_known: boolean; status?: string; last_error?: string;
+  service_state?: string; service_checked_at?: string; service_note?: string;
 }
 
 /** "dense" is "rich" with the relay density turned up; everything else matches. */
@@ -125,6 +126,138 @@ function buildLines(scenario: Scenario): Array<{ node_id: string; node_name: str
     made += 1;
   }
   return groups;
+}
+
+/**
+ * The relay fleet the owner actually runs, at the shape the wire reports it
+ * (2026-09-02: 25 nodes, 138 lines, 101 relay edges, nothing managed, no
+ * liveness reported). Six hubs each carry the same bank of twelve VLESS
+ * relays onto seven exits; the two gomami minis carry a second Trojan bank;
+ * on the [cd] side one node fans out to four named endpoints, one of which
+ * relays again. This is the fixture the topology drawing is judged against.
+ */
+const HUB_EXITS: Array<{ node: string; host: string; ports: [number, number] }> = [
+  { node: "[Metix]-qqpw-cd2-VDS", host: "72.253.152.126", ports: [53591, 53592] },
+  { node: "[Metix]-qqpw-cd3-VDS", host: "72.253.152.48", ports: [42739, 42740] },
+  { node: "[Metix]-Aaitr-ATT-VDS", host: "108.202.51.182", ports: [29555, 29556] },
+  { node: "[Metix]-Aaitr-Frontier-VDS", host: "47.178.47.100", ports: [60295, 60296] },
+  { node: "[Metix]-Aaitr-Frontier-NAT", host: "nat-us-28tz.aproxy.top", ports: [22918, 0] },
+  { node: "[Metix]-Aaitr-jp-softbank-NAT", host: "nat-jp-3h8e.aproxy.top", ports: [17380, 0] },
+  { node: "[Metix]-VIRCS-ATT-VDS", host: "12.22.163.232", ports: [34656, 34657] },
+];
+const HUBS: Array<{ node: string; trojan: boolean; own: Array<[string, string, number]> }> = [
+  { node: "[Metix]-DMIT-1", trojan: false, own: [["VLESS-REALITY-32426.json", "vless", 32426]] },
+  { node: "[Metix]-DMIT-2", trojan: false, own: [["VLESS-REALITY-61346.json", "vless", 61346]] },
+  { node: "[Metix]-DMIT-3", trojan: false, own: [["VLESS-REALITY-52714.json", "vless", 52714]] },
+  { node: "[Metix]-DMIT-4", trojan: false, own: [["VLESS-REALITY-64768.json", "vless", 64768]] },
+  { node: "[Metix]-gomami-hk-turin-mini", trojan: true, own: [["VLESS-REALITY-8468.json", "vless", 8468], ["Trojan-8469.json", "trojan", 8469]] },
+  { node: "[Metix]-gomami-jp-pulse-mini", trojan: true, own: [["VLESS-REALITY-52971.json", "vless", 52971], ["Trojan-52972.json", "trojan", 52972]] },
+];
+const CD_EXITS: Array<{ node: string; lines: Array<[string, string, number]> }> = [
+  { node: "[cd]-Aaitr-ATT-VDS", lines: [["VLESS-REALITY-57289.json", "vless", 57289]] },
+  { node: "[cd]-Aaitr-Frontier-NAT", lines: [["VLESS-REALITY-7899.json", "vless", 7899]] },
+  { node: "[cd]-huoshan-shanghai", lines: [["VLESS-REALITY-34099.json", "vless", 34099]] },
+  { node: "[cd]-LegendVPS-SG-EVO", lines: [["VLESS-REALITY-17891.json", "vless", 17891], ["Hysteria2-17892.json", "hysteria2", 17892]] },
+  { node: "[cd]-Akkocloud-UK-London-KVM", lines: [["VLESS-REALITY-62962.json", "vless", 62962]] },
+  { node: "[cd]-gomami-jpn-pulse-nano", lines: [["Hysteria2-13434.json", "hysteria2", 13434], ["VLESS-REALITY-16051.json", "vless", 16051]] },
+  { node: "[cd]-DMIT-pro-malibu", lines: [["Hysteria2-17892.json", "hysteria2", 17892], ["VLESS-REALITY-17893.json", "vless", 17893]] },
+  { node: "[cd]-qqpw-VDS-cd1", lines: [["VLESS-REALITY-62255.json", "vless", 62255]] },
+  { node: "[cd]-xuezhang-jp-NAT", lines: [["VLESS-REALITY-488.json", "vless", 488], ["Hysteria2-7890.json", "hysteria2", 7890]] },
+  { node: "[cd]-xuezhang-ca-NAT", lines: [["VLESS-REALITY-50981.json", "vless", 50981]] },
+];
+
+function buildHubFleet(): Array<{ node_id: string; node_name: string; lines: FixtureLine[] }> {
+  const groups = new Map<string, { node_id: string; node_name: string; lines: FixtureLine[] }>();
+  let made = 0;
+  const group = (name: string) => {
+    const id = `node-${name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
+    return groups.get(id) ?? groups.set(id, { node_id: id, node_name: name, lines: [] }).get(id)!;
+  };
+  const push = (name: string, line: Omit<FixtureLine, "id" | "line_hash_id" | "line_uuid" | "node_id" | "core" | "source" | "managed" | "user_count" | "user_known" | "status">): FixtureLine => {
+    const target = group(name);
+    const value: FixtureLine = {
+      id: `l${made}`, line_hash_id: `lh_${made.toString().padStart(4, "0")}`, line_uuid: uuid(made + 1),
+      node_id: target.node_id, core: "sing-box", source: "discovery", managed: false,
+      user_count: 1, user_known: true, status: "ok", listen_host: "::",
+      service_state: "unknown", service_checked_at: "2026-09-02T04:39:11Z",
+      service_note: "refused sing-box candidate /etc/sing-box/bin/sing-box (pid 3917185): outside the trusted executable directories (/bin, /sbin, /usr/bin, /usr/sbin, /usr/local/bin, /usr/local/sbin); owned by uid 1001, not root",
+      ...line,
+    };
+    target.lines.push(value);
+    made += 1;
+    return value;
+  };
+  const exitLine = (node: string, name: string, type: string, port: number, host: string) => push(node, {
+    name, type, listen_port: port, public_host: host, domain: type === "vless" ? "www.cloudflare.com" : "", outbound_ref: "direct",
+  });
+
+  // Exits first so their hashes exist when the hubs point at them.
+  const exitHash = new Map<string, string>();
+  for (const exit of HUB_EXITS) {
+    const vless = exitLine(exit.node, `VLESS-REALITY-${exit.ports[0]}.json`, "vless", exit.ports[0], exit.host);
+    exitHash.set(`${exit.node}:vless`, vless.line_hash_id);
+    if (exit.ports[1]) {
+      const hy2 = exitLine(exit.node, `Hysteria2-${exit.ports[1]}.json`, "hysteria2", exit.ports[1], exit.host);
+      exitHash.set(`${exit.node}:hy2`, hy2.line_hash_id);
+    }
+  }
+  const cdHash = new Map<string, string>();
+  for (const exit of CD_EXITS) {
+    for (const [name, type, port] of exit.lines) {
+      const line = exitLine(exit.node, name, type, port, `${exit.node.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.roobli.invalid`);
+      cdHash.set(`${exit.node}:${port}`, line.line_hash_id);
+    }
+  }
+
+  // The bank: twelve relays per hub, two per exit (vless then hy2), one for a NAT exit.
+  for (const hub of HUBS) {
+    const host = `${hub.node.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.dmit.invalid`;
+    for (const protocol of hub.trojan ? ["vless", "trojan"] : ["vless"]) {
+      let port = protocol === "vless" ? 31001 : 41001;
+      for (const exit of HUB_EXITS) {
+        const slots: Array<["vless" | "hy2", number]> = exit.ports[1] ? [["vless", exit.ports[0]], ["hy2", exit.ports[1]]] : [["vless", exit.ports[0]]];
+        for (const [slot, targetPort] of slots) {
+          const short = exit.node.replace("[Metix]-", "").toLowerCase().replace(/-vds$|-nat$/, (m) => m);
+          push(hub.node, {
+            name: `${protocol === "vless" ? "VLESS-REALITY" : "Trojan"}-${port}.json`, type: protocol, listen_port: port, public_host: host,
+            domain: protocol === "vless" ? "www.cloudflare.com" : "",
+            outbound_ref: `[openjobs]-${short}-${slot}`, outbound_server: exit.host, outbound_port: targetPort,
+            jump_edges: [exitHash.get(`${exit.node}:${slot}`)!],
+          });
+          port += 1;
+        }
+      }
+    }
+    for (const [name, type, port] of hub.own) exitLine(hub.node, name, type, port, host);
+  }
+
+  // The [cd] side: eb-wee relays once, mkcloud fans out four ways, one of them onto eb-wee.
+  const ebWee = "[cd]-DMIT-eb-wee";
+  exitLine(ebWee, "VLESS-REALITY-17891.json", "vless", 17891, "eb-wee.dmit.roobli.invalid");
+  exitLine(ebWee, "Hysteria2-17892.json", "hysteria2", 17892, "eb-wee.dmit.roobli.invalid");
+  const ebWeeRelay = push(ebWee, {
+    name: "VLESS-REALITY-17893.json", type: "vless", listen_port: 17893, public_host: "eb-wee.dmit.roobli.invalid", domain: "www.cloudflare.com",
+    outbound_ref: "out-to-aaitr-frontier-nat-vless-7899", outbound_server: "nat-us-28tz.aproxy.top", outbound_port: 25499,
+    jump_edges: [cdHash.get("[cd]-Aaitr-Frontier-NAT:7899")!],
+  });
+  const mkcloud = "[cd]-mkcloud-hr-iplc";
+  exitLine(mkcloud, "VLESS-REALITY-17890.json", "vless", 17890, "hr.mkcloud.roobli.invalid");
+  const fan: Array<[string, string, string, number, string]> = [
+    ["VLESS-REALITY-17891.json", "forward-to-xuezhang-jp-nat-vless", "jp.nat.xuezhang.roobli.invalid", 50100, cdHash.get("[cd]-xuezhang-jp-NAT:488")!],
+    ["VLESS-REALITY-17893.json", "[cdcd]-aaitr-frontier-nat-HOME_vless", "eb-wee.dmit.roobli.invalid", 17893, ebWeeRelay.line_hash_id],
+    ["VLESS-REALITY-17897.json", "[cdcd]-xuezhang-ca-nat-HOME_vless", "ca.nat.xuezhang.roobli.invalid", 50981, cdHash.get("[cd]-xuezhang-ca-NAT:50981")!],
+    ["VLESS-REALITY-17898.json", "[cdcd]-aaitr-ATT-vds-HOME_vless", "att.aaitr.roobli.invalid", 57289, cdHash.get("[cd]-Aaitr-ATT-VDS:57289")!],
+  ];
+  fan.forEach(([name, ref, server, port, hash], index) => push(mkcloud, {
+    name, type: "vless", listen_port: 17891 + index * 2, public_host: "hr.mkcloud.roobli.invalid", domain: "www.cloudflare.com",
+    outbound_ref: ref, outbound_server: server, outbound_port: port, jump_edges: [hash],
+  }));
+
+  // One inbound with no outbound at all: the orphan production carries today.
+  const stray = groups.get(group("[Metix]-gomami-jp-pulse-mini").node_id)!.lines.find((line) => line.name === "VLESS-REALITY-52971.json")!;
+  stray.outbound_ref = "";
+
+  return [...groups.values()];
 }
 
 function buildChains(scenario: Scenario) {
@@ -264,7 +397,7 @@ function buildUsage(scenario: Scenario) {
 }
 
 export function handlers(scenario: Scenario): Record<string, (payload: any) => unknown> {
-  const groups = buildLines(scenario);
+  const groups = scenario === "hubs" ? buildHubFleet() : buildLines(scenario);
   const chains = buildChains(scenario);
   const flat = groups.flatMap((group) => group.lines);
   return {

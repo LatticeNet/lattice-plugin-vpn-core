@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import {
   Activity,
+  ChevronRight,
   CircleAlert,
   Gauge,
   KeyRound,
@@ -20,6 +21,7 @@ import {
 } from "@lucide/vue";
 
 import { BridgeClient, canCall, type HostInit } from "./bridge";
+import { attentionItems, buildNodeRows, lineRole, summarizeFleet, type AttentionItem, type Bank, type NodeRow, type ServiceVerdict } from "./fleetRows";
 import LineChainWorkspace from "./LineChainWorkspace.vue";
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
@@ -38,12 +40,10 @@ import {
   pageRows,
   rolloutSummaryLine,
   safeErrorMessage,
-  sortLineRows,
   unresolvedOverlayDefs,
   usageByLine,
   quotaBytesFromInput,
   type Line,
-  type LineRow,
   type LineSortKey,
   type SortDirection,
   type LineChain,
@@ -184,68 +184,134 @@ const routeMeta = computed(() => ({
   usage: { title: "Usage", description: "Traffic accounting by user and reporting node.", icon: Gauge },
 }[route.value] ?? { title: "VPN Core", description: "sing-box management", icon: Radar }));
 const visibleLineGroups = computed(() => filterLineGroups(lines.value, search.value));
-const matchedLines = computed<LineRow[]>(() => visibleLineGroups.value.flatMap((group) => group.lines.map((line) => ({
-  group,
-  line,
-}))));
+// ── lenses over one dataset ──────────────────────────────────────────────
+// Fleet is nodes with their lines folded underneath; Topology is the node
+// graph with the canonical chain table; Attention is every claim the page can
+// prove that needs a hand. All three read the same `lines` and `chains`.
+type Lens = "fleet" | "topology" | "attention";
+/* The plugin document's own query string can open a lens or a node, so a
+ * host, a reviewer or an agent can deep-link a state (`?lens=topology`,
+ * `?expand=<node_id>`). Production loads the document without a query today;
+ * nothing here depends on one being present. */
+const documentQuery = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
+const LENSES: readonly Lens[] = ["fleet", "topology", "attention"];
+const requestedLens = documentQuery.get("lens");
+const lens = ref<Lens>(LENSES.includes(requestedLens as Lens) ? (requestedLens as Lens) : "fleet");
+const fleetSummary = computed(() => summarizeFleet(lines.value));
+const nodeRows = computed(() => buildNodeRows(visibleLineGroups.value));
+const attention = computed(() => attentionItems(lines.value));
+const attentionErrors = computed(() => attention.value.filter((item) => item.severity === "error").length);
+const searching = computed(() => search.value.trim().length > 0);
 
-// ── line table ordering and paging ───────────────────────────────────────
-// 111 rows in server order is a list. The header sorts; the sort is stable and
-// survives a background refresh because it is derived, not stored on the rows.
-const sortKey = ref<LineSortKey | "">("");
-const sortDirection = ref<SortDirection>("asc");
-/** The whole matching set, sorted. Everything the page reports counts this. */
-const visibleLines = computed(() => sortLineRows(matchedLines.value, sortKey.value, sortDirection.value));
+/* 25 node rows is one screen and, today, the whole fleet. Lines open under a
+ * node on demand, so the painted area stays a page rather than a scroll. */
+const NODE_PAGE_SIZE = 25;
+const nodePage = ref(1);
+const nodePageData = computed(() => pageRows(nodeRows.value, nodePage.value, NODE_PAGE_SIZE));
+watch(search, () => { nodePage.value = 1; });
 
-/**
- * Why the fleet table pages at all.
- *
- * Printing 111 rows of this weight in one patch left the renderer unable to
- * present a single animation frame for thirty seconds: the DOM and layout were
- * done inside a second, and then nothing reached the screen. A page of 50 is
- * the same table at a size the compositor can actually put up.
- *
- * The slice is cut from `visibleLines`, which is already searched and sorted,
- * so the search, the header sort and every count on this page speak for all
- * 111 rows and not for the fifty on screen.
- */
-const LINE_PAGE_SIZE = 50;
-const linePage = ref(1);
-const linePageData = computed(() => pageRows(visibleLines.value, linePage.value, LINE_PAGE_SIZE));
-// A new search or a new sort order makes the current page meaningless, so it
-// goes back to the first one rather than stranding the operator mid-list.
-watch([search, sortKey, sortDirection], () => { linePage.value = 1; });
+const expandedNodes = ref(new Set<string>(documentQuery.getAll("expand").filter(Boolean)));
+const expandedBanks = ref(new Set<string>(documentQuery.getAll("bank").filter(Boolean)));
+function toggled(current: Set<string>, key: string): Set<string> {
+  const next = new Set(current);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
+function toggleNode(nodeID: string): void {
+  expandedNodes.value = toggled(expandedNodes.value, nodeID);
+}
+function toggleBank(key: string): void {
+  expandedBanks.value = toggled(expandedBanks.value, key);
+}
+/* A search opens every matching node, because the operator asked for lines,
+ * not for nodes; without a search a node opens only when asked. */
+function nodeOpen(row: NodeRow): boolean {
+  return searching.value || expandedNodes.value.has(row.group.node_id);
+}
+function bankOpen(bank: Bank): boolean {
+  return expandedBanks.value.has(bank.key);
+}
 
-const LINE_COLUMNS: Array<{ key: LineSortKey | ""; label: string; numeric?: boolean }> = [
-  { key: "node", label: "Node" },
-  { key: "line", label: "Line" },
-  { key: "core", label: "Core" },
-  { key: "", label: "Source" },
-  { key: "ownership", label: "Ownership" },
-  { key: "endpoint", label: "Endpoint" },
-  { key: "", label: "Reality SNI" },
-  { key: "users", label: "Users", numeric: true },
-  { key: "", label: "Outbound ref" },
-  { key: "status", label: "Status" },
-];
+type FleetEntry = { kind: "bank"; bank: Bank } | { kind: "line"; line: Line; bank?: Bank };
+function fleetEntries(row: NodeRow): FleetEntry[] {
+  const entries: FleetEntry[] = [];
+  for (const bank of row.banks) {
+    entries.push({ kind: "bank", bank });
+    if (bankOpen(bank)) for (const line of bank.lines) entries.push({ kind: "line", line, bank });
+  }
+  for (const line of row.singles) entries.push({ kind: "line", line });
+  return entries;
+}
 
-function toggleSort(key: LineSortKey): void {
-  if (sortKey.value === key) {
-    sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
+const nodeNames = computed(() => new Map(lines.value.map((group) => [group.node_id, group.node_name || group.node_id])));
+function nodeNameOf(id: string): string {
+  return nodeNames.value.get(id) ?? id;
+}
+function bankTargets(bank: Bank): string {
+  const names = bank.targetNodeIDs.map(nodeNameOf);
+  const shown = names.slice(0, 3).join(", ");
+  const rest = names.length > 3 ? ` and ${names.length - 3} more` : "";
+  const off = bank.offFleet ? `${names.length ? "; " : ""}${bank.offFleet} off-fleet` : "";
+  return `${shown}${rest}${off}` || "no resolved target";
+}
+function roleLabel(line: Line): string {
+  const role = lineRole(line);
+  if (role === "orphan") return "no outbound";
+  return role;
+}
+function serviceLabel(verdict: ServiceVerdict): string {
+  return ({
+    running: "running",
+    down: "down",
+    restarting: "restarting",
+    partial: "partly reported",
+    unknown: "not reported",
+  } as const)[verdict];
+}
+function serviceTone(verdict: ServiceVerdict): "healthy" | "warning" | "error" | "neutral" {
+  return ({ running: "healthy", down: "error", restarting: "warning", partial: "warning", unknown: "neutral" } as const)[verdict];
+}
+function lineServiceLabel(line: Line): string {
+  const state = (line.service_state ?? "").trim();
+  return state && state !== "unknown" ? state : "not reported";
+}
+
+/* The proof line: when the page last heard from the control plane. The
+ * plugin holds no timer (refreshPolicy.test.ts guards that), so the time is
+ * absolute and the label is true for as long as the tab is open. */
+const refreshedAt = ref<number>();
+const observedAtLabel = computed(() => {
+  if (!refreshedAt.value) return "";
+  const date = new Date(refreshedAt.value);
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+});
+const livenessLine = computed(() => {
+  const service = fleetSummary.value.service;
+  if (!service.reported) return "liveness not reported by any node";
+  const parts = [`${service.running} running`];
+  if (service.down) parts.push(`${service.down} down`);
+  if (service.restarting) parts.push(`${service.restarting} restarting`);
+  if (service.unknown) parts.push(`${service.unknown} not reported`);
+  return `liveness: ${parts.join(", ")}`;
+});
+
+function attentionRow(item: AttentionItem): { group: LineGroup; line: Line } | undefined {
+  if (!item.lineHashID) return undefined;
+  for (const group of lines.value) {
+    const line = group.lines.find((value) => value.line_hash_id === item.lineHashID);
+    if (line) return { group, line };
+  }
+  return undefined;
+}
+function openAttention(item: AttentionItem): void {
+  if (item.action === "rollout") {
+    openRollout();
     return;
   }
-  sortKey.value = key;
-  sortDirection.value = "asc";
-}
-
-function ariaSort(key: LineSortKey | ""): "ascending" | "descending" | "none" {
-  if (!key || sortKey.value !== key) return "none";
-  return sortDirection.value === "asc" ? "ascending" : "descending";
-}
-
-function sortMark(key: LineSortKey | ""): string {
-  if (!key || sortKey.value !== key) return "\u2195";
-  return sortDirection.value === "asc" ? "\u2191" : "\u2193";
+  const found = attentionRow(item);
+  if (found) void openLineDetails(found.group, found.line);
 }
 const allLines = computed(() => lines.value.flatMap((group) => group.lines));
 const healthyLines = computed(() => allLines.value.filter((line) => lineStatus(line) === "healthy").length);
@@ -402,6 +468,7 @@ async function loadCurrent(background = false): Promise<void> {
         break;
       }
     }
+    refreshedAt.value = Date.now();
   } catch (cause) {
     error.value = safeErrorMessage(cause, "This page could not be loaded, and nothing came back to say why.");
   } finally {
@@ -1012,16 +1079,36 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else-if="route === 'lines'">
-      <section class="summary-strip" aria-label="Line summary" :style="{ '--stat-count': canReadManaged ? 5 : 4 }">
-        <div><span>Total lines</span><strong>{{ allLines.length }}</strong></div>
-        <div><span>Not reporting a problem</span><strong>{{ healthyLines }}</strong><small>{{ allLines.length - healthyLines }} reporting an error or still pending</small></div>
-        <div :data-tone="allLines.length && !managedLines ? 'warning' : undefined"><span>Lattice-managed lines</span><strong>{{ managedLines }}</strong><small>{{ allLines.length - managedLines }} observed only</small></div>
-        <div><span>Nodes</span><strong>{{ lines.length }}</strong></div>
-        <div v-if="canReadManaged" :data-tone="overlayStats.total && !overlayStats.covered ? 'warning' : undefined"><span>Nodes carrying a managed line</span><strong>{{ overlayStats.covered }} / {{ overlayStats.total }}</strong><small>{{ overlayStats.total - overlayStats.covered }} without one</small></div>
+      <p class="proof-line" aria-live="polite">
+        <span v-if="refreshedAt">observed at {{ observedAtLabel }}</span>
+        <span v-else>not observed yet</span>
+        <span>· {{ fleetSummary.nodes }} {{ fleetSummary.nodes === 1 ? 'node reports' : 'nodes report' }}</span>
+        <span>· {{ livenessLine }}</span>
+        <span v-if="refreshing">· refreshing</span>
+      </p>
+      <section class="summary-strip" aria-label="Line summary" style="--stat-count: 5">
+        <div><span>Lines</span><strong>{{ fleetSummary.lines }}</strong><small>{{ fleetSummary.configErrors ? `${fleetSummary.configErrors} reporting a config error` : 'none reporting a config error' }}</small></div>
+        <div :data-tone="fleetSummary.lines && !fleetSummary.managed ? 'warning' : undefined"><span>Lattice-managed</span><strong>{{ fleetSummary.managed }}</strong><small>{{ fleetSummary.lines - fleetSummary.managed }} discovered only</small></div>
+        <div><span>Roles</span><strong>{{ fleetSummary.relays }} relay · {{ fleetSummary.exits }} exit</strong><small>{{ fleetSummary.orphans ? `${fleetSummary.orphans} with no outbound` : 'every line has an outbound' }}</small></div>
+        <div><span>Nodes</span><strong>{{ fleetSummary.nodes }}</strong><small v-if="canReadManaged">{{ overlayStats.covered }} of {{ overlayStats.total }} carry a managed line</small></div>
+        <div :data-tone="fleetSummary.service.down ? 'error' : fleetSummary.service.reported ? undefined : 'neutral'">
+          <span>Service</span>
+          <strong v-if="fleetSummary.service.reported">{{ fleetSummary.service.running }} running<template v-if="fleetSummary.service.down"> · {{ fleetSummary.service.down }} down</template></strong>
+          <strong v-else>not reported</strong>
+          <small v-if="fleetSummary.service.reported">{{ fleetSummary.service.unknown ? `${fleetSummary.service.unknown} lines not reported` : 'every line reported' }}</small>
+          <small v-else>config verdict only; the probe ships with agent 0.3.9</small>
+        </div>
       </section>
       <section class="toolbar">
-        <input v-model="search" class="search-input" type="search" aria-label="Search lines" placeholder="Search node, line, status, outbound or error" />
-        <span v-if="search.trim()" class="permission-note">{{ visibleLines.length }} of {{ allLines.length }} lines match</span>
+        <div class="lens-switch" role="tablist" aria-label="Lines lens">
+          <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'fleet'" @click="lens = 'fleet'">Fleet</button>
+          <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'topology'" @click="lens = 'topology'">Topology</button>
+          <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'attention'" @click="lens = 'attention'">
+            Attention<span v-if="attention.length" class="lens-count" :data-tone="attentionErrors ? 'error' : 'neutral'">{{ attention.length }}</span>
+          </button>
+        </div>
+        <input v-model="search" class="search-input" type="search" aria-label="Search lines" placeholder="Search node, line, endpoint, outbound or error" />
+        <span v-if="searching" class="permission-note">{{ nodeRows.length }} of {{ lines.length }} nodes match</span>
         <span class="toolbar-spacer" />
         <button v-if="canRollout" class="button button-primary" type="button" @click="openRollout"><Plus :size="15" /> Roll out managed lines</button>
       </section>
@@ -1034,38 +1121,89 @@ onBeforeUnmount(() => {
           <span v-else-if="def.status === 'planned'" class="muted">awaiting approval</span>
         </div>
       </section>
-      <section class="data-panel fleet-panel">
+
+      <section v-if="lens === 'fleet'" class="data-panel fleet-panel" role="tabpanel">
         <header class="panel-header">
-          <div><h2>Fleet lines</h2><p>Every inbound the control plane can see, whether Lattice owns it or only observes it.</p></div>
-          <span class="count">{{ visibleLines.length }} {{ visibleLines.length === 1 ? 'line' : 'lines' }}</span>
+          <div><h2>Fleet</h2><p>Every node that reports an inbound, with its lines folded underneath. A bank is a set of relay lines of one protocol that all dial out.</p></div>
+          <span class="count">{{ nodeRows.length }} {{ nodeRows.length === 1 ? 'node' : 'nodes' }} · {{ fleetSummary.lines }} lines</span>
         </header>
-        <div v-if="visibleLines.length" class="table-wrap"><table>
+        <div v-if="nodeRows.length" class="table-wrap"><table class="fleet-table">
           <thead><tr>
-            <th v-for="column in LINE_COLUMNS" :key="column.label" :aria-sort="ariaSort(column.key)" :class="{ num: column.numeric }">
-              <button v-if="column.key" class="sort-button" type="button" @click="toggleSort(column.key as LineSortKey)">
-                {{ column.label }}<span class="sort-mark" aria-hidden="true">{{ sortMark(column.key) }}</span>
-              </button>
-              <template v-else>{{ column.label }}</template>
-            </th>
+            <th class="fleet-name">Node / line</th>
+            <th>Role</th>
+            <th>Core</th>
+            <th>Ownership</th>
+            <th>Endpoint</th>
+            <th>Reality SNI</th>
+            <th class="num">Users</th>
+            <th>Outbound</th>
+            <th>Config</th>
+            <th>Service</th>
             <th v-if="canViewLineDetails" class="actions-cell">Actions</th>
           </tr></thead>
-          <tbody><tr v-for="{ group, line } in linePageData.rows" :key="line.line_hash_id">
-            <td><strong :title="group.node_name || group.node_id">{{ group.node_name || group.node_id }}</strong><small :title="group.node_id">{{ group.node_id }}</small></td>
-            <td><strong :title="line.name">{{ line.name }}</strong><small :title="`${line.type || 'unknown'} / ${line.line_hash_id}`">{{ line.type || 'unknown' }} / {{ line.line_hash_id }}</small></td>
-            <td><span class="badge">{{ line.core || 'unknown' }}</span></td>
-            <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ line.source }}</span></td>
-            <td><span class="badge" :data-tone="line.managed ? 'info' : 'neutral'">{{ lineOwnership(line) }}</span><span v-if="line.overlay" class="badge" :data-tone="overlayTone(line.overlay_status)" :title="line.overlay_user ? `Bound account: ${line.overlay_user}` : 'Lattice-owned overlay line'">lattice-managed</span></td>
-            <td class="mono" :title="`public ${formatLineEndpoint(line)}, listen ${formatLineListen(line)}`">{{ formatLineEndpoint(line) }}<small>listen {{ formatLineListen(line) }}</small></td>
-            <td class="mono" :title="formatLineDomain(line)">{{ formatLineDomain(line) }}</td>
-            <td class="num" :title="line.user_known ? undefined : 'The node did not report a user count for this line'">{{ line.user_known ? line.user_count : 'unknown' }}</td>
-            <td class="mono" :title="line.outbound_ref || undefined">{{ line.outbound_ref || '-' }}<small v-if="line.outbound_server">{{ line.outbound_server }}<span v-if="line.outbound_port">:{{ line.outbound_port }}</span></small></td>
-            <td><span class="status-dot" :data-tone="lineStatus(line)" :title="line.status || (line.last_error ? 'error' : 'not reported')">{{ line.status || (line.last_error ? 'error' : 'not reported') }}</span><span v-if="line.service_state && line.service_state !== 'unknown'" class="badge" :data-tone="lineServiceTone(line)" :title="line.service_checked_at ? `service ${line.service_state}, checked ${line.service_checked_at}` : `service ${line.service_state}`">svc {{ line.service_state }}</span><small v-if="line.last_error" class="error-text" :title="lineErrorText(line)">{{ lineErrorText(line) }}</small></td>
-            <td v-if="canViewLineDetails" class="actions-cell"><button class="button button-secondary button-compact" type="button" @click="openLineDetails(group, line)">Details</button></td>
-          </tr></tbody></table></div>
-        <div v-else-if="search.trim()" class="empty-state">
+          <tbody v-for="row in nodePageData.rows" :key="row.group.node_id" :data-open="nodeOpen(row) ? 'true' : 'false'">
+            <tr class="node-row">
+              <td class="fleet-name">
+                <button class="node-toggle" type="button" :aria-expanded="nodeOpen(row)" :aria-controls="`node-${row.group.node_id}`" @click="toggleNode(row.group.node_id)">
+                  <ChevronRight class="node-chevron" :size="14" aria-hidden="true" />
+                  <strong :title="row.group.node_name || row.group.node_id">{{ row.group.node_name || row.group.node_id }}</strong>
+                </button>
+                <small :title="row.group.node_id">{{ row.group.node_id }}</small>
+              </td>
+              <td colspan="7" class="node-summary">
+                <span>{{ row.lines.length }} {{ row.lines.length === 1 ? 'line' : 'lines' }}</span>
+                <span v-if="row.counts.relays">· {{ row.counts.relays }} relay</span>
+                <span v-if="row.counts.exits">· {{ row.counts.exits }} exit</span>
+                <span v-if="row.counts.orphans" class="error-text">· {{ row.counts.orphans }} with no outbound</span>
+                <span v-if="row.counts.managed">· {{ row.counts.managed }} managed</span>
+                <span v-for="bank in row.banks" :key="bank.key" class="muted">· bank of {{ bank.lines.length }} {{ bank.type }} → {{ bank.targetNodeIDs.length }} {{ bank.targetNodeIDs.length === 1 ? 'node' : 'nodes' }}</span>
+              </td>
+              <td><span class="status-dot" :data-tone="row.config">{{ row.config === 'healthy' ? 'ok' : row.config }}</span></td>
+              <td><span class="badge" :data-tone="serviceTone(row.service)">{{ serviceLabel(row.service) }}</span></td>
+              <td v-if="canViewLineDetails" class="actions-cell" />
+            </tr>
+            <template v-if="nodeOpen(row)">
+              <template v-for="entry in fleetEntries(row)" :key="entry.kind === 'bank' ? entry.bank.key : entry.line.line_hash_id">
+                <tr v-if="entry.kind === 'bank'" class="bank-row" :id="`node-${row.group.node_id}`">
+                  <td class="fleet-name">
+                    <button class="node-toggle bank-toggle" type="button" :aria-expanded="bankOpen(entry.bank)" @click="toggleBank(entry.bank.key)">
+                      <ChevronRight class="node-chevron" :size="14" aria-hidden="true" />
+                      <strong>{{ entry.bank.lines.length }} {{ entry.bank.type }} relays</strong>
+                    </button>
+                    <small class="mono">ports {{ entry.bank.portRange.min }} to {{ entry.bank.portRange.max }}</small>
+                  </td>
+                  <td><span class="badge" data-tone="info">bank</span></td>
+                  <td><span class="badge">{{ entry.bank.lines[0].core || 'unknown' }}</span></td>
+                  <td><span class="badge" data-tone="neutral">{{ lineOwnership(entry.bank.lines[0]) }}</span></td>
+                  <td class="mono">{{ formatLineEndpoint(entry.bank.lines[0]).split(':')[0] }}<small>{{ entry.bank.lines.length }} listeners</small></td>
+                  <td class="mono">{{ formatLineDomain(entry.bank.lines[0]) }}</td>
+                  <td class="num">{{ entry.bank.lines.reduce((sum, line) => sum + (line.user_known ? line.user_count : 0), 0) }}</td>
+                  <td :title="bankTargets(entry.bank)">→ {{ entry.bank.targetNodeIDs.length }} {{ entry.bank.targetNodeIDs.length === 1 ? 'node' : 'nodes' }}<small>{{ bankTargets(entry.bank) }}</small></td>
+                  <td><span class="status-dot" :data-tone="entry.bank.config">{{ entry.bank.config === 'healthy' ? 'ok' : entry.bank.config }}</span></td>
+                  <td><span class="badge" :data-tone="serviceTone(entry.bank.service)">{{ serviceLabel(entry.bank.service) }}</span></td>
+                  <td v-if="canViewLineDetails" class="actions-cell" />
+                </tr>
+                <tr v-else class="line-row" :class="{ 'line-in-bank': !!entry.bank }">
+                  <td class="fleet-name"><strong :title="entry.line.name">{{ entry.line.name }}</strong><small :title="`${entry.line.type || 'unknown'} / ${entry.line.line_hash_id}`">{{ entry.line.type || 'unknown' }} / {{ entry.line.line_hash_id }}</small></td>
+                  <td><span class="badge" :data-tone="lineRole(entry.line) === 'orphan' ? 'error' : 'neutral'">{{ roleLabel(entry.line) }}</span></td>
+                  <td><span class="badge">{{ entry.line.core || 'unknown' }}</span></td>
+                  <td><span class="badge" :data-tone="entry.line.managed ? 'info' : 'neutral'">{{ lineOwnership(entry.line) }}</span><span v-if="entry.line.overlay" class="badge" :data-tone="overlayTone(entry.line.overlay_status)" :title="entry.line.overlay_user ? `Bound account: ${entry.line.overlay_user}` : 'Lattice-owned overlay line'">lattice-managed</span></td>
+                  <td class="mono" :title="`public ${formatLineEndpoint(entry.line)}, listen ${formatLineListen(entry.line)}`">{{ formatLineEndpoint(entry.line) }}<small>listen {{ formatLineListen(entry.line) }}</small></td>
+                  <td class="mono" :title="formatLineDomain(entry.line)">{{ formatLineDomain(entry.line) }}</td>
+                  <td class="num" :title="entry.line.user_known ? undefined : 'The node did not report a user count for this line'">{{ entry.line.user_known ? entry.line.user_count : 'unknown' }}</td>
+                  <td class="mono outbound-cell" :title="entry.line.outbound_ref || undefined">{{ entry.line.outbound_ref || '-' }}<small v-if="entry.line.outbound_server">{{ entry.line.outbound_server }}<span v-if="entry.line.outbound_port">:{{ entry.line.outbound_port }}</span></small></td>
+                  <td><span class="status-dot" :data-tone="lineStatus(entry.line)" :title="entry.line.status || (entry.line.last_error ? 'error' : 'not reported')">{{ entry.line.status || (entry.line.last_error ? 'error' : 'not reported') }}</span><small v-if="entry.line.last_error" class="error-text" :title="lineErrorText(entry.line)">{{ lineErrorText(entry.line) }}</small></td>
+                  <td><span class="badge" :data-tone="lineServiceTone(entry.line)" :title="entry.line.service_checked_at ? `checked ${entry.line.service_checked_at}` : undefined">{{ lineServiceLabel(entry.line) }}</span></td>
+                  <td v-if="canViewLineDetails" class="actions-cell"><button class="button button-secondary button-compact" type="button" @click="openLineDetails(row.group, entry.line)">Details</button></td>
+                </tr>
+              </template>
+            </template>
+          </tbody>
+        </table></div>
+        <div v-else-if="searching" class="empty-state">
           <Radar :size="26" aria-hidden="true" />
           <strong>No line matches that search</strong>
-          <p>Nothing in {{ allLines.length }} lines across {{ lines.length }} nodes matches <span class="mono">{{ search.trim() }}</span>. The search covers node, line name, protocol, host, status, outbound reference and error text.</p>
+          <p>Nothing in {{ fleetSummary.lines }} lines across {{ lines.length }} nodes matches <span class="mono">{{ search.trim() }}</span>. The search covers node, line name, protocol, host, status, outbound reference and error text.</p>
           <div class="empty-actions"><button class="button button-secondary" type="button" @click="search = ''">Clear the search</button></div>
         </div>
         <div v-else class="empty-state">
@@ -1078,14 +1216,50 @@ onBeforeUnmount(() => {
             <li>The node has no inbound configured at all.</li>
           </ol>
         </div>
-        <footer v-if="linePageData.pages > 1" class="table-pagination" aria-label="Fleet lines pagination">
-          <span>Rows {{ linePageData.from }} to {{ linePageData.to }} of {{ linePageData.total }}, searched and sorted across every one of them</span>
-          <button class="button button-secondary button-compact" type="button" :disabled="linePageData.page === 1" @click="linePage = linePageData.page - 1">Previous</button>
-          <span>Page {{ linePageData.page }} of {{ linePageData.pages }}</span>
-          <button class="button button-secondary button-compact" type="button" :disabled="linePageData.page === linePageData.pages" @click="linePage = linePageData.page + 1">Next</button>
+        <footer v-if="nodePageData.pages > 1" class="table-pagination" aria-label="Fleet pagination">
+          <span>Nodes {{ nodePageData.from }} to {{ nodePageData.to }} of {{ nodePageData.total }}, searched across every one of them</span>
+          <button class="button button-secondary button-compact" type="button" :disabled="nodePageData.page === 1" @click="nodePage = nodePageData.page - 1">Previous</button>
+          <span>Page {{ nodePageData.page }} of {{ nodePageData.pages }}</span>
+          <button class="button button-secondary button-compact" type="button" :disabled="nodePageData.page === nodePageData.pages" @click="nodePage = nodePageData.page + 1">Next</button>
         </footer>
       </section>
-      <LineChainWorkspace v-if="canReadChains" :groups="lines" :chains="chains" :can-plan="canPlanChain" :can-remove="canPlanRemoveChain" :busy-sources="busyChainSources" @plan="planLineChain" @remove="planLineChainRemoval" />
+
+      <template v-else-if="lens === 'topology'">
+        <LineChainWorkspace v-if="canReadChains" :groups="lines" :chains="chains" :can-plan="canPlanChain" :can-remove="canPlanRemoveChain" :busy-sources="busyChainSources" @plan="planLineChain" @remove="planLineChainRemoval" />
+        <section v-else class="data-panel" role="tabpanel">
+          <div class="empty-state">
+            <Radar :size="26" aria-hidden="true" />
+            <strong>This session cannot read chains</strong>
+            <p>The topology lens needs <span class="mono">lines.chains</span>, which this session's token does not carry. The fleet lens still shows every line and its outbound.</p>
+          </div>
+        </section>
+      </template>
+
+      <section v-else class="data-panel attention-panel" role="tabpanel">
+        <header class="panel-header">
+          <div><h2>Attention</h2><p>Every claim this page can prove that needs a hand, with the row that proves it and the action that clears it.</p></div>
+          <span class="count">{{ attention.length }} {{ attention.length === 1 ? 'item' : 'items' }}</span>
+        </header>
+        <ol v-if="attention.length" class="attention-list">
+          <li v-for="item in attention" :key="item.key" class="attention-item" :data-severity="item.severity">
+            <span class="status-dot" :data-tone="item.severity === 'error' ? 'error' : item.severity === 'warning' ? 'warning' : 'neutral'">{{ item.severity }}</span>
+            <div class="attention-body">
+              <strong>{{ item.claim }}</strong>
+              <p>{{ item.evidence }}</p>
+            </div>
+            <div class="attention-actions">
+              <button v-if="item.action === 'details' && canViewLineDetails" class="button button-secondary button-compact" type="button" @click="openAttention(item)">Details</button>
+              <button v-else-if="item.action === 'rollout' && canRollout" class="button button-secondary button-compact" type="button" @click="openAttention(item)">Roll out</button>
+              <span v-else-if="item.action === 'profiles'" class="muted">Node Profiles, in the sidebar</span>
+            </div>
+          </li>
+        </ol>
+        <div v-else class="empty-state">
+          <Radar :size="26" aria-hidden="true" />
+          <strong>Nothing needs attention</strong>
+          <p>Every line reports a clean config, every relay resolves to a fleet endpoint, and the lines that report liveness are running.</p>
+        </div>
+      </section>
     </template>
 
     <template v-else-if="route === 'users'">
