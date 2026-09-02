@@ -330,76 +330,294 @@ export function filterTopologyRows(rows: readonly TopologyRow[], filter: RowEvid
 }
 
 /**
- * The part of the bounded graph that is actually a graph.
+ * The drawing's object is the node, not the line.
  *
- * `normalizeChainTopology` bounds the node set so a 10k-line fleet cannot melt
- * the browser, but a node with no edge carries no topology: rendering it draws
- * a label that the canonical table already prints, in nine truncated
- * characters. Only nodes that participate in an edge are drawn.
+ * On the fleet this plugin actually manages, 101 relay lines describe about
+ * fifty node-to-node relationships: six hub nodes each carry an identical bank
+ * of twelve outbounds onto the same seven exits. Drawn per line that is a
+ * hundred boxes and a smear; drawn per node it is a picture an operator can
+ * read in one look, with the line count written on each edge. The canonical
+ * table below the drawing still lists every line, and selecting a box or an
+ * edge narrows the table to the lines behind it.
  */
-export function connectedSubgraph(graph: TopologyGraph): { nodes: TopologyTarget[]; edges: TopologyEdge[] } {
-  const touched = new Set<string>();
-  for (const value of graph.edges) {
-    touched.add(value.from);
-    if (value.to) touched.add(value.to);
-  }
-  return { nodes: graph.nodes.filter((node) => touched.has(node.lineUUID)), edges: [...graph.edges] };
+export interface NodeBox {
+  /** `node_id` for a fleet node; `off:<endpoint>` for an endpoint no fleet line owns. */
+  id: string;
+  label: string;
+  nodeID?: string;
+  offFleet: boolean;
+  /** Lines reported on this node; 0 for an off-fleet endpoint. */
+  lines: number;
+  /** Lines on this node that carry an outbound edge. */
+  relays: number;
+  /** Lines on this node that exit directly. */
+  exits: number;
+  /** Set on a cluster box: the node ids folded into it, in label order. */
+  members?: string[];
 }
 
-export interface GraphLayoutNode extends TopologyTarget {
+export interface NodeEdge {
+  id: string;
+  from: string;
+  to: string;
+  /** Line-level edges this pair aggregates. */
+  count: number;
+  /** The strongest evidence among them; the stroke the drawing uses. */
+  kind: TopologyEdgeKind;
+  kinds: Partial<Record<TopologyEdgeKind, number>>;
+  /** Members whose target no fleet line resolved to. */
+  unresolved: number;
+  /** Members matched to the target node by host alone, port unverified. */
+  unverified: number;
+  /** Source line uuids, so a selection can narrow the canonical table. */
+  sourceLineUUIDs: string[];
+}
+
+export interface NodeGraph {
+  nodes: NodeBox[];
+  edges: NodeEdge[];
+}
+
+const KIND_STRENGTH: Record<TopologyEdgeKind, number> = {
+  verified: 5,
+  committed: 4,
+  observed: 3,
+  discovered_declared: 2,
+  discovered_inferred: 1,
+};
+
+/**
+ * Fold the line-level edges onto their nodes.
+ *
+ * Every edge in `topology.edges` is kept, including the ones the bounded
+ * per-line graph left out: the node graph is bounded by the fleet's node
+ * count, which is two orders of magnitude smaller than its line count, so it
+ * does not need a cap of its own. A target no fleet line resolved to becomes
+ * an off-fleet box labelled with the endpoint the source line dials, because
+ * a relay onto something this control plane cannot see is a fact worth a box.
+ * Nodes that touch no edge are not drawn; the fleet table already lists them.
+ */
+export function aggregateNodeGraph(groups: readonly LineGroup[], topology: ChainTopology): NodeGraph {
+  const nodeOfUUID = new Map<string, string>();
+  const nodeOfHash = new Map<string, string>();
+  const lineOfUUID = new Map<string, Line>();
+  const boxes = new Map<string, NodeBox>();
+  for (const group of groups) {
+    const box: NodeBox = {
+      id: group.node_id,
+      label: group.node_name || group.node_id,
+      nodeID: group.node_id,
+      offFleet: false,
+      lines: group.lines.length,
+      relays: 0,
+      exits: 0,
+    };
+    for (const line of group.lines) {
+      if (line.jump_edges?.length || isRelayCandidate(line)) box.relays += 1;
+      else box.exits += 1;
+      const uuid = line.line_uuid?.trim();
+      if (uuid) {
+        nodeOfUUID.set(uuid, group.node_id);
+        lineOfUUID.set(uuid, line);
+      }
+      const hash = line.line_hash_id?.trim();
+      if (hash) nodeOfHash.set(hash, group.node_id);
+    }
+    boxes.set(group.node_id, box);
+  }
+
+  const edgesByPair = new Map<string, NodeEdge>();
+  const touched = new Set<string>();
+  const offFleet = new Map<string, NodeBox>();
+  for (const value of topology.edges) {
+    if (!value.to) continue;
+    const from = nodeOfUUID.get(value.from);
+    if (!from) continue;
+    let to = nodeOfUUID.get(value.to) ?? nodeOfHash.get(value.to);
+    if (!to) {
+      const source = lineOfUUID.get(value.from);
+      const server = (source?.outbound_server ?? "").trim();
+      const label = server ? `${server}${source?.outbound_port ? `:${source.outbound_port}` : ""}` : value.to;
+      to = `off:${label}`;
+      if (!offFleet.has(to)) offFleet.set(to, { id: to, label, offFleet: true, lines: 0, relays: 0, exits: 0 });
+    }
+    touched.add(from);
+    touched.add(to);
+    const key = `${from} ${to}`;
+    let pair = edgesByPair.get(key);
+    if (!pair) {
+      pair = { id: `${from}->${to}`, from, to, count: 0, kind: value.kind, kinds: {}, unresolved: 0, unverified: 0, sourceLineUUIDs: [] };
+      edgesByPair.set(key, pair);
+    }
+    pair.count += 1;
+    pair.kinds[value.kind] = (pair.kinds[value.kind] ?? 0) + 1;
+    if (KIND_STRENGTH[value.kind] > KIND_STRENGTH[pair.kind]) pair.kind = value.kind;
+    if (!value.targetResolved) pair.unresolved += 1;
+    if (!pair.sourceLineUUIDs.includes(value.from)) pair.sourceLineUUIDs.push(value.from);
+  }
+
+  // Relays the server could not resolve by endpoint still relay somewhere.
+  // On this fleet those are the NAT exits dialed by a forwarding hostname:
+  // the host matches a fleet node's public host, the port does not. Match by
+  // host and say the port is unverified; a host nobody on the fleet owns is
+  // an off-fleet box, because a relay onto something this control plane
+  // cannot see is a fact worth a box, not a reason to draw nothing.
+  const nodeOfHost = new Map<string, string>();
+  for (const group of groups) {
+    for (const line of group.lines) {
+      for (const host of [line.public_host, line.domain]) {
+        const key = (host ?? "").trim().toLowerCase();
+        if (key && !nodeOfHost.has(key)) nodeOfHost.set(key, group.node_id);
+      }
+    }
+  }
+  for (const group of groups) {
+    for (const line of group.lines) {
+      if (line.jump_edges?.length || !isRelayCandidate(line)) continue;
+      const server = (line.outbound_server ?? "").trim();
+      const label = `${server}${line.outbound_port ? `:${line.outbound_port}` : ""}`;
+      const byHost = nodeOfHost.get(server.toLowerCase());
+      const to = byHost && byHost !== group.node_id ? byHost : `off:${label}`;
+      if (!byHost && !offFleet.has(to)) offFleet.set(to, { id: to, label, offFleet: true, lines: 0, relays: 0, exits: 0 });
+      touched.add(group.node_id);
+      touched.add(to);
+      const key = `${group.node_id} ${to}`;
+      let pair = edgesByPair.get(key);
+      if (!pair) {
+        pair = { id: `${group.node_id}->${to}`, from: group.node_id, to, count: 0, kind: "discovered_inferred", kinds: {}, unresolved: 0, unverified: 0, sourceLineUUIDs: [] };
+        edgesByPair.set(key, pair);
+      }
+      pair.count += 1;
+      pair.kinds.discovered_inferred = (pair.kinds.discovered_inferred ?? 0) + 1;
+      if (byHost) pair.unverified += 1;
+      else pair.unresolved += 1;
+      const uuid = line.line_uuid?.trim();
+      if (uuid && !pair.sourceLineUUIDs.includes(uuid)) pair.sourceLineUUIDs.push(uuid);
+    }
+  }
+
+  const nodes = [...boxes.values(), ...offFleet.values()].filter((box) => touched.has(box.id));
+  return clusterHubs({ nodes, edges: [...edgesByPair.values()] });
+}
+
+/**
+ * Fold hubs that relay to the same set of nodes into one box.
+ *
+ * Six hubs each dialing the same seven exits are forty-two edges that say one
+ * thing. A cluster box says it once: "6 hubs" with the member names in its
+ * title, and each edge out of it carries the summed count. A hub qualifies
+ * when nothing relays into it and it has more than one target; two hubs make
+ * a cluster. Everything else is left as it was.
+ */
+export function clusterHubs(graph: NodeGraph): NodeGraph {
+  const incoming = new Set(graph.edges.map((edge) => edge.to));
+  const signature = new Map<string, string[]>();
+  for (const node of graph.nodes) {
+    if (node.offFleet || incoming.has(node.id)) continue;
+    const targets = graph.edges.filter((edge) => edge.from === node.id).map((edge) => edge.to).sort();
+    if (targets.length < 2) continue;
+    const key = targets.join("|");
+    (signature.get(key) ?? signature.set(key, []).get(key)!).push(node.id);
+  }
+  const clusterOf = new Map<string, string>();
+  const clusters: NodeBox[] = [];
+  for (const [, members] of signature) {
+    if (members.length < 2) continue;
+    const boxes = members.map((id) => graph.nodes.find((node) => node.id === id)!).sort((a, b) => a.label.localeCompare(b.label));
+    const id = `cluster:${boxes.map((box) => box.id).join("+")}`;
+    clusters.push({
+      id,
+      label: `${boxes.length} hubs`,
+      offFleet: false,
+      lines: boxes.reduce((sum, box) => sum + box.lines, 0),
+      relays: boxes.reduce((sum, box) => sum + box.relays, 0),
+      exits: boxes.reduce((sum, box) => sum + box.exits, 0),
+      members: boxes.map((box) => box.id),
+    });
+    for (const box of boxes) clusterOf.set(box.id, id);
+  }
+  if (!clusters.length) return graph;
+  const nodes = [...graph.nodes.filter((node) => !clusterOf.has(node.id)), ...clusters];
+  const merged = new Map<string, NodeEdge>();
+  for (const edge of graph.edges) {
+    const from = clusterOf.get(edge.from) ?? edge.from;
+    const key = `${from} ${edge.to}`;
+    let pair = merged.get(key);
+    if (!pair) {
+      pair = { ...edge, id: `${from}->${edge.to}`, from, kinds: { ...edge.kinds }, sourceLineUUIDs: [...edge.sourceLineUUIDs] };
+      merged.set(key, pair);
+      continue;
+    }
+    pair.count += edge.count;
+    pair.unresolved += edge.unresolved;
+    pair.unverified += edge.unverified;
+    for (const [kind, count] of Object.entries(edge.kinds)) pair.kinds[kind as TopologyEdgeKind] = (pair.kinds[kind as TopologyEdgeKind] ?? 0) + (count ?? 0);
+    if (KIND_STRENGTH[edge.kind] > KIND_STRENGTH[pair.kind]) pair.kind = edge.kind;
+    for (const uuid of edge.sourceLineUUIDs) if (!pair.sourceLineUUIDs.includes(uuid)) pair.sourceLineUUIDs.push(uuid);
+  }
+  return { nodes, edges: [...merged.values()] };
+}
+
+export interface NodeLayoutBox extends NodeBox {
   rank: number;
   x: number;
   y: number;
 }
 
-export interface GraphLayout {
-  nodes: GraphLayoutNode[];
-  edges: Array<TopologyEdge & { x1: number; y1: number; x2: number; y2: number }>;
-  width: number;
-  height: number;
-  dropped: number;
+export interface NodeLayoutEdge extends NodeEdge {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
 }
 
-/* User-space units are rendered close to 1:1 (the drawing is capped at its own
- * intrinsic width so a small graph is not blown up), so these are effectively
- * px and the labels have to be legible at this size. */
-const RANK_WIDTH = 300;
-const ROW_HEIGHT = 54;
-const PAD_X = 112;
-const PAD_Y = 32;
-/** Half the node box width; edges stop at the box edge rather than its centre. */
-export const NODE_HALF_WIDTH = 100;
+export interface NodeLayout {
+  nodes: NodeLayoutBox[];
+  edges: NodeLayoutEdge[];
+  width: number;
+  height: number;
+  ranks: number;
+}
+
+/* User-space units render close to 1:1 (the drawing is capped at its own
+ * intrinsic width), so these are effectively px and the labels are sized to
+ * read at this scale. A box carries a node name and a count line. */
+export const NODE_BOX_WIDTH = 220;
+export const NODE_BOX_HEIGHT = 44;
+const ROW_GAP = 14;
+const RANK_GAP = 130;
+const SUBCOLUMN_GAP = 28;
+const PAD = 24;
+/** Rows a rank may stack before it wraps into a second column. Twelve, not
+ * eight: an edge into a wrapped column crosses the column before it, so the
+ * wrap is the last resort and a tall single column the normal case. Twelve
+ * rows is 720 user units, one screen on the consoles this is read on. */
+export const NODE_LAYOUT_MAX_ROWS = 12;
 
 /**
- * Lay a chain graph out left to right by rank, so a chain reads as a chain.
+ * Lay the node graph out by rank, left to right, so a relay reads as a hop.
  *
- * Rank is the longest path from a source with no inbound edge. Anything left
- * unranked is part of a cycle and lands in one trailing column rather than
- * being dropped silently. `maxNodes` bounds the drawing; the caller reports
- * `dropped` rather than pretending the picture is complete.
+ * Rank is the longest path from a node with no inbound edge; a cycle lands in
+ * one trailing rank rather than vanishing. A rank taller than `maxRows` wraps
+ * into more columns instead of growing without bound. Nothing is dropped and
+ * nothing is refused; `fitNodeLayout` decides how the result meets the
+ * panel's width.
  */
-export function layoutChainGraph(
-  nodes: readonly TopologyTarget[],
-  edges: readonly TopologyEdge[],
-  maxNodes = 60,
-): GraphLayout {
-  const kept = nodes.slice(0, Math.max(0, maxNodes));
-  const keptIDs = new Set(kept.map((node) => node.lineUUID));
-  const keptEdges = edges.filter((value) => keptIDs.has(value.from) && !!value.to && keptIDs.has(value.to));
-
+export function layoutNodeGraph(graph: NodeGraph, maxRows = NODE_LAYOUT_MAX_ROWS): NodeLayout {
+  const rows = Math.max(1, maxRows);
+  const ids = new Set(graph.nodes.map((node) => node.id));
   const incoming = new Map<string, string[]>();
   const outgoing = new Map<string, string[]>();
-  for (const value of keptEdges) {
-    if (!value.to) continue;
+  for (const value of graph.edges) {
+    if (!ids.has(value.from) || !ids.has(value.to)) continue;
     (outgoing.get(value.from) ?? outgoing.set(value.from, []).get(value.from)!).push(value.to);
     (incoming.get(value.to) ?? incoming.set(value.to, []).get(value.to)!).push(value.from);
   }
 
   const rank = new Map<string, number>();
-  let frontier = kept.filter((node) => !incoming.has(node.lineUUID)).map((node) => node.lineUUID);
+  let frontier = graph.nodes.filter((node) => !incoming.has(node.id)).map((node) => node.id);
   for (const id of frontier) rank.set(id, 0);
-  // Bounded by the node count: a longer walk means a cycle, handled below.
-  for (let depth = 0; depth < kept.length && frontier.length; depth += 1) {
+  for (let depth = 0; depth < graph.nodes.length && frontier.length; depth += 1) {
     const next: string[] = [];
     for (const id of frontier) {
       for (const target of outgoing.get(id) ?? []) {
@@ -412,56 +630,100 @@ export function layoutChainGraph(
     }
     frontier = next;
   }
-  const maxRank = kept.reduce((value, node) => Math.max(value, rank.get(node.lineUUID) ?? 0), 0);
-  for (const node of kept) if (!rank.has(node.lineUUID)) rank.set(node.lineUUID, maxRank + 1);
+  const maxRank = graph.nodes.reduce((value, node) => Math.max(value, rank.get(node.id) ?? 0), 0);
+  for (const node of graph.nodes) if (!rank.has(node.id)) rank.set(node.id, maxRank + 1);
 
-  const perRank = new Map<number, number>();
-  const placed: GraphLayoutNode[] = kept.map((node) => {
-    const nodeRank = rank.get(node.lineUUID) ?? 0;
-    const index = perRank.get(nodeRank) ?? 0;
-    perRank.set(nodeRank, index + 1);
-    return { ...node, rank: nodeRank, x: PAD_X + nodeRank * RANK_WIDTH, y: PAD_Y + index * ROW_HEIGHT };
-  });
-  const byID = new Map(placed.map((node) => [node.lineUUID, node]));
+  const perRank = new Map<number, NodeBox[]>();
+  for (const node of graph.nodes) {
+    const value = rank.get(node.id) ?? 0;
+    (perRank.get(value) ?? perRank.set(value, []).get(value)!).push(node);
+  }
+  const ranks = [...perRank.keys()].sort((a, b) => a - b);
+  const placed: NodeLayoutBox[] = [];
+  let x = PAD;
+  let tallest = 1;
+  for (const value of ranks) {
+    const members = [...(perRank.get(value) ?? [])].sort((a, b) => a.label.localeCompare(b.label));
+    const columns = Math.max(1, Math.ceil(members.length / rows));
+    tallest = Math.max(tallest, Math.min(rows, members.length));
+    members.forEach((node, index) => {
+      const column = Math.floor(index / rows);
+      const row = index % rows;
+      placed.push({
+        ...node,
+        rank: value,
+        x: x + column * (NODE_BOX_WIDTH + SUBCOLUMN_GAP),
+        y: PAD + row * (NODE_BOX_HEIGHT + ROW_GAP),
+      });
+    });
+    x += columns * NODE_BOX_WIDTH + (columns - 1) * SUBCOLUMN_GAP + RANK_GAP;
+  }
+  const width = ranks.length ? x - RANK_GAP + PAD : PAD * 2;
+  const height = PAD * 2 + tallest * NODE_BOX_HEIGHT + (tallest - 1) * ROW_GAP;
 
-  const columns = Math.max(...placed.map((node) => node.rank), 0) + 1;
-  const tallest = Math.max(...[...perRank.values()], 1);
-  return {
-    nodes: placed,
-    edges: keptEdges.map((value) => {
-      const from = byID.get(value.from)!;
-      const to = byID.get(value.to!)!;
-      return { ...value, x1: from.x + NODE_HALF_WIDTH, y1: from.y, x2: to.x - NODE_HALF_WIDTH, y2: to.y };
-    }),
-    width: PAD_X * 2 + (columns - 1) * RANK_WIDTH,
-    height: PAD_Y * 2 + (tallest - 1) * ROW_HEIGHT,
-    dropped: Math.max(0, nodes.length - kept.length),
-  };
+  const byID = new Map(placed.map((node) => [node.id, node]));
+  const edges: NodeLayoutEdge[] = [];
+  for (const value of graph.edges) {
+    const from = byID.get(value.from);
+    const to = byID.get(value.to);
+    if (!from || !to) continue;
+    const half = NODE_BOX_HEIGHT / 2;
+    edges.push({
+      ...value,
+      x1: from.x + NODE_BOX_WIDTH,
+      y1: from.y + half,
+      x2: to.x,
+      y2: to.y + half,
+    });
+  }
+  return { nodes: placed, edges, width, height, ranks: ranks.length };
+}
+
+/**
+ * How a layout meets the width it has.
+ *
+ * A drawing wider than the panel scales down, but never below `GRAPH_MIN_SCALE`:
+ * at three quarters a 12px label is 9px and still reads, at a fifth it is a
+ * smear that looks like an answer. Past that floor the panel scrolls sideways
+ * at the floor scale, which is the one nested scroll this page keeps, because
+ * a figure is not a list and a horizontal scroll never fights the document's
+ * vertical one.
+ */
+export const GRAPH_MIN_SCALE = 0.75;
+
+export interface NodeLayoutFit {
+  scale: number;
+  /** True when the drawing is still wider than the panel at the floor scale. */
+  overflow: boolean;
+  renderWidth: number;
+  renderHeight: number;
+}
+
+export function fitNodeLayout(layout: NodeLayout, availableWidth: number): NodeLayoutFit {
+  const budget = Math.max(0, availableWidth);
+  const scale = layout.width <= budget || budget === 0 ? 1 : Math.max(GRAPH_MIN_SCALE, budget / layout.width);
+  const renderWidth = Math.round(layout.width * scale);
+  return { scale, overflow: renderWidth > budget && budget > 0, renderWidth, renderHeight: Math.round(layout.height * scale) };
 }
 
 /**
  * Why the drawing is empty, decided from data the panel already holds.
  *
- * Six zeroes and a paragraph of guesswork is the failure this replaces. The
- * server derives relay edges from each line's own outbound (host, port) and
- * from a sidecar-declared downstream, so "no edges" has distinct causes that
- * the operator can act on differently, and the line records say which one
- * applies. Nothing here invents an edge: an unmatched upstream is reported as
- * an unmatched upstream.
+ * The server derives relay edges from each line's own outbound (host, port)
+ * and from a sidecar-declared downstream, so "no edges" has distinct causes
+ * that the operator can act on differently, and the line records say which
+ * one applies. Nothing here invents an edge: an unmatched upstream is reported
+ * as an unmatched upstream.
  */
 export type TopologyAbsenceReason =
-  /** Edges exist and at least one is drawn. */
+  /** Edges exist and are drawn. */
   | "drawn"
   /** No line carries a line_uuid, so nothing can be an end of a chain. */
   | "no_identity"
   /** No line routes through anything: every outbound on the fleet is direct. */
   | "no_relay"
   /** Lines relay, but every upstream they name is outside this control plane. */
-  | "upstream_off_fleet"
-  /** Edges exist, and every one of them falls outside the drawing bound. */
-  | "beyond_cap"
-  /** Edges exist and would draw, but not at a size anyone can read. */
-  | "too_dense";
+  | "upstream_off_fleet";
 
 export interface TopologyAbsence {
   reason: TopologyAbsenceReason;
@@ -483,7 +745,7 @@ export function isRelayCandidate(line: Line): boolean {
 export function diagnoseTopologyAbsence(
   groups: readonly LineGroup[],
   topology: ChainTopology,
-  drawing: { edges: number; legible: boolean },
+  drawnEdges: number,
 ): TopologyAbsence {
   const upstreams = new Set<string>();
   let relayCandidates = 0;
@@ -497,9 +759,8 @@ export function diagnoseTopologyAbsence(
   }
   const unmatchedUpstreams = [...upstreams].sort().slice(0, UNMATCHED_UPSTREAM_SAMPLE);
   const absence = (reason: TopologyAbsenceReason): TopologyAbsence => ({ reason, relayCandidates, unmatchedUpstreams });
-  if (drawing.edges > 0) return absence(drawing.legible ? "drawn" : "too_dense");
+  if (drawnEdges > 0) return absence("drawn");
   if (!topology.rows.length) return absence("no_identity");
-  if (topology.edges.length > 0) return absence("beyond_cap");
   if (relayCandidates === 0) return absence("no_relay");
   return absence("upstream_off_fleet");
 }
@@ -515,30 +776,6 @@ export function diagnoseTopologyAbsence(
  * plan call will refuse. Keep this in step with compileLineChainSnapshot in
  * lattice-server internal/server/server_linechain.go.
  */
-/**
- * Whether the drawing can be rendered at a size anyone can read.
- *
- * `.topology-graph` in styles.css is `width: 100%; height: auto; max-height:
- * 420px` over a viewBox, so a drawing larger than its box is scaled down
- * uniformly rather than clipped. A 62-rank relay graph is 18524 by 2602 user
- * units, which lands at about seven percent scale: 12px labels under a pixel
- * tall, and every edge a smear. That is worse than no picture, because it
- * looks like an answer.
- *
- * So the drawing is rendered only at 1:1 or smaller, and the canonical table
- * carries the topology otherwise, which is what this panel has always said it
- * is for. `availableWidth` is the shell's measured inner width; the fallback
- * is a conservative desktop value for callers that cannot measure.
- */
-export const GRAPH_LEGIBLE_HEIGHT = 420;
-export const GRAPH_ASSUMED_WIDTH = 1000;
-
-export function isGraphLegible(layout: GraphLayout, availableWidth = GRAPH_ASSUMED_WIDTH): boolean {
-  return layout.nodes.length > 0
-    && layout.width <= availableWidth
-    && layout.height <= GRAPH_LEGIBLE_HEIGHT;
-}
-
 export type ChainTargetRejection =
   | "no_identity"
   | "same_node"

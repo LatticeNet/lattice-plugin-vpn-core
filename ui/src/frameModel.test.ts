@@ -16,16 +16,29 @@ describe("vpn-core frame model", () => {
     expect(read("./bridge.ts")).not.toContain("lattice.plugin.resize");
   });
 
-  it("pages the fleet table without ever paging the count, the sort or the search", () => {
-    // The slice is cut from visibleLines, which is the searched and sorted whole
-    // set, so a pager can never quietly narrow what the page reports on.
+  it("pages the fleet lens by node without ever paging the count or the search", () => {
+    // The slice is cut from nodeRows, which is the searched whole set, so a
+    // pager can never quietly narrow what the page reports on.
     const app = read("./App.vue");
-    expect(app).toContain("pageRows(visibleLines.value, linePage.value, LINE_PAGE_SIZE)");
-    expect(app).toContain('v-for="{ group, line } in linePageData.rows"');
+    expect(app).toContain("pageRows(nodeRows.value, nodePage.value, NODE_PAGE_SIZE)");
+    expect(app).toContain('v-for="row in nodePageData.rows"');
     // The header counts the whole matching set, never the page.
-    expect(app).toContain("{{ visibleLines.length }} {{ visibleLines.length === 1 ? 'line' : 'lines' }}");
-    expect(app).not.toContain("linePageData.rows.length }} shown");
-    // A new search or sort order invalidates the current page.
-    expect(app).toContain("watch([search, sortKey, sortDirection], () => { linePage.value = 1; });");
+    expect(app).toContain("{{ nodeRows.length }} {{ nodeRows.length === 1 ? 'node' : 'nodes' }} · {{ fleetSummary.lines }} lines");
+    expect(app).not.toContain("nodePageData.rows.length }} shown");
+    // A new search invalidates the current page.
+    expect(app).toContain("watch(search, () => { nodePage.value = 1; });");
+  });
+
+  it("keeps the document as the only vertical scroller", () => {
+    // The table box used to cap itself at the viewport height and scroll on
+    // its own, which put three scrollers on one page. Lines are paged by node
+    // instead; the box may only scroll sideways.
+    const styles = read("./styles.css");
+    const tableWrap = styles.match(/\.table-wrap \{[^}]*\}/)?.[0] ?? "";
+    expect(tableWrap).not.toContain("max-height");
+    expect(tableWrap).not.toContain("100dvh");
+    expect(tableWrap).toContain("overflow-x: auto");
+    const graph = styles.match(/\.topology-graph \{[^}]*\}/)?.[0] ?? "";
+    expect(graph).not.toContain("max-height");
   });
 });

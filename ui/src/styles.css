@@ -185,21 +185,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .panel-header { display: flex; flex-wrap: wrap; min-height: 52px; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border, #d9dde2); }
 .panel-header h2 { font-size: var(--text-md); }
 
-/* A table is bounded by the window, never by its own row count.
+/* A table is bounded by its page, never by the window.
  *
- * Left unbounded, 111 fleet lines made this box 5900px tall and the plugin
- * document 8800px tall. On a 2400px-wide console that is around 21 megapixels
- * of composited content in one scrolling document, and the compositor stops
- * producing frames entirely: measured at one animation frame per 21 seconds,
- * with the last painted state left on screen as a few complete rows, a few
- * half-painted ones and then nothing. Layout was never the cost (13-40ms);
- * the painted area was.
- *
- * Capping the box against the window keeps the document near 3500px and the
- * same page runs at 60fps. Every row stays in the DOM, so the count in the
- * panel header, the sort and the search all still speak for the whole set.
- * `dvh` is correct here only because the host frame is a viewport now. */
-.table-wrap { width: 100%; max-height: calc(100dvh - var(--sp-7)); overflow: auto; }
+ * This box used to carry `max-height: calc(100dvh - 32px); overflow: auto`,
+ * added when 111 fleet rows in one patch made the document 8800px tall and
+ * the compositor stopped presenting frames. That cap fixed the symptom at the
+ * box and left the page with three scrollers: the document, this table, and
+ * the topology table under it, each swallowing the wheel in turn. The cost was
+ * painted area, so the fix belongs to the row count: the fleet lens prints
+ * node rows (25 today) and opens lines on demand, and every long table pages
+ * at 25. The document is the only vertical scroller; this box only scrolls
+ * sideways when the columns are wider than a narrow window. */
+.table-wrap { width: 100%; overflow-x: auto; overflow-y: visible; }
 table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: var(--text-sm); }
 th { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border, #d9dde2); color: var(--muted-foreground, #65707b); background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); font-size: var(--text-2xs); font-weight: 650; text-align: left; text-transform: uppercase; }
 /* Column headers stay with the rows they name. Row 90 of a fleet table is
@@ -270,19 +267,49 @@ button.evidence-cell[aria-pressed="true"] { background: var(--tone-info-surface)
 button.evidence-cell:disabled { cursor: default; opacity: 1; }
 
 .topology-graph-shell { padding: var(--sp-4); border-bottom: 1px solid var(--border, #d9dde2); }
-.topology-graph { display: block; width: 100%; height: auto; max-height: 420px; color: var(--foreground, #17191c); }
+/* The figure is the one place a sideways scroll is allowed: past the floor
+   scale it is wider than the panel, and a figure is not a list. */
+.topology-graph-scroll { overflow-x: auto; overflow-y: hidden; }
+.topology-graph { display: block; height: auto; color: var(--foreground, #17191c); }
+.topology-graph-note { margin: var(--sp-2) 0 0; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); }
 .graph-cap-notice { margin: 0 0 var(--sp-2); padding: 7px var(--sp-3); border-left: 3px solid var(--tone-warn); color: var(--muted-foreground, #65707b); background: var(--tone-warn-surface); font-size: var(--text-xs); }
 .graph-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin: 0 0 var(--sp-3); padding: 0; list-style: none; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); }
 .graph-legend li { display: inline-flex; align-items: center; gap: var(--sp-1); }
 .graph-legend i { width: 18px; height: 0; border-top-width: 2px; border-top-style: solid; }
+.graph-node { cursor: pointer; outline: 0; }
 .graph-node rect { fill: var(--card, #fff); stroke: var(--border, #aeb5bd); stroke-width: 1.5; }
-.graph-node text { fill: currentColor; font-size: 12px; }
-.graph-node-owner { font-size: 9.5px; opacity: 0.7; }
-.graph-edge line { stroke: var(--muted-foreground, #85919d); stroke-width: 1.5; stroke-dasharray: 4 3; }
-.graph-edge[data-kind="verified"] line { stroke: var(--tone-ok); stroke-width: 2.5; stroke-dasharray: none; }
-.graph-edge[data-kind="committed"] line { stroke: var(--tone-info); stroke-width: 2; stroke-dasharray: none; }
-.graph-edge[data-kind="observed"] line { stroke: var(--tone-warn); }
-.graph-edge[data-kind="discovered_declared"] line { stroke: var(--tone-info); stroke-dasharray: 2 2; }
+.graph-node text { fill: currentColor; font-size: 12px; font-weight: 600; }
+.graph-node-meta { font-size: 10px; font-weight: 500; opacity: 0.72; font-variant-numeric: tabular-nums; }
+.graph-node[data-off-fleet="true"] rect { stroke-dasharray: 4 3; fill: transparent; }
+.graph-node[data-off-fleet="true"] text { font-family: var(--font-mono); font-weight: 500; }
+.graph-node:hover rect, .graph-node:focus-visible rect { stroke: var(--primary, #1769aa); }
+.graph-node[data-selected="true"] rect { stroke: var(--primary, #1769aa); stroke-width: 2.5; fill: color-mix(in srgb, var(--primary, #1769aa) 10%, var(--card, #fff)); }
+.graph-edge { cursor: pointer; outline: 0; }
+.graph-edge .graph-edge-hit { stroke: transparent; stroke-width: 14; }
+.graph-edge text { fill: var(--foreground, #17191c); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--card, #fff); stroke-width: 4px; opacity: 0; pointer-events: none; }
+.topology-graph[data-labels="always"] .graph-edge text { opacity: 1; }
+.graph-edge:hover text, .graph-edge:focus-visible text, .graph-edge[data-selected="true"] text { opacity: 1; }
+.graph-edge[data-unverified="true"] line:not(.graph-edge-hit) { stroke: var(--tone-warn); stroke-dasharray: 1 3; }
+/* The bar says what the node does: relay, exit, both, or a folded set of hubs. */
+.graph-node-bar { fill: var(--muted-foreground, #85919d); stroke: none; }
+.graph-node[data-role="relay"] .graph-node-bar { fill: var(--tone-info); }
+.graph-node[data-role="exit"] .graph-node-bar { fill: var(--tone-ok); }
+.graph-node[data-role="mixed"] .graph-node-bar { fill: var(--tone-warn); }
+.graph-node[data-role="cluster"] .graph-node-bar { fill: var(--primary, #1769aa); width: 6px; }
+.graph-node[data-role="cluster"] rect:first-child { stroke: var(--primary, #1769aa); }
+.graph-node[data-off-fleet="true"] .graph-node-bar { fill: transparent; }
+.graph-edge:hover line:not(.graph-edge-hit), .graph-edge:focus-visible line:not(.graph-edge-hit), .graph-edge[data-selected="true"] line:not(.graph-edge-hit) { stroke: var(--primary, #1769aa); stroke-width: 3.5 !important; }
+.graph-edge[data-selected="true"] text { fill: var(--primary, #1769aa); font-weight: 650; }
+/* The kind rules address the visible line only: the invisible hit line under
+   it is 14 units wide, and a kind rule that matched it painted a striped band
+   across the drawing. */
+.graph-edge line:not(.graph-edge-hit) { stroke: var(--muted-foreground, #85919d); stroke-width: 1.5; stroke-dasharray: calc(var(--edge-w, 1.5) * 3px) calc(var(--edge-w, 1.5) * 2px); }
+.graph-edge[data-kind="verified"] line:not(.graph-edge-hit) { stroke: var(--tone-ok); stroke-dasharray: none; }
+.graph-edge[data-kind="committed"] line:not(.graph-edge-hit) { stroke: var(--tone-info); stroke-dasharray: none; }
+.graph-edge[data-kind="observed"] line:not(.graph-edge-hit) { stroke: var(--tone-warn); stroke-dasharray: none; }
+.graph-edge[data-kind="discovered_declared"] line:not(.graph-edge-hit) { stroke: var(--tone-info); stroke-dasharray: 2 2; }
+.graph-selection { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin: var(--sp-3) 0 0; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); }
+.graph-selection strong { color: var(--foreground, #17191c); }
 
 .topology-table { min-width: 980px; }
 .topology-table td { vertical-align: top; }
@@ -393,9 +420,81 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
   .toolbar .button, .search-input { width: 100%; max-width: none; }
   .binding-add, .chain-plan-form { grid-template-columns: 1fr; }
   .chain-plan-actions { grid-column: auto; align-items: stretch; flex-direction: column; }
-  .topology-graph-shell { display: none; }
+  /* The drawing stays on a phone: it scrolls sideways at the floor scale
+     rather than disappearing, so a red edge is reachable from anywhere. */
   .overlay-scrim { padding: var(--sp-2); }
   .modal > header, .modal > footer, .form-grid, .detail-body, .binding-add, .binding-list { padding: var(--sp-3); }
   .modal > footer { flex-wrap: wrap; }
   .modal > footer .button { flex: 1 1 auto; }
 }
+
+/* ── lenses, proof line, fleet rows, attention ──────────────────────────────
+   Three lenses over one dataset. The switch is a tablist so it reads as a
+   destination inside the page, not as an action; the proof line under the
+   title says when the page last heard from the control plane. */
+.proof-line { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); margin: calc(-1 * var(--sp-3)) 0 0; color: var(--muted-foreground, #65707b); font-family: var(--font-mono); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+.lens-switch { display: inline-flex; padding: 2px; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); background: var(--card, #fff); }
+.lens-tab { display: inline-flex; min-height: 28px; align-items: center; gap: var(--sp-1); border: 0; border-radius: calc(var(--radius) - 2px); padding: 4px var(--sp-3); color: var(--muted-foreground, #65707b); background: transparent; font-size: var(--text-sm); font-weight: 600; }
+.lens-tab:hover { color: var(--foreground, #17191c); }
+.lens-tab[aria-selected="true"] { color: var(--foreground, #17191c); background: var(--muted, #eef0f2); box-shadow: inset 0 0 0 1px var(--border, #d9dde2); }
+.lens-tab:focus-visible { outline: 2px solid var(--ring, #2c77b8); outline-offset: 1px; }
+.lens-count { display: inline-flex; min-width: 18px; height: 18px; align-items: center; justify-content: center; border-radius: 9px; padding: 0 5px; background: var(--muted, #eef0f2); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+.lens-count[data-tone="error"] { color: var(--tone-danger-foreground, #fff); background: var(--tone-danger); }
+.lens-count[data-tone="warning"] { color: var(--warning-foreground, #26170b); background: var(--tone-warn); }
+.summary-strip > div[data-tone="error"] strong { color: var(--tone-danger); }
+.summary-strip > div[data-tone="neutral"] strong { color: var(--muted-foreground, #65707b); }
+
+/* Node rows own the fleet table. A node row is one line of facts; opening it
+   prints the lines underneath, indented by the name column, and a bank row
+   folds twelve of those into one until asked. */
+.fleet-table { min-width: 1080px; }
+/* Column budgets so the eleven columns fit a 1440px frame without the box
+   scrolling sideways: the outbound cell used to take 404px for one long
+   reference plus its server line and pushed config, service and the row
+   action off the right edge. */
+.fleet-table td.mono { max-width: 260px; }
+.fleet-table td small { max-width: 250px; }
+.fleet-table .outbound-cell { max-width: 300px; }
+.endpoint-port { font-weight: 650; color: var(--foreground, #17191c); }
+.narrow-status { display: none; }
+.fleet-table th.fleet-name, .fleet-table td.fleet-name { min-width: 240px; }
+.fleet-table tbody + tbody tr:first-child td { border-top: 1px solid var(--border, #d9dde2); }
+.node-row td { background: color-mix(in srgb, var(--muted, #eef0f2) 34%, var(--card, #fff)); }
+.node-row .node-summary { color: var(--muted-foreground, #65707b); font-size: var(--text-xs); }
+.node-row .node-summary span + span { margin-left: var(--sp-1); }
+.node-toggle { display: inline-flex; align-items: center; gap: var(--sp-1); border: 0; padding: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.node-toggle strong { font-size: var(--text-sm); }
+.node-toggle:focus-visible { outline: 2px solid var(--ring, #2c77b8); outline-offset: 2px; border-radius: 3px; }
+.node-chevron { flex: 0 0 auto; color: var(--muted-foreground, #65707b); transition: transform 120ms ease-out; }
+.node-toggle[aria-expanded="true"] .node-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .node-chevron { transition: none; } }
+.bank-row td.fleet-name, .line-row td.fleet-name { padding-left: calc(var(--sp-3) + 22px); }
+.line-row.line-in-bank td.fleet-name { padding-left: calc(var(--sp-3) + 44px); }
+.bank-row td { background: color-mix(in srgb, var(--tone-info-surface) 55%, var(--card, #fff)); }
+
+.attention-list { margin: 0; padding: 0; list-style: none; }
+.attention-item { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; align-items: start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border, #e3e6e9); }
+.attention-item:last-child { border-bottom: 0; }
+.attention-item[data-severity="error"] { box-shadow: inset 3px 0 0 var(--tone-danger); }
+.attention-item[data-severity="warning"] { box-shadow: inset 3px 0 0 var(--tone-warn); }
+.attention-body { display: grid; gap: var(--sp-1); min-width: 0; }
+.attention-body strong { font-size: var(--text-sm); }
+.attention-body p { margin: 0; max-width: var(--measure); color: var(--muted-foreground, #65707b); font-size: var(--text-xs); line-height: 1.55; overflow-wrap: anywhere; }
+.attention-actions { display: flex; align-items: center; gap: var(--sp-2); }
+
+@media (max-width: 720px) {
+  .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-strip > div { border-bottom: 1px solid var(--border, #d9dde2); }
+  .summary-strip > div:nth-child(2n) { border-right: 0; }
+  .summary-strip > div:nth-last-child(-n + 2) { border-bottom: 0; }
+  .toolbar .search-input { max-width: none; }
+  .attention-item { grid-template-columns: minmax(0, 1fr); }
+  .fleet-table th.fleet-name, .fleet-table td.fleet-name { position: sticky; left: 0; z-index: 1; background: var(--card, #fff); box-shadow: 1px 0 0 var(--border, #e3e6e9); }
+  .node-row td.fleet-name { background: color-mix(in srgb, var(--muted, #eef0f2) 34%, var(--card, #fff)); }
+  .bank-row td.fleet-name { background: color-mix(in srgb, var(--tone-info-surface) 55%, var(--card, #fff)); }
+  .narrow-status { display: inline-flex; align-items: center; gap: var(--sp-2); margin-top: 4px; }
+  /* Five tiles in two columns: the roles tile reads "101 relay · 36 exit"
+     and must wrap rather than clip to "101 relay · 3". */
+  .summary-strip strong { white-space: normal; font-size: 17px; }
+}
+.row-actions { display: inline-flex; align-items: center; gap: var(--sp-1); }

@@ -56,6 +56,7 @@ describe("LineChainWorkspace canonical table", () => {
     expect(html).toContain("declared");
     expect(html).toContain("inferred");
     expect(html).toContain("missing<span> · unresolved</span>");
-    expect(html).toContain("committed, observed, declared, and inferred evidence");
+    expect(html).toContain("Each box is a node; each arrow is the set of lines");
+    expect(html).toContain('data-off-fleet="true"');
   });
 });
