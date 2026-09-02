@@ -441,9 +441,9 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
    scrolling sideways: the outbound cell used to take 404px for one long
    reference plus its server line and pushed config, service and the row
    action off the right edge. */
-.fleet-table td.mono { max-width: 200px; }
-.fleet-table td small { max-width: 200px; }
-.fleet-table .outbound-cell { max-width: 230px; }
+.fleet-table td.mono { max-width: 190px; }
+.fleet-table td small { max-width: 190px; }
+.fleet-table .outbound-cell { max-width: 220px; }
 .fleet-table th.fleet-name, .fleet-table td.fleet-name { min-width: 240px; }
 .fleet-table tbody + tbody tr:first-child td { border-top: 1px solid var(--border, #d9dde2); }
 .node-row td { background: color-mix(in srgb, var(--muted, #eef0f2) 34%, var(--card, #fff)); }
