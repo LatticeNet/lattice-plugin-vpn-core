@@ -320,6 +320,25 @@ type Finding = { property: string; detail: string };
 
 const capped = "td strong, td small, td.mono, .badge, .count, .collector-grid strong, .collector-grid p";
 
+/* The subject the properties are actually about: cells holding row data, and
+ * the collector grid. `capped` deliberately stays wider than this, because a
+ * clipped chip in a panel header is a real defect too and should be reported.
+ * But the guard below must count the thing it is asserting about rather than
+ * something that correlates with it.
+ *
+ * That distinction cost a round. The guard counted everything matching
+ * `capped`, and once the row-count chips landed in the two split panel
+ * headers, an empty usage screen reported "clear (4p 2c)" and took the pass
+ * branch: two header chips reading "0 identities" and "0 nodes", no table
+ * cells at all, and a count that looked healthy. Each change was fine alone
+ * and the combination moved the floor.
+ *
+ * It is the same mistake in a third costume, after a min-width derived from a
+ * floor and a fixture calibrated to a margin. A proxy count fails as silently
+ * as a proxy threshold, so the rule is to report and gate on the subject of
+ * the assertion, never on a stand-in for it. */
+const contentCells = "tbody td strong, tbody td small, tbody td.mono, tbody .badge, .collector-grid strong, .collector-grid p";
+
 function panelName(el: Element): string {
   const panel = el.closest(".data-panel");
   return panel?.querySelector("h2")?.textContent?.trim() ?? "(unnamed panel)";
@@ -329,7 +348,7 @@ function probeLayout(): Finding[] {
   const doc = frame.contentDocument;
   if (!doc) return [{ property: "no-subject", detail: "the frame has no document to probe" }];
   const panels = Array.from(doc.querySelectorAll<HTMLElement>(".data-panel"));
-  const cells = doc.querySelectorAll(capped).length;
+  const cells = doc.querySelectorAll(contentCells).length;
   /* An empty document yields no findings, and no findings printed as "clear"
    * is how this probe reported a screen that was overflowing by 50px at the
    * time. Nothing to probe is not the same as nothing wrong, and conflating
@@ -346,7 +365,7 @@ function probeLayout(): Finding[] {
   if (panels.length === 0 || cells === 0) {
     return [{
       property: "no-subject",
-      detail: `${panels.length} panels and ${cells} capped cells rendered, so ${panels.length === 0 ? "nothing" : "almost nothing"} was checked; this is not a pass. If the route is right, the scenario probably has no rows.`,
+      detail: `${panels.length} panels and ${cells} content cells rendered, so ${panels.length === 0 ? "nothing" : "almost nothing"} was checked; this is not a pass. If the route is right, the scenario probably has no rows.`,
     }];
   }
   const findings: Finding[] = [];
@@ -405,7 +424,7 @@ function probeLayout(): Finding[] {
 function subjects(): number {
   const doc = frame.contentDocument;
   if (!doc) return 0;
-  return doc.querySelectorAll(".data-panel").length * 1000 + doc.querySelectorAll(capped).length;
+  return doc.querySelectorAll(".data-panel").length * 1000 + doc.querySelectorAll(contentCells).length;
 }
 
 function runProbe(attempt = 0, last = -1, stable = 0): void {
@@ -426,9 +445,12 @@ function runProbe(attempt = 0, last = -1, stable = 0): void {
      * pass over nothing, and now says so on its face. */
     const doc = frame.contentDocument;
     const panels = doc?.querySelectorAll(".data-panel").length ?? 0;
-    const cells = doc?.querySelectorAll(capped).length ?? 0;
-    console.log(`[probe] clear: ${panels} panels and ${cells} capped cells examined, nothing clipped without recourse and nothing unreachable`);
-    if (where) where.textContent = `probe: clear (${panels}p ${cells}c)`;
+    const content = doc?.querySelectorAll(contentCells).length ?? 0;
+    const chrome = (doc?.querySelectorAll(capped).length ?? 0) - content;
+    /* Content and chrome are reported apart, because it was a single mixed
+     * total that made an empty screen look examined. */
+    console.log(`[probe] clear: ${panels} panels, ${content} content cells and ${chrome} chrome cells examined, nothing clipped without recourse and nothing unreachable`);
+    if (where) where.textContent = `probe: clear (${panels}p ${content}c +${chrome} chrome)`;
     return;
   }
   for (const finding of findings) console.error(`[probe] ${finding.property}: ${finding.detail}`);
