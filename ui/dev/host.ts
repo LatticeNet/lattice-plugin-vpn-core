@@ -14,7 +14,7 @@
  * frame height is visible here rather than only in production.
  */
 
-import { handlers, type Scenario } from "./fixtures";
+import { handlers, type ContentShape, type Scenario } from "./fixtures";
 
 const ROUTES = ["lines", "users", "profiles", "usage"] as const;
 type Route = (typeof ROUTES)[number];
@@ -144,6 +144,7 @@ const params = new URLSearchParams(location.search);
 let frameEpoch = 0;
 let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
+let content = (params.get("content") ?? "plain") as ContentShape;
 /* `zoom` magnifies the whole harness for screenshot review on a very wide
  * display, where a 1440px frame is a postage stamp. Harness only. */
 const zoom = params.get("zoom");
@@ -163,6 +164,7 @@ shell.innerHTML = `
     <strong>vpn-core dev harness</strong>
     <label>route <select id="route">${ROUTES.map((value) => `<option${value === route ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>data <select id="scenario">${["production", "hubs", "offfleet", "rich", "dense", "empty", "failing"].map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
+    <label>content <select id="content">${["plain", "hostile"].map((value) => `<option${value === content ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>width <select id="width">${["1440", "2423", "375"].map((value) => `<option${value === width ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <button id="theme" type="button">${dark ? "light" : "dark"}</button>
     <span id="reported"></span>
@@ -190,7 +192,7 @@ function applyChrome(): void {
 }
 
 function reload(): void {
-  const query = new URLSearchParams({ route, scenario, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
+  const query = new URLSearchParams({ route, scenario, content, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
   history.replaceState(null, "", `?${query}`);
   applyChrome();
   // The epoch matters: assigning an identical src, fragment and all, is a
@@ -225,7 +227,7 @@ window.addEventListener("message", (event) => {
       return;
     }
     case "lattice.plugin.call": {
-      const table = handlers(scenario);
+      const table = handlers(scenario, content);
       const key = `${String(data.service).split("/").pop()}/${data.method}`;
       const handler = table[key];
       // Latency, so loading and skeleton states are visible rather than theoretical.
@@ -258,6 +260,10 @@ document.getElementById("route")!.addEventListener("change", (event) => {
 });
 document.getElementById("scenario")!.addEventListener("change", (event) => {
   scenario = (event.target as HTMLSelectElement).value as Scenario;
+  reload();
+});
+document.getElementById("content")!.addEventListener("change", (event) => {
+  content = (event.target as HTMLSelectElement).value as ContentShape;
   reload();
 });
 document.getElementById("width")!.addEventListener("change", (event) => {
