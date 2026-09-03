@@ -337,7 +337,7 @@ function setPeriod(value: string): void {
                 <small v-if="row.line_hash_id" class="mono" :title="row.line_hash_id">{{ row.line_hash_id }}</small>
                 <small v-else class="cell-note">inbound tag only; no line on this node carries it</small>
               </td>
-              <td><span class="badge" :data-tone="row.role === 'relay' || row.role === 'exit' ? 'info' : undefined">{{ roleLabel(row.role) }}</span></td>
+              <td><span class="badge" :title="roleLabel(row.role)" :data-tone="row.role === 'relay' || row.role === 'exit' ? 'info' : undefined">{{ roleLabel(row.role) }}</span></td>
               <td>
                 <template v-if="row.user_id">
                   <strong :title="userLabel(row)">{{ userLabel(row) }}</strong>
@@ -346,7 +346,7 @@ function setPeriod(value: string): void {
                 <span v-else class="status-dot" data-tone="warning">unknown</span>
               </td>
               <td>
-                <span class="badge" :data-tone="attributionTone(row) === 'healthy' ? 'success' : attributionTone(row) === 'error' ? 'error' : attributionTone(row) === 'info' ? 'info' : 'warning'">
+                <span class="badge" :title="attributionLabel(row)" :data-tone="attributionTone(row) === 'healthy' ? 'success' : attributionTone(row) === 'error' ? 'error' : attributionTone(row) === 'info' ? 'info' : 'warning'">
                   {{ attributionLabel(row) }}
                 </span>
                 <small v-if="row.attribution_proof" class="cell-note">{{ row.attribution_proof === 'proof' ? 'proven' : 'inferred' }}</small>

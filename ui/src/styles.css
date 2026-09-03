@@ -103,7 +103,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .title-copy h1 { font-size: var(--text-xl); line-height: 1.25; }
 .title-copy p, .panel-header p, .modal header p { margin: var(--sp-1) 0 0; max-width: var(--measure); color: var(--muted-foreground, #65707b); font-size: var(--text-sm); line-height: 1.5; }
 .title-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
-.plugin-label, .badge, .count { display: inline-flex; align-items: center; gap: var(--sp-1); border: 1px solid var(--border, #d9dde2); border-radius: 999px; padding: 2px 7px; color: var(--muted-foreground, #65707b); background: var(--card, #fff); font-size: var(--text-2xs); font-weight: 650; white-space: nowrap; }
+/* The budget matters most here, not least. A badge often carries a value the
+   plugin did not enumerate: the label helpers fall through to the raw string
+   on purpose, so a server enum this build has not learned yet is rendered
+   verbatim. With nowrap and no ceiling that chip grew the table past its
+   panel, and above the sticky breakpoint the wrapper is `visible` and the
+   panel is `clip`, so the overflow was not merely off screen, it was gone.
+   Measured with a plausible unknown role: 498px unreachable at 1150.
+
+   The server and this plugin ship on separate lanes and version
+   independently, so an unrecognised value is an ordinary release-skew state
+   rather than a hypothesis. .status-dot has carried this budget all along,
+   which is why the collector column never broke. Any cell that can render an
+   unbounded string needs one, and unbounded includes every deliberate
+   passthrough, not only free text an operator typed. */
+.plugin-label, .badge, .count { display: inline-flex; max-width: 260px; align-items: center; gap: var(--sp-1); overflow: hidden; border: 1px solid var(--border, #d9dde2); border-radius: 999px; padding: 2px 7px; color: var(--muted-foreground, #65707b); background: var(--card, #fff); font-size: var(--text-2xs); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-label { color: var(--tone-info); border-color: var(--tone-info-border); background: var(--tone-info-surface); text-transform: uppercase; }
 .badge[data-tone="info"] { color: var(--tone-info); border-color: var(--tone-info-border); background: var(--tone-info-surface); }
 .badge[data-tone="warning"] { color: var(--tone-warn); border-color: var(--tone-warn-border); background: var(--tone-warn-surface); }
@@ -211,29 +225,34 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    that row 90 keeps its headers described a guarantee that had never held. The
    horizontal sticky on .actions-cell worked for exactly the same reason.
 
-   No CSS scrolls a box sideways while letting vertical sticky through it: any
-   non-visible overflow makes it a scrollport, and a scrollport between the
-   header and the viewport ends the matter. So the scroller is given up only
-   where a table demonstrably fits, and never on the strength of its declared
-   min-width: that is a floor, not a ceiling, and a table's used width is the
-   larger of it and the intrinsic width of real content. A 77-character address
-   in the identity column overflowed a half-width panel at 1440, which is
-   290px above any breakpoint derived from the declared minimum.
+   This box is a scroll container in BOTH axes, not one, and that is why the
+   sticky rule below has never worked. The overflow spec coerces `visible` to
+   `auto` when the other axis is not `visible`, so `overflow-x: auto;
+   overflow-y: visible` computes to auto/auto. Measured: auto/auto at every
+   width from 375 to 1600, with zero vertical scroll range because the box's
+   height is its content. `position: sticky` offsets against its nearest
+   scrollport, so the header resolves here and can never move. The horizontal
+   sticky on .actions-cell works for exactly the same reason, which is what
+   hid it.
 
-   Getting this wrong is worse than the bug. `.data-panel` is `clip`, which
-   nothing can scroll: not the wheel, not the keyboard, not focus, not script.
-   So a table that overflows while its wrapper is `visible` does not merely
-   push a column off screen, it removes it. Losing a column beats losing a
-   header, so anything that might still overflow keeps its scroller.
+   The scroller stays anyway, and the header stays unpinned, because every
+   route to removing it was measured and each one loses a column instead. No
+   CSS scrolls a box sideways while letting vertical sticky through, so the
+   only way to a pinned header is a table that cannot overflow, and nothing
+   here guarantees that. Deriving a width from the declared min-width fails
+   because min-width is a floor: a 77-character address overflowed a half-width
+   panel at 1440, 290px above any such breakpoint. Budgeting the cells is
+   necessary and still not sufficient: with every cell capped, two badge
+   columns at their 260px ceiling plus five others still overflowed a
+   full-width panel by 270px at 1150. And the cost of being wrong is not a
+   hidden column but a deleted one, because .data-panel is `clip` and nothing
+   scrolls a clip box: not the wheel, not the keyboard, not focus, not script.
 
-   That leaves the full-width panels, measured with a 59-character node name
-   and a 77-character address: zero overflow at 1150, 1200, 1440 and 1600. The
-   two half-width tables in the usage split keep `overflow-x: auto` and give up
-   their pin, which is the correct way round for a short table in a narrow box. */
+   The pin needs `table-layout: fixed` with real column widths, so a table can
+   never exceed its container. That is a design pass over every column in this
+   plugin, not a fix, and it is the honest next step rather than a cleverer
+   media query. */
 .table-wrap { width: 100%; overflow-x: auto; overflow-y: visible; }
-@media (min-width: 1150px) {
-  .workspace > .data-panel .table-wrap { overflow: visible; }
-}
 table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: var(--text-sm); }
 th { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border, #d9dde2); color: var(--muted-foreground, #65707b); background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); font-size: var(--text-2xs); font-weight: 650; text-align: left; text-transform: uppercase; }
 /* Column headers stay with the rows they name. Row 90 of a fleet table is

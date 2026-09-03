@@ -1263,7 +1263,7 @@ onBeforeUnmount(() => {
       </section>
       <section v-if="unresolvedDefs.length" class="data-panel overlay-strip" aria-label="Managed line rollout status">
         <div v-for="def in unresolvedDefs" :key="def.line_uuid" class="overlay-def">
-          <span class="badge" :data-tone="overlayTone(def.status)">{{ def.status }}</span>
+          <span class="badge" :title="def.status" :data-tone="overlayTone(def.status)">{{ def.status }}</span>
           <strong>{{ def.node_id }}</strong>
           <span class="mono">{{ def.tag }} · :{{ def.port }}</span>
           <span v-if="def.last_error" class="error-text">{{ def.last_error }}</span>
@@ -1333,7 +1333,7 @@ onBeforeUnmount(() => {
                   <td class="num">{{ entry.bank.lines.reduce((sum, line) => sum + (line.user_known ? line.user_count : 0), 0) }}</td>
                   <td :title="bankTargets(entry.bank)">→ {{ entry.bank.targetNodeIDs.length }} {{ entry.bank.targetNodeIDs.length === 1 ? 'node' : 'nodes' }}<small>{{ bankTargets(entry.bank) }}</small></td>
                   <td><span class="status-dot" :data-tone="entry.bank.config">{{ entry.bank.config === 'healthy' ? 'ok' : entry.bank.config }}</span></td>
-                  <td><span class="badge" :data-tone="serviceTone(entry.bank.service)">{{ serviceLabel(entry.bank.service) }}</span></td>
+                  <td><span class="badge" :title="serviceLabel(entry.bank.service)" :data-tone="serviceTone(entry.bank.service)">{{ serviceLabel(entry.bank.service) }}</span></td>
                   <td v-if="canViewLineDetails" class="actions-cell" />
                 </tr>
                 <tr v-else class="line-row" :class="{ 'line-in-bank': !!entry.bank }">
@@ -1520,8 +1520,8 @@ onBeforeUnmount(() => {
                         </p>
                         <p v-for="line in node.lines" :key="line.line_hash_id" class="allocation-line">
                           <strong :title="line.tag || line.line_hash_id">{{ line.tag || line.line_hash_id }}</strong>
-                          <span class="badge">{{ line.role }}</span>
-                          <span class="badge" :data-tone="line.allocation === 'relay' ? 'info' : undefined">{{ line.allocation }}</span>
+                          <span class="badge" :title="line.role">{{ line.role }}</span>
+                          <span class="badge" :title="line.allocation" :data-tone="line.allocation === 'relay' ? 'info' : undefined">{{ line.allocation }}</span>
                           <span class="mono">{{ collectorTone(node.collector_state) === 'healthy' ? formatBytes(line.period_uplink + line.period_downlink) : 'unknown' }}</span>
                           <small v-if="line.via_relay">reached through a relay, so it is counted at the entry line</small>
                           <small v-else-if="line.estimate">estimated, not a counter this box reported</small>
@@ -1561,7 +1561,7 @@ onBeforeUnmount(() => {
       <section class="data-panel"><div v-if="profiles.length" class="table-wrap"><table><thead><tr><th>Node</th><th>Core</th><th>Ownership</th><th>Inbounds</th><th>Discovered</th><th>Collector</th><th>Runtime path</th><th v-if="canReadProfileSettings" class="actions-cell">Actions</th></tr></thead>
         <tbody><tr v-for="profile in profiles" :key="profile.node_id">
           <td><strong>{{ profile.node_name || profile.node_id }}</strong><small>{{ profile.node_id }}</small></td>
-          <td><span class="badge">{{ profile.core || 'unknown' }} {{ profile.core_version || '' }}</span></td>
+          <td><span class="badge" :title="`${profile.core || 'unknown'} ${profile.core_version || ''}`.trim()">{{ profile.core || 'unknown' }} {{ profile.core_version || '' }}</span></td>
           <td><span class="status-dot" :data-tone="profile.applied ? 'healthy' : profile.managed ? 'warning' : 'neutral'">{{ profile.managed ? (profile.applied ? 'managed / applied' : 'managed / pending') : 'observed' }}</span></td>
           <td>{{ profile.inbound_count }}</td><td>{{ profile.discovered_count }}</td>
           <td><span class="status-dot" :data-tone="profile.collector?.status === 'error' ? 'error' : profile.collector?.status === 'ok' ? 'healthy' : 'neutral'">{{ profile.collector?.status || 'not reported' }}</span></td>
