@@ -290,7 +290,9 @@ tbody tr:hover { background: color-mix(in srgb, var(--muted, #eef0f2) 52%, trans
    per-node accounting screen is a worse failure than a ragged row.
 
    Measured both ways rather than argued. At 1440 the column sits at its 380px
-   cap either way; wrapping takes the table's own overflow from 7px to 0 and
+   cap either way; on the suffix-names fixture wrapping takes the table's own
+   overflow from 7px to 0, though on a fixture whose ids are long too it stays
+   at 27px, reachable, so that figure is per-fixture rather than a rule, and
    costs 14px of row height. At 375 it takes overflow from 344px to 118px, all
    of it still reachable, and costs 29 to 43px on an affected row and about 11%
    of document height. Wrapping reduces used width, so it makes the horizontal
@@ -545,7 +547,11 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 .quota-meter small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* The qualifier under a figure: "estimated", "counted upstream". It wraps,
-   unlike td small, because refusing to wrap here would hide the caveat. */
+   because refusing to wrap here would hide the caveat. It used to say "unlike
+   td small"; td small wraps now too, so the contrast that sentence drew is
+   gone and `white-space: normal` below is inherited rather than a correction.
+   Both are kept as a statement of intent: this text must never be cut, no
+   matter what the rules above it are changed to. */
 .cell-note { display: block; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); white-space: normal; }
 .cell-note[data-tone="warning"] { color: var(--tone-warn); font-weight: 650; }
 
