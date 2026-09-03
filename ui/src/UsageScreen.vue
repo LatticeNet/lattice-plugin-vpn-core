@@ -200,7 +200,7 @@ function setPeriod(value: string): void {
     <article class="data-panel">
       <header class="panel-header">
         <div><h2>By identity</h2><p>What this period counts against each account's quota.</p></div>
-        <Users :size="17" aria-hidden="true" />
+        <span class="count">{{ fold.byUser.length }} {{ fold.byUser.length === 1 ? 'identity' : 'identities' }}</span>
       </header>
       <div v-if="fold.byUser.length" class="table-wrap">
         <table style="min-width: 460px">
@@ -253,7 +253,7 @@ function setPeriod(value: string): void {
     <article class="data-panel">
       <header class="panel-header">
         <div><h2>By node</h2><p>Every byte a node reported, chain hops included.</p></div>
-        <Activity :size="17" aria-hidden="true" />
+        <span class="count">{{ fold.byNode.length }} {{ fold.byNode.length === 1 ? 'node' : 'nodes' }}</span>
       </header>
       <div v-if="fold.byNode.length" class="table-wrap">
         <table style="min-width: 460px">

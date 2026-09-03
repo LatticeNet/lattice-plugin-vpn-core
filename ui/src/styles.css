@@ -248,10 +248,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    hidden column but a deleted one, because .data-panel is `clip` and nothing
    scrolls a clip box: not the wheel, not the keyboard, not focus, not script.
 
-   The pin needs `table-layout: fixed` with real column widths, so a table can
-   never exceed its container. That is a design pass over every column in this
-   plugin, not a fix, and it is the honest next step rather than a cleverer
-   media query. */
+   `table-layout: fixed` with real column widths is the only construction that
+   makes a table unable to exceed its container. It was reviewed and rejected
+   rather than left standing here as a recommendation. It costs a declared
+   width for every column in every table in this plugin, roughly forty numbers
+   to choose and then maintain, and the failure mode of one that turns out too
+   narrow is truncation of that column on every row unconditionally. That is
+   the same harm the caps below are careful to confine to long values, paid
+   everywhere instead. It also buys less than four rounds of chasing it make it
+   feel like it should: the two longest tables already page, at 25 and 30 rows,
+   so an unpinned header costs about half a screen of scrolling rather than
+   row 90.
+
+   The cheap change that addresses the actual complaint is a row count in each
+   panel header. That is what would have made the original unreachable rows
+   visible, and it is missing on "By identity" and "By node". */
 .table-wrap { width: 100%; overflow-x: auto; overflow-y: visible; }
 table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: var(--text-sm); }
 th { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border, #d9dde2); color: var(--muted-foreground, #65707b); background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); font-size: var(--text-2xs); font-weight: 650; text-align: left; text-transform: uppercase; }
