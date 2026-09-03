@@ -341,10 +341,18 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
    `td.path-cell` rather than `.path-cell`, which was dead. `td.mono` is
    (0,1,1) and beat a bare `.path-cell` at (0,1,0) regardless of source order,
    so the sheet claimed a 320px budget for paths while 240px was in force. Note
-   that both numbers are advisory anyway: a `td` in an auto-layout table is
-   sized by the table algorithm, and these cells measured 340px wide against a
-   declared 240px. The cap is a hint here, which is the more reason not to have
-   leaned on `nowrap` to do the cutting. */
+   that both numbers here are advisory: a `td` in an auto-layout table is sized
+   by the table algorithm, which may overrule a declared width, and these cells
+   measured 340px against a declared 240px. That is the more reason not to have
+   leaned on `nowrap` to do the cutting.
+
+   Do not generalise that to the caps above. It holds for a cap on the cell,
+   which is what these two are. It does not hold for `td strong` and
+   `td small`, which are blocks inside a cell rather than the cell, where
+   `max-width` binds normally: measured, those sat at exactly their declared
+   380px while these sat 100px past theirs. So this sheet now carries both
+   kinds in the same syntax, two real constraints and two hints, and the ones
+   above are load-bearing. */
 td.mono { max-width: 240px; overflow: hidden; overflow-wrap: anywhere; }
 td.path-cell { max-width: 320px; overflow: hidden; overflow-wrap: anywhere; }
 /* The row action is pinned to the right edge of the scroll container, so a
