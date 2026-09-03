@@ -297,7 +297,27 @@ tbody tr:hover { background: color-mix(in srgb, var(--muted, #eef0f2) 52%, trans
    problem smaller, not larger. It is applied at every width: a breakpoint here
    is what produced three dead ends above. */
 td strong { display: block; max-width: 380px; overflow: hidden; overflow-wrap: anywhere; font-weight: 620; }
-td small { display: block; max-width: 380px; overflow: hidden; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
+/* The second line is freed for a sharper reason than the first. It holds the
+   identifier the first line's truncation was supposed to fall back on, and
+   these identifiers are ULIDs: lexicographically time-ordered, so two minted
+   seconds apart share a long prefix and differ only in the tail. End
+   truncation removes exactly the distinguishing part. Two rows then render
+   pixel-identical in both lines, name and id, with hover the only recourse,
+   which is worse than either line truncating alone. The id is the
+   disambiguator of last resort, so it is the last thing that may be cut.
+   Wrapping cannot widen a column, so this costs nothing horizontally; the cost
+   is vertical, and a worst case where both lines wrap reaches roughly 110px at
+   375, against 53px for an ordinary row.
+
+   `anywhere` rather than `break-word`, which was measured rather than assumed.
+   `anywhere` lets a column shrink below its longest word, so a short name like
+   `hkg-edge-01` can break mid-word, which is uglier. It is still the right
+   choice: `break-word` keeps min-content at the longest word and the tables
+   then overflow by 195px and 755px at 375, against 118px and 558px for
+   `anywhere`. Horizontal overflow is the property four rounds of this file
+   were spent on, and a mid-word break stays fully readable while a cut does
+   not. */
+td small { display: block; max-width: 380px; overflow: hidden; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); overflow-wrap: anywhere; }
 /* nowrap so a figure never splits from its unit. "99.1" on one line and "GiB"
    on the next is not a smaller column, it is a taller row and an unreadable
    number. */
