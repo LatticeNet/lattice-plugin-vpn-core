@@ -103,7 +103,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .title-copy h1 { font-size: var(--text-xl); line-height: 1.25; }
 .title-copy p, .panel-header p, .modal header p { margin: var(--sp-1) 0 0; max-width: var(--measure); color: var(--muted-foreground, #65707b); font-size: var(--text-sm); line-height: 1.5; }
 .title-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
-.plugin-label, .badge, .count { display: inline-flex; align-items: center; gap: var(--sp-1); border: 1px solid var(--border, #d9dde2); border-radius: 999px; padding: 2px 7px; color: var(--muted-foreground, #65707b); background: var(--card, #fff); font-size: var(--text-2xs); font-weight: 650; white-space: nowrap; }
+/* The budget matters most here, not least. A badge often carries a value the
+   plugin did not enumerate: the label helpers fall through to the raw string
+   on purpose, so a server enum this build has not learned yet is rendered
+   verbatim. With nowrap and no ceiling that chip grew the table past its
+   panel, and above the sticky breakpoint the wrapper is `visible` and the
+   panel is `clip`, so the overflow was not merely off screen, it was gone.
+   Measured with a plausible unknown role: 498px unreachable at 1150.
+
+   The server and this plugin ship on separate lanes and version
+   independently, so an unrecognised value is an ordinary release-skew state
+   rather than a hypothesis. .status-dot has carried this budget all along,
+   which is why the collector column never broke. Any cell that can render an
+   unbounded string needs one, and unbounded includes every deliberate
+   passthrough, not only free text an operator typed. */
+.plugin-label, .badge, .count { display: inline-flex; max-width: 260px; align-items: center; gap: var(--sp-1); overflow: hidden; border: 1px solid var(--border, #d9dde2); border-radius: 999px; padding: 2px 7px; color: var(--muted-foreground, #65707b); background: var(--card, #fff); font-size: var(--text-2xs); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-label { color: var(--tone-info); border-color: var(--tone-info-border); background: var(--tone-info-surface); text-transform: uppercase; }
 .badge[data-tone="info"] { color: var(--tone-info); border-color: var(--tone-info-border); background: var(--tone-info-surface); }
 .badge[data-tone="warning"] { color: var(--tone-warn); border-color: var(--tone-warn-border); background: var(--tone-warn-surface); }
@@ -178,7 +192,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .permission-note { display: inline-flex; align-items: center; gap: var(--sp-1); margin: 0; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); }
 
 .stack { display: flex; flex-direction: column; gap: var(--sp-4); }
-.data-panel { overflow: hidden; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius-lg); background: var(--card, #fff); }
+/* clip, not hidden. Both clip the rounded corners identically, but `hidden`
+   makes the box a scroll container and `clip` explicitly does not, which is the
+   whole reason that keyword exists. As a scroll container this panel was the
+   nearest scrollport for anything sticky inside it, and its height is set by
+   its content, so it had no scroll range and nothing sticky in a panel could
+   ever offset. That included every table's column headers. */
+.data-panel { overflow: clip; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius-lg); background: var(--card, #fff); }
 /* One rule for the gap between top-level blocks. Nested panels (the usage
    split, for instance) are spaced by their own grid gap. */
 .workspace > .data-panel, .workspace > .split-layout, .workspace > .empty-state { margin-bottom: var(--sp-4); }
@@ -196,6 +216,53 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
  * node rows (25 today) and opens lines on demand, and every long table pages
  * at 25. The document is the only vertical scroller; this box only scrolls
  * sideways when the columns are wider than a narrow window. */
+/* `overflow-y: visible` here was not what it looks like. The overflow spec
+   coerces `visible` to `auto` when the other axis is not `visible`, so this box
+   computed to auto/auto and was a scroll container in BOTH axes. Measured
+   against the built stylesheet: auto/auto at every width, with zero vertical
+   scroll range because its height is its content. So the sticky rule below
+   resolved against this box and could never offset, and the comment promising
+   that row 90 keeps its headers described a guarantee that had never held. The
+   horizontal sticky on .actions-cell worked for exactly the same reason.
+
+   This box is a scroll container in BOTH axes, not one, and that is why the
+   sticky rule below has never worked. The overflow spec coerces `visible` to
+   `auto` when the other axis is not `visible`, so `overflow-x: auto;
+   overflow-y: visible` computes to auto/auto. Measured: auto/auto at every
+   width from 375 to 1600, with zero vertical scroll range because the box's
+   height is its content. `position: sticky` offsets against its nearest
+   scrollport, so the header resolves here and can never move. The horizontal
+   sticky on .actions-cell works for exactly the same reason, which is what
+   hid it.
+
+   The scroller stays anyway, and the header stays unpinned, because every
+   route to removing it was measured and each one loses a column instead. No
+   CSS scrolls a box sideways while letting vertical sticky through, so the
+   only way to a pinned header is a table that cannot overflow, and nothing
+   here guarantees that. Deriving a width from the declared min-width fails
+   because min-width is a floor: a 77-character address overflowed a half-width
+   panel at 1440, 290px above any such breakpoint. Budgeting the cells is
+   necessary and still not sufficient: with every cell capped, two badge
+   columns at their 260px ceiling plus five others still overflowed a
+   full-width panel by 270px at 1150. And the cost of being wrong is not a
+   hidden column but a deleted one, because .data-panel is `clip` and nothing
+   scrolls a clip box: not the wheel, not the keyboard, not focus, not script.
+
+   `table-layout: fixed` with real column widths is the only construction that
+   makes a table unable to exceed its container. It was reviewed and rejected
+   rather than left standing here as a recommendation. It costs a declared
+   width for every column in every table in this plugin, roughly forty numbers
+   to choose and then maintain, and the failure mode of one that turns out too
+   narrow is truncation of that column on every row unconditionally. That is
+   the same harm the caps below are careful to confine to long values, paid
+   everywhere instead. It also buys less than four rounds of chasing it make it
+   feel like it should: the two longest tables already page, at 25 and 30 rows,
+   so an unpinned header costs about half a screen of scrolling rather than
+   row 90.
+
+   The cheap change that addresses the actual complaint is a row count in each
+   panel header. That is what would have made the original unreachable rows
+   visible, and it is missing on "By identity" and "By node". */
 .table-wrap { width: 100%; overflow-x: auto; overflow-y: visible; }
 table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: var(--text-sm); }
 th { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border, #d9dde2); color: var(--muted-foreground, #65707b); background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); font-size: var(--text-2xs); font-weight: 650; text-align: left; text-transform: uppercase; }
@@ -207,14 +274,87 @@ thead th { position: sticky; top: 0; z-index: 2; box-shadow: inset 0 -1px 0 var(
 td { padding: var(--sp-3); border-bottom: 1px solid var(--border, #e3e6e9); vertical-align: middle; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: color-mix(in srgb, var(--muted, #eef0f2) 52%, transparent); }
-td strong { display: block; font-weight: 620; }
-td small { display: block; max-width: 380px; overflow: hidden; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* A cell's first line needs a budget for the same reason its second line has
+   one: an identity is an email address and a node's name is whatever the
+   operator typed, and either can be long enough to push a table wider than its
+   panel. Without a budget the table overflows on real content at widths where
+   the declared min-width says it cannot.
+
+   The budget is the cap. It is deliberately not `nowrap`, and those are two
+   different decisions that were coupled here once and should not be again.
+   The cap bounds the width; `nowrap` was a separate choice about uniform row
+   height, and it cost the thing this column exists for. Managed line names
+   differ only in a trailing suffix, so with `nowrap` four rows rendered as two
+   visually identical pairs and the only thing telling `...node-01-primary`
+   from `...node-01-secondary` was a hover. Two nodes that look the same on a
+   per-node accounting screen is a worse failure than a ragged row.
+
+   Measured both ways rather than argued. At 1440 the column sits at its 380px
+   cap either way; on the suffix-names fixture wrapping takes the table's own
+   overflow from 7px to 0, though on a fixture whose ids are long too it stays
+   at 27px, reachable, so that figure is per-fixture rather than a rule, and
+   costs 14px of row height. At 375 it takes overflow from 344px to 118px, all
+   of it still reachable, and costs 29 to 43px on an affected row and about 11%
+   of document height. Wrapping reduces used width, so it makes the horizontal
+   problem smaller, not larger. It is applied at every width: a breakpoint here
+   is what produced three dead ends above. */
+td strong { display: block; max-width: 380px; overflow: hidden; overflow-wrap: anywhere; font-weight: 620; }
+/* The second line is freed for a sharper reason than the first. It holds the
+   identifier the first line's truncation was supposed to fall back on, and
+   these identifiers are ULIDs: lexicographically time-ordered, so two minted
+   seconds apart share a long prefix and differ only in the tail. End
+   truncation removes exactly the distinguishing part. Two rows then render
+   pixel-identical in both lines, name and id, with hover the only recourse,
+   which is worse than either line truncating alone. The id is the
+   disambiguator of last resort, so it is the last thing that may be cut.
+   Wrapping cannot widen a column, so this costs nothing horizontally; the cost
+   is vertical, and a worst case where both lines wrap reaches roughly 110px at
+   375, against 53px for an ordinary row.
+
+   `anywhere` rather than `break-word`, which was measured rather than assumed.
+   `anywhere` lets a column shrink below its longest word, so a short name like
+   `hkg-edge-01` can break mid-word, which is uglier. It is still the right
+   choice: `break-word` keeps min-content at the longest word and the tables
+   then overflow by 195px and 755px at 375, against 118px and 558px for
+   `anywhere`. Horizontal overflow is the property four rounds of this file
+   were spent on, and a mid-word break stays fully readable while a cut does
+   not. */
+td small { display: block; max-width: 380px; overflow: hidden; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); overflow-wrap: anywhere; }
+/* nowrap so a figure never splits from its unit. "99.1" on one line and "GiB"
+   on the next is not a smaller column, it is a taller row and an unreadable
+   number. */
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mono { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 /* Inside a table a wrapped value makes every row a different height and the
    column impossible to scan. Every one of these cells carries a title. */
-td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.path-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Same decoupling as the two rules above, and for the same reason: these cells
+   hold generated paths, outbound references and hostnames, which are minted
+   for sibling nodes from one template. They share a long prefix and differ in
+   the tail, so end truncation removes exactly what tells them apart. Measured
+   before changing: on Node Profiles all 21 runtime paths were cut, 207px each,
+   every row rendering the same visible string; on Lines all 62 outbound refs
+   and all 62 domains were cut. Freeing them clears every one of those and is
+   not merely free horizontally but better, because wrapping narrows a column:
+   the Lines table's own overflow goes from 127px to 0. The cost is vertical,
+   about 8% of document height.
+
+   `td.path-cell` rather than `.path-cell`, which was dead. `td.mono` is
+   (0,1,1) and beat a bare `.path-cell` at (0,1,0) regardless of source order,
+   so the sheet claimed a 320px budget for paths while 240px was in force. Note
+   that both numbers here are advisory: a `td` in an auto-layout table is sized
+   by the table algorithm, which may overrule a declared width, and these cells
+   measured 340px against a declared 240px. That is the more reason not to have
+   leaned on `nowrap` to do the cutting.
+
+   Do not generalise that to the caps above. It holds for a cap on the cell,
+   which is what these two are. It does not hold for `td strong` and
+   `td small`, which are blocks inside a cell rather than the cell, where
+   `max-width` binds normally: measured, those sat at exactly their declared
+   380px while these sat 100px past theirs. So this sheet now carries both
+   kinds in the same syntax, two real constraints and two hints, and the ones
+   above are load-bearing. */
+td.mono { max-width: 240px; overflow: hidden; overflow-wrap: anywhere; }
+td.path-cell { max-width: 320px; overflow: hidden; overflow-wrap: anywhere; }
 /* The row action is pinned to the right edge of the scroll container, so a
    table wider than the console still offers its action without a horizontal
    scroll. .table-wrap is a real scrollport in both axes, so this sticks. */
@@ -241,8 +381,20 @@ th[aria-sort="ascending"] .sort-button, th[aria-sort="descending"] .sort-button 
 .collector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0; }
 .collector-grid > div { min-width: 0; padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--border, #d9dde2); border-bottom: 1px solid var(--border, #d9dde2); }
 .collector-grid strong, .collector-grid small { display: block; margin-top: var(--sp-1); }
+/* A panel whose content is not a table has no .table-wrap to catch an
+   overflow, so the budget has to be on the cell. This grid's tracks are
+   `1fr`, and a 1fr track will not shrink below its item's min-content width,
+   so one unbreakable token sets the track wider than the panel and the whole
+   grid blows out: measured 379px past a 342px panel at 375. `strong` holds
+   node_name || node_id, which falls back to an underscore-joined id when the
+   name is empty, and `p` holds the collector's raw error, which routinely
+   carries a hostname. `small` beside them has had this treatment all along. */
+.collector-grid strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collector-grid small { overflow: hidden; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
-.collector-grid p { margin: var(--sp-1) 0 0; font-size: var(--text-2xs); line-height: 1.45; }
+/* anywhere rather than ellipsis: an error is meant to be read in full, so it
+   wraps mid-token instead of being cut. Same as .attention-body p and
+   .evidence-grid p, which carry the same kind of string. */
+.collector-grid p { margin: var(--sp-1) 0 0; font-size: var(--text-2xs); line-height: 1.45; overflow-wrap: anywhere; }
 
 /* ── line chain workspace ─────────────────────────────────────────────── */
 .chain-plan-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: var(--sp-3); padding: var(--sp-4); border-bottom: 1px solid var(--border, #d9dde2); }
@@ -421,7 +573,11 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 .quota-meter small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* The qualifier under a figure: "estimated", "counted upstream". It wraps,
-   unlike td small, because refusing to wrap here would hide the caveat. */
+   because refusing to wrap here would hide the caveat. It used to say "unlike
+   td small"; td small wraps now too, so the contrast that sentence drew is
+   gone and `white-space: normal` below is inherited rather than a correction.
+   Both are kept as a statement of intent: this text must never be cut, no
+   matter what the rules above it are changed to. */
 .cell-note { display: block; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); white-space: normal; }
 .cell-note[data-tone="warning"] { color: var(--tone-warn); font-weight: 650; }
 

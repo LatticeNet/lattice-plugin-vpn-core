@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.8.0-alpha.19",
+  "version": "0.8.0-alpha.20",
   "publisher": "latticenet",
-  "signature_ed25519": "njPhhu/qNMafGyZwEI5BF1kaBSY/xgnbfVYxm0jW6J6pec0axE4rDLzxrYolKmNxIoUMJaKCcZrxBOHeidEHDg==",
+  "signature_ed25519": "",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "618b9d9e39886c0f8556e5ae57b624cf7c4ba8eca2e0e3cdf5b4be2d9b3bd127"
+    "digest_sha256": "2be583fd6a2a628270044ab98a59237f25751575c5b7fc6d6d6fa5b305b41690"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
