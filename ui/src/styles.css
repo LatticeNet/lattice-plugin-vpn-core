@@ -213,17 +213,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
    No CSS scrolls a box sideways while letting vertical sticky through it: any
    non-visible overflow makes it a scrollport, and a scrollport between the
-   header and the viewport ends the matter. So the two are traded by width, and
-   the width is measured rather than picked. The widest table here declares
-   min-width 1080px; with the workspace padding and the panel border it stops
-   overflowing at a frame width of 1146px, so above 1150px no table needs to
-   scroll sideways and the box can stop being a scrollport.
+   header and the viewport ends the matter. So the scroller is given up only
+   where a table demonstrably fits, and never on the strength of its declared
+   min-width: that is a floor, not a ceiling, and a table's used width is the
+   larger of it and the intrinsic width of real content. A 77-character address
+   in the identity column overflowed a half-width panel at 1440, which is
+   290px above any breakpoint derived from the declared minimum.
 
-   Below that the trade goes the other way on purpose: on a narrow window,
-   reaching the columns at all matters more than keeping their headers in view. */
+   Getting this wrong is worse than the bug. `.data-panel` is `clip`, which
+   nothing can scroll: not the wheel, not the keyboard, not focus, not script.
+   So a table that overflows while its wrapper is `visible` does not merely
+   push a column off screen, it removes it. Losing a column beats losing a
+   header, so anything that might still overflow keeps its scroller.
+
+   That leaves the full-width panels, measured with a 59-character node name
+   and a 77-character address: zero overflow at 1150, 1200, 1440 and 1600. The
+   two half-width tables in the usage split keep `overflow-x: auto` and give up
+   their pin, which is the correct way round for a short table in a narrow box. */
 .table-wrap { width: 100%; overflow-x: auto; overflow-y: visible; }
 @media (min-width: 1150px) {
-  .table-wrap { overflow: visible; }
+  .workspace > .data-panel .table-wrap { overflow: visible; }
 }
 table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: var(--text-sm); }
 th { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border, #d9dde2); color: var(--muted-foreground, #65707b); background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); font-size: var(--text-2xs); font-weight: 650; text-align: left; text-transform: uppercase; }
@@ -235,9 +244,18 @@ thead th { position: sticky; top: 0; z-index: 2; box-shadow: inset 0 -1px 0 var(
 td { padding: var(--sp-3); border-bottom: 1px solid var(--border, #e3e6e9); vertical-align: middle; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: color-mix(in srgb, var(--muted, #eef0f2) 52%, transparent); }
-td strong { display: block; font-weight: 620; }
+/* A cell's first line needs a budget for the same reason its second line has
+   one: an identity is an email address and a node's name is whatever the
+   operator typed, and either can be long enough to push a table wider than its
+   panel. Every one of these carries a title attribute, so the full value is
+   still one hover away. Without this the table overflows on real content at
+   widths where the declared min-width says it cannot. */
+td strong { display: block; max-width: 380px; overflow: hidden; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 td small { display: block; max-width: 380px; overflow: hidden; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* nowrap so a figure never splits from its unit. "99.1" on one line and "GiB"
+   on the next is not a smaller column, it is a taller row and an unreadable
+   number. */
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mono { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 /* Inside a table a wrapped value makes every row a different height and the
    column impossible to scan. Every one of these cells carries a title. */
