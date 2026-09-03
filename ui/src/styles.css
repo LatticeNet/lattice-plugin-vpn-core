@@ -277,10 +277,26 @@ tbody tr:hover { background: color-mix(in srgb, var(--muted, #eef0f2) 52%, trans
 /* A cell's first line needs a budget for the same reason its second line has
    one: an identity is an email address and a node's name is whatever the
    operator typed, and either can be long enough to push a table wider than its
-   panel. Every one of these carries a title attribute, so the full value is
-   still one hover away. Without this the table overflows on real content at
-   widths where the declared min-width says it cannot. */
-td strong { display: block; max-width: 380px; overflow: hidden; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+   panel. Without a budget the table overflows on real content at widths where
+   the declared min-width says it cannot.
+
+   The budget is the cap. It is deliberately not `nowrap`, and those are two
+   different decisions that were coupled here once and should not be again.
+   The cap bounds the width; `nowrap` was a separate choice about uniform row
+   height, and it cost the thing this column exists for. Managed line names
+   differ only in a trailing suffix, so with `nowrap` four rows rendered as two
+   visually identical pairs and the only thing telling `...node-01-primary`
+   from `...node-01-secondary` was a hover. Two nodes that look the same on a
+   per-node accounting screen is a worse failure than a ragged row.
+
+   Measured both ways rather than argued. At 1440 the column sits at its 380px
+   cap either way; wrapping takes the table's own overflow from 7px to 0 and
+   costs 14px of row height. At 375 it takes overflow from 344px to 118px, all
+   of it still reachable, and costs 29 to 43px on an affected row and about 11%
+   of document height. Wrapping reduces used width, so it makes the horizontal
+   problem smaller, not larger. It is applied at every width: a breakpoint here
+   is what produced three dead ends above. */
+td strong { display: block; max-width: 380px; overflow: hidden; overflow-wrap: anywhere; font-weight: 620; }
 td small { display: block; max-width: 380px; overflow: hidden; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
 /* nowrap so a figure never splits from its unit. "99.1" on one line and "GiB"
    on the next is not a smaller column, it is a taller row and an unreadable
