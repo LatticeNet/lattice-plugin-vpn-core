@@ -747,21 +747,37 @@ const HOSTILE = {
   /* ULIDs are lexicographically time-ordered, so ids minted seconds apart
    * share a long prefix and differ in the tail. End truncation removes
    * precisely the distinguishing part. */
-  ulid: (i: number) => `nd_01J8ZQK4X9F7M2P5R8T1VH2K5M8P1R4${String.fromCharCode(65 + (i % 26))}${i % 10}`,
+  ulid: (i: number) =>
+    `nd_01J8ZQK4X9F7M2P5R8T1V4W7Y0B3D6G9J2L5N8Q1S4U7X0Z3C6F9H2K5M8P1R4` +
+    `${String.fromCharCode(65 + (i % 26))}${i % 10}`,
   /* Generated paths have the same property for the same reason. */
   path: (i: number) =>
-    `/var/lib/lattice/managed/sing-box/generated/cluster-node-${String((i % 9) + 1).padStart(2, "0")}/runtime-config.json`,
+    `/var/lib/lattice/managed/sing-box/generated/production/cluster-am7/` +
+    `node-${String((i % 9) + 1).padStart(2, "0")}/config.observed.json`,
   /* An identity that outgrows any cap a cell can be given. */
   identity: (i: number) =>
     `network.operations.oncall.${String(i).padStart(2, "0")}.${i % 2 ? "secondary" : "primary"}` +
     `@subsidiary-holdings.example.invalid`,
-  /* No break opportunity anywhere: no space, no hyphen, no punctuation. */
+  /* A realistic resolver failure whose hostname has no break opportunity: no
+   * space, no hyphen, no dot inside the label. The surrounding message wraps
+   * at its spaces, so what has to overflow is the label alone.
+   *
+   * Its length is load-bearing and was measured, not chosen for looks. At the
+   * 2xs size this renders at, the shorter form of this name wanted 325px in a
+   * 342px collector grid, so it fit with 17px to spare and the fixture stopped
+   * detecting the defect it was built for. A hostile value that fits is not
+   * hostile, it is a green run that proves nothing. Sized against the
+   * container it has to break, with margin, and re-verified after. */
   unbreakable: () =>
-    "dial tcp UnreachableCollectorEndpointHostnameWithNoBreakOpportunityAnywhereInIt:443 i/o timeout",
+    "dial tcp: lookup collector_internal_am7_transit_egress_cluster_secondary_endpoint_observed " +
+    "on 10.0.0.1:53: no such host",
   /* A value this build has not learned. Label helpers echo an unrecognised
    * server enum verbatim, so the widest string a cell can hold is not bounded
    * by anything this repo knows about. */
-  enum: () => "pending-operator-acknowledgement-upstream",
+  enum: (i: number) =>
+    (i % 2
+      ? "reality_sni_fallback_via_upstream_relay_chain_unverified"
+      : "multi_hop_relay_with_reality_fallback_egress"),
 };
 
 /* Rewritten by field name rather than by path, so a fixture growing a new row
@@ -805,7 +821,7 @@ export function harden<T>(value: T, seen = new Map<string, number>(), hits = new
     if (typeof item === "string" && item !== "" && HOSTILE_ENUMS.has(key)) {
       const n = hits.get(key) ?? 0;
       hits.set(key, n + 1);
-      out[key] = n === 0 ? HOSTILE.enum() : item;
+      out[key] = n === 0 ? HOSTILE.enum(hits.size) : item;
       continue;
     }
     const rewrite = HOSTILE_FIELDS[key];
