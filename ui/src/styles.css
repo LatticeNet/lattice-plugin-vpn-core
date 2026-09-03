@@ -178,7 +178,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .permission-note { display: inline-flex; align-items: center; gap: var(--sp-1); margin: 0; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); }
 
 .stack { display: flex; flex-direction: column; gap: var(--sp-4); }
-.data-panel { overflow: hidden; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius-lg); background: var(--card, #fff); }
+/* clip, not hidden. Both clip the rounded corners identically, but `hidden`
+   makes the box a scroll container and `clip` explicitly does not, which is the
+   whole reason that keyword exists. As a scroll container this panel was the
+   nearest scrollport for anything sticky inside it, and its height is set by
+   its content, so it had no scroll range and nothing sticky in a panel could
+   ever offset. That included every table's column headers. */
+.data-panel { overflow: clip; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius-lg); background: var(--card, #fff); }
 /* One rule for the gap between top-level blocks. Nested panels (the usage
    split, for instance) are spaced by their own grid gap. */
 .workspace > .data-panel, .workspace > .split-layout, .workspace > .empty-state { margin-bottom: var(--sp-4); }
@@ -196,7 +202,29 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
  * node rows (25 today) and opens lines on demand, and every long table pages
  * at 25. The document is the only vertical scroller; this box only scrolls
  * sideways when the columns are wider than a narrow window. */
+/* `overflow-y: visible` here was not what it looks like. The overflow spec
+   coerces `visible` to `auto` when the other axis is not `visible`, so this box
+   computed to auto/auto and was a scroll container in BOTH axes. Measured
+   against the built stylesheet: auto/auto at every width, with zero vertical
+   scroll range because its height is its content. So the sticky rule below
+   resolved against this box and could never offset, and the comment promising
+   that row 90 keeps its headers described a guarantee that had never held. The
+   horizontal sticky on .actions-cell worked for exactly the same reason.
+
+   No CSS scrolls a box sideways while letting vertical sticky through it: any
+   non-visible overflow makes it a scrollport, and a scrollport between the
+   header and the viewport ends the matter. So the two are traded by width, and
+   the width is measured rather than picked. The widest table here declares
+   min-width 1080px; with the workspace padding and the panel border it stops
+   overflowing at a frame width of 1146px, so above 1150px no table needs to
+   scroll sideways and the box can stop being a scrollport.
+
+   Below that the trade goes the other way on purpose: on a narrow window,
+   reaching the columns at all matters more than keeping their headers in view. */
 .table-wrap { width: 100%; overflow-x: auto; overflow-y: visible; }
+@media (min-width: 1150px) {
+  .table-wrap { overflow: visible; }
+}
 table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: var(--text-sm); }
 th { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border, #d9dde2); color: var(--muted-foreground, #65707b); background: color-mix(in srgb, var(--muted, #eef0f2) 48%, var(--card, #fff)); font-size: var(--text-2xs); font-weight: 650; text-align: left; text-transform: uppercase; }
 /* Column headers stay with the rows they name. Row 90 of a fleet table is
