@@ -9,7 +9,7 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.8.0-alpha.18",
+  "version": "0.8.0-alpha.19",
   "publisher": "latticenet",
   "signature_ed25519": "g3WAVHd61U0ed8ARxGKUeFVg6HJcSFunwR0hLBwmGR2ltQhNN5Zp1ubAH7Nv4UJrEw/7MHTXqhwajBityqCwDA==",
   "bundle": {
@@ -293,6 +293,14 @@
           "effect": "write",
           "scopes": [
             "vpncore:admin"
+          ]
+        },
+        {
+          "name": "usage_query",
+          "effect": "read",
+          "scopes": [
+            "vpncore:admin",
+            "node:read"
           ]
         }
       ],

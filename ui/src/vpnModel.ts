@@ -1,3 +1,5 @@
+import type { AllocatedNode } from "./usageModel";
+
 export interface Line {
   id: string;
   line_hash_id: string;
@@ -108,12 +110,34 @@ export interface VpnUser {
   credentials: VpnCredentialView[];
   bindings: LineBinding[];
   quota_bytes?: number;
+  /** "" or "monthly". A monthly quota is the only one with period bounds. */
+  quota_period?: string;
+  /** 1..28, so a reset can never land on a day some months do not have. */
+  quota_reset_day?: number;
   expires_at?: string;
   group?: string;
   comment?: string;
   migrated: boolean;
   created_at: string;
   updated_at: string;
+
+  /* ── usage, added by the server's users read model ──────────────────────
+   * Every field below is optional because a server older than the usage
+   * attribution work does not send them, and a user list that renders 0 B
+   * against a server that never reported is worse than one that says so. An
+   * absent figure and a zero figure are different claims; the screens check
+   * for `undefined` rather than falsiness. */
+  /** Monotonic lifetime total. */
+  used_total_bytes?: number;
+  /** Counted in the current quota period, or the lifetime total when none. */
+  used_period_bytes?: number;
+  /** RFC3339. Present only for a monthly quota. */
+  period_start?: string;
+  period_end?: string;
+  /** Seven daily totals, index 6 is today. */
+  last_7d?: number[];
+  last_seen_at?: string;
+  allocated_nodes?: AllocatedNode[];
 }
 
 export function formatBytes(value: number | undefined): string {

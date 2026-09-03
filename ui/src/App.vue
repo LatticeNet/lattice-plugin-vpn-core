@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import {
-  Activity,
   ChevronRight,
   CircleAlert,
   Gauge,
@@ -24,6 +23,19 @@ import {
 import { BridgeClient, canCall, type HostInit } from "./bridge";
 import { attentionItems, buildNodeRows, lineRole, livenessSummary, normalizeServiceNote, summarizeFleet, type AttentionItem, type Bank, type NodeRow, type ServiceVerdict } from "./fleetRows";
 import LineChainWorkspace from "./LineChainWorkspace.vue";
+import UsageScreen from "./UsageScreen.vue";
+import {
+  collectorLabel,
+  collectorReports,
+  collectorTone,
+  coverageNote,
+  quotaResetDayFromInput,
+  quotaState,
+  summarizeAllocation,
+  type UsageCollectorRow,
+  type UsageLineRow,
+  type UsagePeriod,
+} from "./usageModel";
 import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
@@ -43,7 +55,6 @@ import {
   rolloutSummaryLine,
   safeErrorMessage,
   unresolvedOverlayDefs,
-  usageByLine,
   quotaBytesFromInput,
   type Line,
   type LineSortKey,
@@ -147,6 +158,22 @@ interface UsageResult {
   collectors: UsageCollector[];
   /** True when at least one row carries a line_hash_id. */
   per_line: boolean;
+  /**
+   * The attributed per-line rows. This is what the Usage screen renders: each
+   * row says who the server placed the bytes on, on what evidence, and whether
+   * the figure feeds a quota. The four collections above are the older
+   * aggregate model and are kept so an older server still renders.
+   */
+  lines?: UsageLineRow[];
+  /**
+   * Bytes counted in more than one node total because they crossed a chain.
+   * Stated, never reconciled: node totals count every hop and user totals
+   * count the entry only, and both are correct.
+   */
+  double_counted_via_chains_bytes?: number;
+  period?: string;
+  from?: string;
+  to?: string;
 }
 
 const init = ref<HostInit>();
@@ -160,7 +187,11 @@ const lines = ref<LineGroup[]>([]);
 const chains = ref<LineChain[]>([]);
 const users = ref<VpnUser[]>([]);
 const profiles = ref<Profile[]>([]);
-const usage = ref<UsageResult>({ by_user: [], by_node: [], rows: [], collectors: [], per_line: false });
+const usage = ref<UsageResult>({ by_user: [], by_node: [], rows: [], collectors: [], per_line: false, lines: [] });
+/* The period is the operator's choice and it drives the server call, so it
+ * lives here rather than inside the screen: a refresh must reload the period
+ * being looked at, not the default one. */
+const usagePeriod = ref<UsagePeriod>("30d");
 const managedDefs = ref<ManagedLineDef[]>([]);
 
 let bridge: BridgeClient | undefined;
@@ -368,9 +399,48 @@ const lineOptions = computed(() => lines.value.flatMap((group) => group.lines.ma
   label: `${group.node_name || group.node_id} / ${line.name}`,
 }))));
 const enabledUsers = computed(() => users.value.filter((user) => user.enabled).length);
+
+/* ── users: usage, quota and allocation ──────────────────────────────────
+ * The server's users read model carries the usage figures; a server that
+ * predates it sends none. Absent is not zero, so the screen checks for the
+ * field rather than for a truthy number, and says "not reported" where the
+ * figure genuinely never arrived. */
+const usersReportUsage = computed(() =>
+  users.value.some((user) => user.used_period_bytes !== undefined || user.allocated_nodes !== undefined));
+const periodTraffic = computed(() =>
+  users.value.reduce((sum, user) => sum + (user.used_period_bytes ?? 0), 0));
+const overQuotaUsers = computed(() => users.value.filter((user) =>
+  quotaState(user.used_period_bytes ?? 0, user.quota_bytes).over).length);
+/* One period bound for the strip. Users on a monthly quota share the window,
+ * so the first one that states it speaks for the column. */
+const usersPeriodBounds = computed(() => {
+  const found = users.value.find((user) => user.period_start && user.period_end);
+  if (!found) return "";
+  return `${formatDate(found.period_start)} to ${formatDate(found.period_end)}`;
+});
+function allocationOf(user: VpnUser) {
+  return summarizeAllocation(user.allocated_nodes);
+}
+function coverageOf(user: VpnUser): string {
+  return coverageNote(allocationOf(user));
+}
+/* A user's period figure covers only the nodes that reported. Where any
+ * allocated node is silent the number is a floor, and the cell says so
+ * instead of presenting a partial sum as the whole truth. */
+function usedLabel(user: VpnUser): string {
+  if (user.used_period_bytes === undefined) return "not reported";
+  const prefix = allocationOf(user).silentNodes.length ? "at least " : "";
+  return `${prefix}${formatBytes(user.used_period_bytes)}`;
+}
+
+/* Same deep-link contract as the fleet lens above: `?expand=<user_id>` opens
+ * an identity's allocated nodes, so a host, a reviewer or an agent can link
+ * straight to the state being discussed. */
+const expandedUsers = ref(new Set<string>(documentQuery.getAll("expand").filter(Boolean)));
+function toggleUser(id: string): void {
+  expandedUsers.value = toggled(expandedUsers.value, id);
+}
 const totalBindings = computed(() => users.value.reduce((count, user) => count + user.bindings.length, 0));
-const totalTraffic = computed(() => usage.value.by_user.reduce((sum, row) => sum + (row.used_bytes || 0), 0));
-const lineUsage = computed(() => usageByLine(usage.value.rows, lines.value));
 const canCreateUser = computed(() => canCall(init.value, SERVICES.admin, "create"));
 const canUpdateUser = computed(() => canCall(init.value, SERVICES.admin, "update"));
 const canDeleteUser = computed(() => canCall(init.value, SERVICES.admin, "delete"));
@@ -393,6 +463,7 @@ const canConfigureProfile = computed(() => canCall(init.value, SERVICES.profiles
 const canPlanLineUsers = computed(() => ["plan_add", "plan_update", "plan_remove"]
   .every((method) => canCall(init.value, SERVICES.admin, method)));
 const canRotateCredentials = computed(() => canCall(init.value, SERVICES.admin, "rotate"));
+const canUsageQuery = computed(() => canCall(init.value, SERVICES.admin, "usage_query"));
 const canSyncMetadata = computed(() => canCall(init.value, SERVICES.lines, "sync_metadata"));
 const canReattachLine = computed(() => canCall(init.value, SERVICES.lines, "reattach"));
 const canReadManaged = computed(() => canCall(init.value, SERVICES.lines, "managed"));
@@ -503,15 +574,25 @@ async function loadCurrent(background = false): Promise<void> {
         break;
       }
       case "usage": {
-        // The line listing names the hashes the collector reports against. It
-        // is the same cached read model the Lines view uses, so this costs a
-        // cache read on the server, not a second fleet walk.
+        // The line listing names the hashes the collector reports against and
+        // the user listing carries each quota. Both are the same cached read
+        // models the other views use, so this costs cache reads on the server
+        // rather than a second fleet walk.
         const [usageResult, lineResult] = await Promise.all([
-          pluginCall<UsageResult>(SERVICES.usage, "query"),
+          pluginCall<UsageResult>(SERVICES.usage, "query", { period: usagePeriod.value }),
           pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list"),
         ]);
-        usage.value = { ...usageResult, rows: usageResult.rows ?? [] };
+        usage.value = { ...usageResult, rows: usageResult.rows ?? [], lines: usageResult.lines ?? [] };
         lines.value = lineResult.groups ?? [];
+        // Quotas belong to the identity, not to the usage rows, so the screen
+        // needs the user listing to say "91% of 500 GiB". Losing it costs the
+        // quota column and nothing else, so it must not fail the whole page.
+        try {
+          const userResult = await pluginCall<{ users: VpnUser[] }>(SERVICES.users, "list");
+          users.value = userResult.users ?? [];
+        } catch {
+          users.value = [];
+        }
         break;
       }
     }
@@ -522,6 +603,12 @@ async function loadCurrent(background = false): Promise<void> {
     loading.value = false;
     refreshing.value = false;
   }
+}
+
+async function setUsagePeriod(period: UsagePeriod): Promise<void> {
+  if (period === usagePeriod.value || refreshing.value) return;
+  usagePeriod.value = period;
+  await loadCurrent(true);
 }
 
 // design-17 S3: the managed-line rollout. The modal collects the account and
@@ -580,6 +667,9 @@ const userForm = reactive({
   name: "",
   enabled: true,
   quotaGiB: "",
+  /** "none" or "monthly"; the server stores "none" as an empty period. */
+  quotaPeriod: "none",
+  quotaResetDay: "",
   expiresAt: "",
   group: "",
   comment: "",
@@ -590,7 +680,7 @@ const userForm = reactive({
 
 function openCreateUser(): void {
   editingUser.value = undefined;
-  Object.assign(userForm, { email: "", name: "", enabled: true, quotaGiB: "", expiresAt: "", group: "", comment: "", protocol: "vless", secret: "", flow: "" });
+  Object.assign(userForm, { email: "", name: "", enabled: true, quotaGiB: "", quotaPeriod: "none", quotaResetDay: "", expiresAt: "", group: "", comment: "", protocol: "vless", secret: "", flow: "" });
   userDialogOpen.value = true;
 }
 
@@ -601,6 +691,8 @@ function openEditUser(user: VpnUser): void {
     name: user.name ?? "",
     enabled: user.enabled,
     quotaGiB: user.quota_bytes ? String(user.quota_bytes / 1024 / 1024 / 1024) : "",
+    quotaPeriod: user.quota_period === "monthly" ? "monthly" : "none",
+    quotaResetDay: user.quota_reset_day ? String(user.quota_reset_day) : "",
     expiresAt: formatDateTimeLocal(user.expires_at),
     group: user.group ?? "",
     comment: user.comment ?? "",
@@ -626,6 +718,14 @@ async function saveUser(): Promise<void> {
     // a quota'd account made it unlimited.
     const quota = quotaBytesFromInput(userForm.quotaGiB);
     if (quota !== undefined) payload.quota_bytes = quota;
+    // The period is a select, so it always states a value and is always sent.
+    // "none" is the server's word for no reset, and it clears the reset day
+    // server-side, so a quota can never keep a stale day it no longer uses.
+    payload.quota_period = userForm.quotaPeriod === "monthly" ? "monthly" : "none";
+    if (userForm.quotaPeriod === "monthly") {
+      const day = quotaResetDayFromInput(userForm.quotaResetDay);
+      if (day !== undefined) payload.quota_reset_day = day;
+    }
     const expiresAt = parseDateTimeLocal(userForm.expiresAt);
     if (expiresAt) payload.expires_at = expiresAt;
     if (editingUser.value) {
@@ -1001,7 +1101,7 @@ const hasRouteData = computed(() => ({
   lines: allLines.value.length > 0,
   users: users.value.length > 0,
   profiles: profiles.value.length > 0,
-  usage: usage.value.by_user.length > 0 || usage.value.by_node.length > 0 || usage.value.rows.length > 0 || usage.value.collectors.length > 0,
+  usage: true,
 }[route.value] ?? false));
 
 const overlayAnchorTop = ref(MIN_ANCHOR_TOP);
@@ -1330,29 +1430,112 @@ onBeforeUnmount(() => {
     </template>
 
     <template v-else-if="route === 'users'">
-      <section class="summary-strip" aria-label="User summary">
+      <section class="summary-strip" aria-label="User summary" style="--stat-count: 5">
         <div><span>Identities</span><strong>{{ users.length }}</strong></div>
         <div><span>Enabled</span><strong>{{ enabledUsers }}</strong></div>
+        <div>
+          <span>Used this period</span>
+          <strong>{{ usersReportUsage ? formatBytes(periodTraffic) : 'not reported' }}</strong>
+          <small v-if="usersPeriodBounds">{{ usersPeriodBounds }}</small>
+          <small v-else-if="usersReportUsage">lifetime total; no monthly quota window</small>
+        </div>
+        <div :data-tone="overQuotaUsers ? 'warning' : undefined">
+          <span>Over quota</span><strong>{{ overQuotaUsers }}</strong>
+        </div>
         <div><span>Bindings</span><strong>{{ totalBindings }}</strong></div>
-        <div><span>Protocols</span><strong>{{ new Set(users.flatMap((user) => user.credentials.map((credential) => credential.protocol))).size }}</strong></div>
       </section>
       <section class="toolbar toolbar-end">
         <span v-if="!hasUserMutations" class="permission-note"><KeyRound :size="14" /> Read-only session</span>
         <button v-if="canCreateUser" class="button button-primary" type="button" @click="openCreateUser"><Plus :size="15" /> New identity</button>
       </section>
-      <section class="data-panel"><div v-if="users.length" class="table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Credentials</th><th>Bindings</th><th>Quota</th><th>Expires</th><th v-if="showUserActions" class="actions-cell">Actions</th></tr></thead>
-        <tbody><tr v-for="user in users" :key="user.id">
-          <td><strong>{{ user.email }}</strong><small>{{ user.name || user.id }}<span v-if="user.migrated"> / migrated</span></small></td>
-          <td><span class="status-dot" :data-tone="user.enabled ? 'healthy' : 'warning'">{{ user.enabled ? 'enabled' : 'disabled' }}</span></td>
-          <td><span v-for="credential in user.credentials" :key="credential.protocol" class="badge credential">{{ credential.protocol }}<KeyRound v-if="credential.has_secret" :size="11" /></span><span v-if="!user.credentials.length">-</span></td>
-          <td>{{ user.bindings.length }}</td><td>{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'No quota set' }}</td><td>{{ formatDate(user.expires_at) }}</td>
-          <td v-if="showUserActions" class="actions-cell"><div class="icon-actions">
-            <button v-if="canUpdateUser" class="icon-button bordered" type="button" aria-label="Edit identity" title="Edit identity" @click="openEditUser(user)"><Pencil :size="14" /></button>
-            <button v-if="canRotateCredentials && user.credentials.length" class="icon-button bordered" type="button" aria-label="Rotate a credential" title="Rotate a credential" @click="openRotate(user)"><KeyRound :size="14" /></button>
-            <button v-if="canBindUser || canUnbindUser" class="icon-button bordered" type="button" aria-label="Manage line bindings" title="Manage line bindings" @click="bindingUser = user"><Link2 :size="14" /></button>
-            <button v-if="canDeleteUser" class="icon-button bordered destructive" type="button" aria-label="Delete identity" title="Delete identity" @click="deleteTarget = user"><Trash2 :size="14" /></button>
-          </div></td>
-        </tr></tbody></table></div>
+      <section class="data-panel">
+        <div v-if="users.length" class="table-wrap">
+          <table class="users-table" style="min-width: 980px">
+            <thead>
+              <tr>
+                <th class="chevron-cell"><span class="sr-only">Allocated nodes</span></th>
+                <th>Identity</th><th>Status</th><th class="num">Used</th><th>Quota</th>
+                <th>Allocated nodes</th><th>Last seen</th>
+                <th v-if="showUserActions" class="actions-cell">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="user in users" :key="user.id">
+                <tr :data-open="expandedUsers.has(user.id) || undefined">
+                  <td class="chevron-cell">
+                    <button
+                      class="icon-button"
+                      type="button"
+                      :aria-expanded="expandedUsers.has(user.id)"
+                      :aria-label="`Allocated nodes for ${user.email}`"
+                      :disabled="!user.allocated_nodes?.length"
+                      @click="toggleUser(user.id)"
+                    ><ChevronRight class="row-chevron" :size="15" aria-hidden="true" /></button>
+                  </td>
+                  <td>
+                    <strong :title="user.email">{{ user.email }}</strong>
+                    <small :title="user.name || user.id">{{ user.name || user.id }}<span v-if="user.migrated"> / migrated</span></small>
+                    <span v-for="credential in user.credentials" :key="credential.protocol" class="badge credential">{{ credential.protocol }}<KeyRound v-if="credential.has_secret" :size="11" /></span>
+                  </td>
+                  <td><span class="status-dot" :data-tone="user.enabled ? 'healthy' : 'warning'">{{ user.enabled ? 'enabled' : 'disabled' }}</span></td>
+                  <td class="num">
+                    <span class="mono">{{ usedLabel(user) }}</span>
+                    <small v-if="user.used_total_bytes !== undefined" class="cell-note">{{ formatBytes(user.used_total_bytes) }} lifetime</small>
+                  </td>
+                  <td>
+                    <template v-if="quotaState(user.used_period_bytes ?? 0, user.quota_bytes).hasQuota">
+                      <div class="quota-meter" :data-tone="quotaState(user.used_period_bytes ?? 0, user.quota_bytes).tone">
+                        <div class="quota-bar" aria-hidden="true"><span :style="{ width: `${quotaState(user.used_period_bytes ?? 0, user.quota_bytes).percent}%` }" /></div>
+                        <small>{{ quotaState(user.used_period_bytes ?? 0, user.quota_bytes).percent }}% of {{ formatBytes(user.quota_bytes) }}<span v-if="user.quota_period === 'monthly'"> / monthly</span></small>
+                      </div>
+                    </template>
+                    <span v-else class="status-dot" data-tone="neutral">No quota set</span>
+                  </td>
+                  <td>
+                    <template v-if="user.allocated_nodes?.length">
+                      <span class="status-dot" :data-tone="allocationOf(user).silentNodes.length ? 'warning' : 'healthy'">
+                        {{ allocationOf(user).reportingNodes }} of {{ allocationOf(user).nodes }} reporting
+                      </span>
+                      <small class="cell-note">{{ allocationOf(user).lines }} line{{ allocationOf(user).lines === 1 ? '' : 's' }}<span v-if="allocationOf(user).viaRelayLines">, {{ allocationOf(user).viaRelayLines }} via relay</span></small>
+                    </template>
+                    <span v-else-if="usersReportUsage" class="status-dot" data-tone="neutral">none allocated</span>
+                    <span v-else class="status-dot" data-tone="neutral">not reported</span>
+                  </td>
+                  <td>{{ user.last_seen_at ? formatDate(user.last_seen_at) : (usersReportUsage ? 'never' : '-') }}</td>
+                  <td v-if="showUserActions" class="actions-cell"><div class="icon-actions">
+                    <button v-if="canUpdateUser" class="icon-button bordered" type="button" aria-label="Edit identity" title="Edit identity" @click="openEditUser(user)"><Pencil :size="14" /></button>
+                    <button v-if="canRotateCredentials && user.credentials.length" class="icon-button bordered" type="button" aria-label="Rotate a credential" title="Rotate a credential" @click="openRotate(user)"><KeyRound :size="14" /></button>
+                    <button v-if="canBindUser || canUnbindUser" class="icon-button bordered" type="button" aria-label="Manage line bindings" title="Manage line bindings" @click="bindingUser = user"><Link2 :size="14" /></button>
+                    <button v-if="canDeleteUser" class="icon-button bordered destructive" type="button" aria-label="Delete identity" title="Delete identity" @click="deleteTarget = user"><Trash2 :size="14" /></button>
+                  </div></td>
+                </tr>
+                <tr v-if="expandedUsers.has(user.id) && user.allocated_nodes?.length" class="evidence-row">
+                  <td :colspan="showUserActions ? 8 : 7">
+                    <p v-if="coverageOf(user)" class="evidence-warn allocation-note">{{ coverageOf(user) }}</p>
+                    <div class="evidence-grid">
+                      <div v-for="node in user.allocated_nodes" :key="node.node_id">
+                        <span>{{ node.node_name || node.node_id }}</span>
+                        <p>
+                          <span class="status-dot" :data-tone="collectorTone(node.collector_state)">{{ collectorLabel(node.collector_state) }}</span>
+                        </p>
+                        <p v-for="line in node.lines" :key="line.line_hash_id" class="allocation-line">
+                          <strong :title="line.tag || line.line_hash_id">{{ line.tag || line.line_hash_id }}</strong>
+                          <span class="badge">{{ line.role }}</span>
+                          <span class="badge" :data-tone="line.allocation === 'relay' ? 'info' : undefined">{{ line.allocation }}</span>
+                          <span class="mono">{{ collectorTone(node.collector_state) === 'healthy' ? formatBytes(line.period_uplink + line.period_downlink) : 'unknown' }}</span>
+                          <small v-if="line.via_relay">reached through a relay, so it is counted at the entry line</small>
+                          <small v-else-if="line.estimate">estimated, not a counter this box reported</small>
+                          <small v-else-if="!collectorReports(node.collector_state)">this node is not reporting, so its traffic is unknown rather than zero</small>
+                        </p>
+                        <p v-if="!node.lines.length" class="evidence-hash">No line on this node is allocated to this identity.</p>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
         <div v-else class="empty-state">
           <UserRound :size="26" aria-hidden="true" />
           <strong>No VPN identities yet</strong>
@@ -1360,6 +1543,11 @@ onBeforeUnmount(() => {
           <div v-if="canCreateUser" class="empty-actions"><button class="button button-primary" type="button" @click="openCreateUser"><Plus :size="15" /> Create the first identity</button></div>
           <p v-else class="empty-inline">This session cannot create identities.</p>
         </div>
+        <p v-if="users.length && !usersReportUsage" class="permission-note panel-note">
+          This server did not send usage with the identity list, so the used, quota-progress and
+          allocated-node columns have nothing to report. That is a missing reading, not zero
+          traffic. The Usage screen reads the same accounting directly.
+        </p>
       </section>
     </template>
 
@@ -1389,59 +1577,44 @@ onBeforeUnmount(() => {
     </template>
 
     <template v-else-if="route === 'usage'">
-      <section class="summary-strip" aria-label="Usage summary"><div><span>Tracked users</span><strong>{{ usage.by_user.length }}</strong></div><div><span>Traffic</span><strong>{{ formatBytes(totalTraffic) }}</strong></div><div><span>Reporting nodes</span><strong>{{ usage.by_node.length }}</strong></div><div><span>Collector errors</span><strong>{{ usage.collectors.filter((collector) => collector.status === 'error').length }}</strong></div></section>
-      <section class="split-layout">
-        <article class="data-panel"><header class="panel-header"><div><h2>By node</h2><p>Latest collector snapshots</p></div><Activity :size="17" aria-hidden="true" /></header>
-          <div v-if="usage.by_node.length" class="table-wrap"><table style="min-width: 420px"><thead><tr><th>Node</th><th class="num">Users</th><th class="num">Traffic</th><th>Reported</th></tr></thead><tbody><tr v-for="node in usage.by_node" :key="node.node_id"><td><strong :title="node.node_name || node.node_id">{{ node.node_name || node.node_id }}</strong><small :title="node.node_id">{{ node.node_id }}</small></td><td class="num">{{ node.user_count }}</td><td class="mono num">{{ formatBytes(node.used_bytes) }}</td><td>{{ formatDate(node.at) }}</td></tr></tbody></table></div>
-          <div v-else class="empty-state"><Activity :size="24" aria-hidden="true" /><strong>No node has reported traffic</strong><p>A node reports once its profile names a usage source: a stats file, a collector URL, the Xray API, or the sing-box experimental API. Set one under Node Profiles.</p></div>
-        </article>
-        <article class="data-panel"><header class="panel-header"><div><h2>By identity</h2><p>Monotonic account totals</p></div><Users :size="17" aria-hidden="true" /></header>
-          <div v-if="usage.by_user.length" class="table-wrap"><table style="min-width: 420px"><thead><tr><th>Identity</th><th>Status</th><th class="num">Used</th><th class="num">Quota</th></tr></thead><tbody><tr v-for="user in usage.by_user" :key="user.user_id"><td><strong :title="user.email || user.user_id">{{ user.email || user.user_id }}</strong><small :title="user.user_id">{{ user.user_id }}</small></td><td><span class="status-dot" :data-tone="user.status === 'active' ? 'healthy' : user.status === 'over_quota' ? 'error' : 'neutral'">{{ user.status || 'unknown' }}</span></td><td class="mono num">{{ formatBytes(user.used_bytes) }}</td><td class="mono num">{{ user.quota_bytes ? formatBytes(user.quota_bytes) : 'No quota set' }}</td></tr></tbody></table></div>
-          <div v-else class="empty-state"><Users :size="24" aria-hidden="true" /><strong>No per-identity totals</strong><p>Per-identity accounting needs a collector that reports per-user counters. Without one, only node totals are available.</p></div>
-        </article>
-      </section>
-      <!-- Per-line traffic. The server computes this and has always returned
-           it; the plugin used to declare a result type without `rows` and drop
-           it on parse. Rendered only when a collector actually attributed
-           bytes to a line, and the unattributed remainder is stated rather
-           than quietly excluded. -->
-      <section v-if="usage.rows.length" class="data-panel" aria-labelledby="usage-by-line">
-        <header class="panel-header">
-          <div><h2 id="usage-by-line">By line</h2><p>Traffic a collector attributed to a specific inbound.</p></div>
-          <span class="count">{{ lineUsage.lines.length }} lines</span>
-        </header>
-        <div v-if="lineUsage.lines.length" class="table-wrap">
-          <table style="min-width: 520px">
-            <thead><tr><th>Node</th><th>Line</th><th class="num">Identities</th><th class="num">Traffic</th></tr></thead>
-            <tbody>
-              <tr v-for="entry in lineUsage.lines" :key="`${entry.nodeID}:${entry.lineHashID}`">
-                <td><strong :title="entry.nodeName || entry.nodeID">{{ entry.nodeName || entry.nodeID }}</strong><small :title="entry.nodeID">{{ entry.nodeID }}</small></td>
-                <td>
-                  <strong :title="entry.label">{{ entry.label }}</strong>
-                  <small class="mono" :title="entry.lineHashID">{{ entry.lineHashID }}<span v-if="!entry.resolved"> · no longer in the fleet listing</span></small>
-                </td>
-                <td class="num">{{ entry.users }}</td>
-                <td class="mono num">{{ formatBytes(entry.bytes) }}</td>
-              </tr>
-            </tbody>
-          </table>
+      <UsageScreen
+        :lines="usage.lines ?? []"
+        :double-counted="usage.double_counted_via_chains_bytes ?? 0"
+        :period="usage.period || usagePeriod"
+        :from="usage.from"
+        :to="usage.to"
+        :collectors="usage.collectors ?? []"
+        :groups="lines"
+        :users="users"
+        :can-drill-down="canUsageQuery"
+        :busy="refreshing"
+        :failed="!!error && !(usage.lines ?? []).length"
+        @period="setUsagePeriod"
+      />
+      <!-- The collector panel is the fleet-wide view of the same question the
+           per-node column answers per row: which sources are actually
+           reporting. It stays because "no collector is configured" is the
+           first thing to fix when the screen above is empty. -->
+      <section class="data-panel collectors">
+        <header class="panel-header"><div><h2>Collectors</h2><p>Source health and last checks</p></div></header>
+        <div v-if="usage.collectors.length" class="collector-grid">
+          <div v-for="collector in usage.collectors" :key="collector.node_id">
+            <span class="status-dot" :data-tone="collectorTone(collector.status === 'ok' ? 'ok' : collector.status || '')">{{ collectorLabel(collector.status || '') }}</span>
+            <strong :title="collector.node_name || collector.node_id">{{ collector.node_name || collector.node_id }}</strong>
+            <small :title="`${collector.source || 'unspecified'} / ${formatDate(collector.checked_at)}`">{{ collector.source || 'unspecified' }} / {{ formatDate(collector.checked_at) }}</small>
+            <p v-if="collector.error" class="error-text">{{ collector.error }}</p>
+          </div>
         </div>
         <div v-else class="empty-state">
           <Gauge :size="24" aria-hidden="true" />
-          <strong>No collector attributes traffic to a line</strong>
-          <p>{{ usage.rows.length }} usage rows arrived and every one of them is a node total for an account, with no line attached. Per-line accounting needs a collector that reports per-inbound counters: the sing-box experimental stats API, or the Xray API with a stat pattern that names the inbound. Set one under Node Profiles.</p>
+          <strong>No collector is configured</strong>
+          <p>No node profile points at a usage source, so traffic on those nodes is unmeasured rather than zero. Open Node Profiles, edit a node, and set a usage file, collector URL, Xray API or sing-box stats API.</p>
         </div>
-        <p v-if="lineUsage.lines.length && lineUsage.unattributedBytes > 0" class="permission-note">
-          {{ formatBytes(lineUsage.unattributedBytes) }} of {{ formatBytes(lineUsage.attributedBytes + lineUsage.unattributedBytes) }} is not in this table: {{ lineUsage.unattributedNodes.join(', ') }} report node totals without a line, so their traffic cannot be placed on an inbound.
-        </p>
-      </section>
-      <section class="data-panel collectors"><header class="panel-header"><div><h2>Collectors</h2><p>Source health and last checks</p></div></header><div v-if="usage.collectors.length" class="collector-grid"><div v-for="collector in usage.collectors" :key="collector.node_id"><span class="status-dot" :data-tone="collector.status === 'error' ? 'error' : collector.status === 'ok' ? 'healthy' : 'neutral'">{{ collector.status || 'unknown' }}</span><strong>{{ collector.node_name || collector.node_id }}</strong><small>{{ collector.source || 'unspecified' }} / {{ formatDate(collector.checked_at) }}</small><p v-if="collector.error" class="error-text">{{ collector.error }}</p></div></div>
-        <div v-else class="empty-state"><Gauge :size="24" aria-hidden="true" /><strong>No collector is configured</strong><p>No node profile points at a usage source, so traffic on those nodes is unmeasured rather than zero. Open Node Profiles, edit a node, and set a usage file, collector URL, Xray API or sing-box stats API.</p></div>
       </section>
     </template>
 
     <div v-if="userDialogOpen" class="overlay-scrim" :style="overlayStyle" @mousedown.self="userDialogOpen = false"><section tabindex="-1" class="modal" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><header><div><h2 id="user-dialog-title">{{ editingUser ? 'Edit identity' : 'New identity' }}</h2><p>{{ editingUser ? 'Existing secrets stay unchanged.' : 'Create one initial protocol credential.' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="userDialogOpen = false"><X :size="17" /></button></header><div class="form-grid">
-      <label class="field field-wide"><span>Email identity</span><input v-model="userForm.email" type="email" autocomplete="off" /></label><label class="field"><span>Display name</span><input v-model="userForm.name" type="text" /></label><label class="field"><span>Group</span><input v-model="userForm.group" type="text" /></label><label class="field"><span>Quota (GiB)</span><input v-model="userForm.quotaGiB" type="number" min="0" step="1" placeholder="Unlimited" /></label><label class="field"><span>Expires at</span><input v-model="userForm.expiresAt" type="datetime-local" /><small class="field-help">{{ editingUser ? 'Blank leaves the current expiry unchanged.' : 'Optional expiry for this identity.' }}</small></label><label class="toggle-field"><input v-model="userForm.enabled" type="checkbox" /><span>Identity enabled</span></label>
+      <label class="field field-wide"><span>Email identity</span><input v-model="userForm.email" type="email" autocomplete="off" /></label><label class="field"><span>Display name</span><input v-model="userForm.name" type="text" /></label><label class="field"><span>Group</span><input v-model="userForm.group" type="text" /></label><label class="field"><span>Quota (GiB)</span><input v-model="userForm.quotaGiB" type="number" min="0" step="1" placeholder="Unlimited" /><small class="field-help">{{ editingUser ? 'Blank leaves the current quota unchanged; 0 makes it unlimited.' : 'Blank or 0 is unlimited.' }}</small></label><label class="field"><span>Quota period</span><select v-model="userForm.quotaPeriod"><option value="none">No reset, counts for the lifetime</option><option value="monthly">Monthly</option></select></label><label class="field"><span>Reset day</span><input v-model="userForm.quotaResetDay" type="number" min="1" max="28" placeholder="1" :disabled="userForm.quotaPeriod !== 'monthly'" /><small class="field-help">{{ userForm.quotaPeriod === 'monthly' ? 'Day of the month the count resets, 1 to 28 so every month has it.' : 'Only a monthly quota resets.' }}</small></label><label class="field"><span>Expires at</span><input v-model="userForm.expiresAt" type="datetime-local" /><small class="field-help">{{ editingUser ? 'Blank leaves the current expiry unchanged.' : 'Optional expiry for this identity.' }}</small></label><label class="toggle-field"><input v-model="userForm.enabled" type="checkbox" /><span>Identity enabled</span></label>
       <template v-if="!editingUser"><label class="field"><span>Protocol</span><select v-model="userForm.protocol"><option v-for="protocol in ['vless','vmess','trojan','shadowsocks','hysteria2','tuic','anytls']" :key="protocol" :value="protocol">{{ protocol }}</option></select></label><label class="field"><span>{{ ['vless','vmess','tuic'].includes(userForm.protocol) ? 'UUID' : 'Password' }}</span><input v-model="userForm.secret" type="password" autocomplete="new-password" /></label><label class="field field-wide"><span>Flow override</span><input v-model="userForm.flow" type="text" placeholder="Optional" /></label></template>
       <label class="field field-wide"><span>Comment</span><textarea v-model="userForm.comment" rows="3" /></label></div><footer><button class="button button-secondary" type="button" @click="userDialogOpen = false">Cancel</button><button class="button button-primary" type="button" :disabled="savingUser || !userForm.email.trim()" @click="saveUser"><LoaderCircle v-if="savingUser" class="spin" :size="15" />{{ editingUser ? 'Save changes' : 'Create identity' }}</button></footer></section></div>
 
