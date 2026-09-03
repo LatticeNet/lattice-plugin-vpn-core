@@ -20,6 +20,8 @@
  * Never imported by src/; the shipped bundle is built from index.html alone.
  */
 
+import type { UsageLineRow } from "../src/usageModel";
+
 export type Scenario = "production" | "hubs" | "offfleet" | "rich" | "dense" | "empty" | "failing";
 
 const NODE_NAMES = [
@@ -396,6 +398,196 @@ function buildUsage(scenario: Scenario) {
   };
 }
 
+/**
+ * The attributed per-line rows the Usage screen renders.
+ *
+ * This deliberately covers every branch the server can produce, because the
+ * screen's whole job is telling them apart: a named user, a credential match,
+ * a lone binding, a lone Sub-Store record, a relayed portion already counted
+ * upstream, an estimate, a set of candidates the server would not choose
+ * between, and an inbound tag that matches no line at all. The long email and
+ * the 64-character hash are here so the layout is tested against real widths
+ * rather than three-word labels.
+ */
+function buildUsageLines(scenario: Scenario, period: string): UsageLineRow[] {
+  if (scenario === "production" || scenario === "empty") return [];
+
+  const GiB = 1024 ** 3;
+  // A short window shows less traffic, the way a real one does.
+  const scale = period === "today" ? 0.05 : period === "7d" ? 0.3 : period === "all" ? 1.8 : 1;
+  const bytes = (value: number) => Math.round(value * GiB * scale);
+
+  if (scenario === "offfleet") {
+    // Collectors report node totals only: nothing can be placed on a line.
+    return NODE_NAMES.slice(0, 3).map((name, index) => ({
+      node_id: `node-${name}`, node_name: name,
+      tag: `inbound-${index}`, role: "direct",
+      uplink: bytes(4), downlink: bytes(8), used_bytes: bytes(12),
+      attribution: "none",
+      attribution_reason: "line usage, no user",
+      candidates: ["u_ops", "u_lab"],
+      counted: false,
+    }));
+  }
+
+  return [
+    {
+      node_id: "node-hkg-edge-01", node_name: "hkg-edge-01", line_hash_id: "lh_0000",
+      tag: "vless-in-443", role: "entry",
+      uplink: bytes(31), downlink: bytes(88), used_bytes: bytes(119),
+      attribution: "named", attribution_proof: "proof",
+      attribution_reason: "user counter on this line folds to this identity",
+      user_id: "u_ops", email: "ops@example.invalid", counted: true,
+    },
+    {
+      node_id: "node-hkg-edge-01", node_name: "hkg-edge-01", line_hash_id: "lh_0001",
+      tag: "trojan-in-8443", role: "direct",
+      uplink: bytes(12), downlink: bytes(40), used_bytes: bytes(52),
+      attribution: "credential", attribution_proof: "proof",
+      attribution_reason: "inbound trojan password is this user's credential",
+      user_id: "u_lab", email: "lab@example.invalid", counted: true,
+    },
+    {
+      node_id: "node-sin-edge-01", node_name: "sin-edge-01", line_hash_id: "lh_0002",
+      tag: "vless-in-2053", role: "direct",
+      uplink: bytes(7), downlink: bytes(19), used_bytes: bytes(26),
+      attribution: "binding", attribution_proof: "inferred",
+      attribution_reason: "only enabled binding on this line",
+      user_id: "u_lab", email: "lab@example.invalid", counted: true,
+    },
+    {
+      node_id: "node-sin-edge-02", node_name: "sin-edge-02", line_hash_id: "lh_0003",
+      tag: "hysteria2-in", role: "direct",
+      uplink: bytes(3), downlink: bytes(9), used_bytes: bytes(12),
+      attribution: "substore", attribution_proof: "inferred",
+      attribution_reason: "only Sub-Store record selecting this line (rec_7f31c9)",
+      user_id: "u_retired",
+      email: "retired-contractor-with-a-very-long-address@example.invalid",
+      counted: false,
+    },
+    // The chain: the exit carries bytes the entry counter already holds.
+    {
+      node_id: "node-lax-exit-01", node_name: "lax-exit-01", line_hash_id: "lh_0004",
+      tag: "vless-relay-31001", role: "exit",
+      uplink: bytes(30), downlink: bytes(85), used_bytes: bytes(115),
+      attribution: "none",
+      attribution_reason: "reached through a relay; counted at the entry line",
+      counted_at: "lh_0000", counted: false,
+    },
+    // The same exit's own direct users, as a subtraction rather than a counter.
+    {
+      node_id: "node-lax-exit-01", node_name: "lax-exit-01", line_hash_id: "lh_0004",
+      tag: "vless-relay-31001", role: "shared",
+      uplink: bytes(2), downlink: bytes(6), used_bytes: bytes(8),
+      attribution: "credential", attribution_proof: "proof",
+      attribution_reason: "inbound vless uuid is this user's credential",
+      user_id: "u_ops", email: "ops@example.invalid",
+      estimate: true, counted: true,
+    },
+    // Real traffic the server refused to guess an owner for.
+    {
+      node_id: "node-fra-exit-01", node_name: "fra-exit-01", line_hash_id: "lh_0005",
+      tag: "vless-in-443", role: "direct",
+      uplink: bytes(9), downlink: bytes(27), used_bytes: bytes(36),
+      attribution: "none",
+      attribution_reason: "inbound bytes beyond the named user counters",
+      candidates: ["u_ops", "u_lab"], counted: false,
+    },
+    // A counter for an inbound tag no line on the node carries.
+    {
+      node_id: "node-fra-exit-02", node_name: "fra-exit-02",
+      tag: "legacy-shadowsocks-inbound-that-nothing-declares", role: "direct",
+      uplink: bytes(1), downlink: bytes(4), used_bytes: bytes(5),
+      attribution: "unknown_line",
+      attribution_reason: "no line on this node carries this inbound tag",
+      counted: false,
+    },
+    {
+      node_id: "node-ams-exit-01", node_name: "ams-exit-01",
+      line_hash_id: "lh_9f2c4b7e1a6d3058c4e9b2f7a1d6035849c2e7b1f4a9d6c3082e5b7f1a4d6c30",
+      tag: "vless-in-443", role: "direct",
+      uplink: bytes(5), downlink: bytes(14), used_bytes: bytes(19),
+      attribution: "named", attribution_proof: "proof",
+      attribution_reason: "user counter on this line folds to this identity",
+      user_id: "u_ops", email: "ops@example.invalid", counted: true,
+    },
+  ];
+}
+
+/** Allocated nodes for a user, including one whose collector never reported. */
+function allocatedNodes(userID: string) {
+  const GiB = 1024 ** 3;
+  if (userID === "u_ops") {
+    return [
+      {
+        node_id: "node-hkg-edge-01", node_name: "hkg-edge-01", collector_state: "ok",
+        lines: [{
+          line_hash_id: "lh_0000", tag: "vless-in-443", role: "entry", allocation: "binding",
+          period_uplink: 31 * GiB, period_downlink: 88 * GiB,
+          last_seen_at: "2026-09-02T09:14:00Z", counted: true,
+        }],
+      },
+      {
+        node_id: "node-lax-exit-01", node_name: "lax-exit-01", collector_state: "ok",
+        lines: [{
+          line_hash_id: "lh_0004", tag: "vless-relay-31001", role: "exit", allocation: "relay",
+          period_uplink: 0, period_downlink: 0, counted: false, via_relay: true,
+        }],
+      },
+      {
+        node_id: "node-syd-relay-01", node_name: "syd-relay-01", collector_state: "no_collector",
+        lines: [{
+          line_hash_id: "lh_0007", tag: "vless-in-443", role: "direct", allocation: "binding",
+          period_uplink: 0, period_downlink: 0, counted: false,
+        }],
+      },
+    ];
+  }
+  if (userID === "u_lab") {
+    return [
+      {
+        node_id: "node-sin-edge-01", node_name: "sin-edge-01", collector_state: "ok",
+        lines: [{
+          line_hash_id: "lh_0002", tag: "vless-in-2053", role: "direct", allocation: "binding",
+          period_uplink: 7 * GiB, period_downlink: 19 * GiB,
+          last_seen_at: "2026-09-02T08:02:00Z", counted: true,
+        }],
+      },
+      {
+        node_id: "node-nrt-edge-02", node_name: "nrt-edge-02", collector_state: "error",
+        lines: [{
+          line_hash_id: "lh_0008", tag: "trojan-in-8443", role: "direct", allocation: "substore",
+          period_uplink: 0, period_downlink: 0, counted: false,
+        }],
+      },
+    ];
+  }
+  return [];
+}
+
+/** The users list with the server's usage read model attached. */
+function usersWithUsage(scenario: Scenario) {
+  if (!isRich(scenario)) return USERS;
+  const GiB = 1024 ** 3;
+  const period: Record<string, { used: number; total: number; seen?: string }> = {
+    u_ops: { used: 127 * GiB, total: 1_408 * GiB, seen: "2026-09-02T09:14:00Z" },
+    u_lab: { used: 481 * GiB, total: 902 * GiB, seen: "2026-09-02T08:02:00Z" },
+    u_retired: { used: 0, total: 44 * GiB },
+  };
+  return USERS.map((user) => ({
+    ...user,
+    quota_period: user.id === "u_lab" ? "monthly" : "",
+    quota_reset_day: user.id === "u_lab" ? 1 : 0,
+    used_total_bytes: period[user.id]?.total ?? 0,
+    used_period_bytes: period[user.id]?.used ?? 0,
+    period_start: user.id === "u_lab" ? "2026-09-01T00:00:00Z" : undefined,
+    period_end: user.id === "u_lab" ? "2026-09-30T23:59:59Z" : undefined,
+    last_7d: [3, 9, 14, 0, 22, 18, 11].map((value) => value * GiB),
+    last_seen_at: period[user.id]?.seen,
+    allocated_nodes: allocatedNodes(user.id),
+  }));
+}
+
 export function handlers(scenario: Scenario): Record<string, (payload: any) => unknown> {
   const groups = scenario === "hubs" ? buildHubFleet() : buildLines(scenario);
   const chains = buildChains(scenario);
@@ -434,7 +626,7 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     "lines/plan_remove_chain": () => ({ approval: { id: "apr_drop_chain" }, preview: { summary: "The source outbound returns to direct." } }),
     "lines/sync_metadata": () => ({ approval: { id: "apr_sync", plan: JSON.stringify({ summary: "write the sidecar identity file" }) } }),
     "lines/reattach": () => ({ ok: true }),
-    "users/list": () => ({ users: USERS }),
+    "users/list": () => ({ users: usersWithUsage(scenario) }),
     "users-admin/create": () => ({ ok: true }),
     "users-admin/update": () => ({ ok: true }),
     "users-admin/delete": () => ({ ok: true }),
@@ -468,6 +660,40 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
         reconfigure_required: false,
       },
     }),
-    "usage/query": () => buildUsage(scenario),
+    "usage/query": ({ period }: { period?: string }) => {
+      const window = period || "30d";
+      const lines = buildUsageLines(scenario, window);
+      // The chain overlap is exactly the relayed row's bytes: the exit reports
+      // them and the entry already counted them.
+      const doubleCounted = lines
+        .filter((row) => (row.counted_at ?? "") !== "")
+        .reduce((sum, row) => sum + row.used_bytes, 0);
+      const day = ({ today: ["20260902", "20260902"], "7d": ["20260827", "20260902"], all: ["20250728", "20260902"] } as Record<string, string[]>)[window]
+        ?? ["20260804", "20260902"];
+      return {
+        ...buildUsage(scenario),
+        lines,
+        double_counted_via_chains_bytes: doubleCounted,
+        period: window,
+        from: day[0],
+        to: day[1],
+      };
+    },
+    "users-admin/usage_query": ({ user_id, node_id, line_hash_id, period }: Record<string, string>) => {
+      const key = user_id ? "user_id" : node_id ? "node_id" : "line_hash_id";
+      const lines = buildUsageLines(scenario, period || "30d")
+        .filter((row) => (user_id ? row.user_id === user_id : node_id ? row.node_id === node_id : row.line_hash_id === line_hash_id));
+      const used = lines.reduce((sum, row) => sum + row.used_bytes, 0);
+      return {
+        scope: { [key]: user_id || node_id || line_hash_id },
+        period: period || "30d", from: "20260804", to: "20260902",
+        uplink: lines.reduce((sum, row) => sum + row.uplink, 0),
+        downlink: lines.reduce((sum, row) => sum + row.downlink, 0),
+        used_bytes: used,
+        days: [{ day: "20260902", uplink: 1, downlink: 2, used_bytes: 3 }],
+        lines,
+        double_counted_via_chains_bytes: 0,
+      };
+    },
   };
 }

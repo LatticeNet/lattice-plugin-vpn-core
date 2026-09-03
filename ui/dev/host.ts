@@ -30,7 +30,7 @@ const INTERFACES = [
   { service: "latticenet.vpn-core/users", methods: ["list"] },
   {
     service: "latticenet.vpn-core/users-admin",
-    methods: ["create", "update", "delete", "bind", "unbind", "rotate", "plan_add", "plan_update", "plan_remove"],
+    methods: ["create", "update", "delete", "bind", "unbind", "rotate", "plan_add", "plan_update", "plan_remove", "usage_query"],
   },
   { service: "latticenet.vpn-core/profiles", methods: ["query", "settings", "configure"] },
   { service: "latticenet.vpn-core/usage", methods: ["query"] },

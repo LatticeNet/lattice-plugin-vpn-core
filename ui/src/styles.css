@@ -389,6 +389,72 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 .detail-pairs dt { color: var(--muted-foreground, #65707b); }
 .detail-pairs dd { margin: 0; overflow-wrap: anywhere; }
 
+/* ── usage ────────────────────────────────────────────────────────────────
+   The Usage screen states three grades of number: measured, estimated, and
+   unknown. Nothing here invents a hue; the tone tokens above already carry
+   both themes, so a "this is an estimate" mark reads the same on either. */
+.usage-toolbar { justify-content: space-between; }
+.period-picker { display: inline-flex; overflow: hidden; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); background: var(--card, #fff); }
+.period-option { border: 0; border-right: 1px solid var(--border, #d9dde2); padding: 6px var(--sp-3); color: var(--muted-foreground, #65707b); background: transparent; font-size: var(--text-xs); font-weight: 650; white-space: nowrap; }
+.period-option:last-child { border-right: 0; }
+.period-option:hover:not(:disabled) { color: var(--foreground, #17191c); background: var(--muted, #eef0f2); }
+.period-option[aria-pressed="true"] { color: var(--primary-foreground, #fff); background: var(--primary, #1769aa); }
+
+/* A claim with its explanation attached, used where a figure would otherwise
+   read as a bug: the chain double-count, and nodes that never reported. */
+.explain-panel { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-4); color: var(--tone-info); border-color: var(--tone-info-border); background: var(--tone-info-surface); }
+.explain-panel[data-tone="warning"] { color: var(--tone-warn); border-color: var(--tone-warn-border); background: var(--tone-warn-surface); }
+.explain-panel > svg { flex: 0 0 auto; margin-top: 1px; }
+.explain-panel strong { display: block; font-size: var(--text-sm); font-weight: 650; }
+.explain-panel p { margin: var(--sp-2) 0 0; max-width: var(--measure); color: var(--foreground, #17191c); font-size: var(--text-sm); line-height: 1.6; }
+.explain-panel .inline-name { display: inline; font-weight: 650; }
+.panel-note { padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border, #d9dde2); max-width: var(--measure); line-height: 1.55; }
+
+/* A quota is a ratio, so it gets a bar; the number stays next to it because a
+   bar alone cannot say 91% of 500 GiB. */
+.quota-meter { display: grid; gap: var(--sp-1); min-width: 120px; }
+.quota-bar { height: 5px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground, #65707b) 22%, transparent); }
+.quota-bar > span { display: block; height: 100%; border-radius: 999px; background: currentColor; }
+.quota-meter[data-tone="healthy"] { color: var(--tone-ok); }
+.quota-meter[data-tone="warning"] { color: var(--tone-warn); }
+.quota-meter[data-tone="error"] { color: var(--tone-danger); }
+.quota-meter small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* The qualifier under a figure: "estimated", "counted upstream". It wraps,
+   unlike td small, because refusing to wrap here would hide the caveat. */
+.cell-note { display: block; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); white-space: normal; }
+.cell-note[data-tone="warning"] { color: var(--tone-warn); font-weight: 650; }
+
+.usage-lines td { vertical-align: top; }
+.chevron-cell { width: 38px; padding-right: 0; }
+.row-chevron { transition: transform 120ms ease-out; }
+.usage-row[data-open] .row-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .row-chevron { transition: none; } }
+.usage-row[data-open] > td { border-bottom-color: transparent; background: color-mix(in srgb, var(--muted, #eef0f2) 40%, transparent); }
+
+/* Evidence for one row, opened in place so the table it is compared against
+   stays on screen. */
+.evidence-row > td { padding: 0 var(--sp-4) var(--sp-4) calc(38px + var(--sp-3)); background: color-mix(in srgb, var(--muted, #eef0f2) 40%, transparent); }
+.evidence-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-3); }
+.evidence-grid > div { min-width: 0; padding: var(--sp-3); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); background: var(--card, #fff); }
+/* The label only. Scoped to the direct child so a span inside a paragraph
+   (a resolved line name's hash, a status dot, a badge) is not turned into an
+   uppercase block label. */
+.evidence-grid > div > span { display: block; margin-bottom: var(--sp-1); color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-weight: 650; text-transform: uppercase; }
+.evidence-grid p { margin: 0 0 var(--sp-1); font-size: var(--text-xs); line-height: 1.55; overflow-wrap: anywhere; }
+.evidence-grid p:last-child { margin-bottom: 0; }
+.evidence-warn { color: var(--tone-warn); }
+/* A 60-plus character hash breaks a column; it wraps here and keeps its title. */
+.evidence-hash { color: var(--muted-foreground, #65707b); overflow-wrap: anywhere; }
+
+/* A user's allocated lines, inside the evidence row. Each line states its own
+   collector-backed figure, or "unknown" where the node is not reporting. */
+.allocation-note { margin: 0 0 var(--sp-3); font-size: var(--text-xs); line-height: 1.55; }
+.allocation-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); padding-top: var(--sp-2); border-top: 1px solid var(--border, #e3e6e9); }
+.allocation-line strong { min-width: 0; overflow: hidden; font-size: var(--text-xs); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.allocation-line small { flex-basis: 100%; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); line-height: 1.45; }
+.users-table td { vertical-align: top; }
+
 .spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
@@ -418,6 +484,13 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
   .toggle-field { padding-top: 0; }
   .toolbar-end { align-items: stretch; flex-direction: column; }
   .toolbar .button, .search-input { width: 100%; max-width: none; }
+  /* The period picker is the primary control on Usage, so it gets the width
+     rather than wrapping into a ragged second row. */
+  .usage-toolbar { align-items: stretch; flex-direction: column; }
+  .period-picker { width: 100%; }
+  .period-option { flex: 1 1 0; padding: 7px var(--sp-1); text-align: center; }
+  .explain-panel { flex-direction: column; gap: var(--sp-2); }
+  .evidence-row > td { padding-left: var(--sp-3); padding-right: var(--sp-3); }
   .binding-add, .chain-plan-form { grid-template-columns: 1fr; }
   .chain-plan-actions { grid-column: auto; align-items: stretch; flex-direction: column; }
   /* The drawing stays on a phone: it scrolls sideways at the floor scale

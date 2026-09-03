@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.8.0-alpha.18",
+  "version": "0.8.0-alpha.19",
   "publisher": "latticenet",
-  "signature_ed25519": "g3WAVHd61U0ed8ARxGKUeFVg6HJcSFunwR0hLBwmGR2ltQhNN5Zp1ubAH7Nv4UJrEw/7MHTXqhwajBityqCwDA==",
+  "signature_ed25519": "",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "dcdee4b76e5f3ad981d36658e564a11acf598c80a83e3094ed45ae1a41efffc9"
+    "digest_sha256": "618b9d9e39886c0f8556e5ae57b624cf7c4ba8eca2e0e3cdf5b4be2d9b3bd127"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -293,6 +293,14 @@
           "effect": "write",
           "scopes": [
             "vpncore:admin"
+          ]
+        },
+        {
+          "name": "usage_query",
+          "effect": "read",
+          "scopes": [
+            "vpncore:admin",
+            "node:read"
           ]
         }
       ],

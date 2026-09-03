@@ -33,10 +33,11 @@ host bridge `1`, node-agent `0.3.4-alpha.1`. The plugin version is whatever the
 manifest declares.
 
 Verified complete-bundle SHA-256:
-`dcdee4b76e5f3ad981d36658e564a11acf598c80a83e3094ed45ae1a41efffc9`.
+`618b9d9e39886c0f8556e5ae57b624cf7c4ba8eca2e0e3cdf5b4be2d9b3bd127`.
 
-That digest is the previous build's, and so is the one in `manifest.json`; they
-match each other and neither describes the version now declared. `pluginsign
--update-digest` overwrites both at pack time, which is the only moment either is
-true. A test in `system-go` holds the two to the same string in both
+That digest is CI's canonical one for the version `manifest.json` declares,
+adopted from the run log after the branch built, and `manifest.json` carries the
+same string. Adopt a fresh digest here and there together whenever the bundle
+changes: a digest that describes an older build is how the wrong bytes get
+signed. A test in `system-go` holds the two to the same string in both
 directions, so the checklist can never quote a bundle the manifest does not.
