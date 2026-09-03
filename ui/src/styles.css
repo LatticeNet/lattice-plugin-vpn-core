@@ -327,8 +327,26 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 .mono { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 /* Inside a table a wrapped value makes every row a different height and the
    column impossible to scan. Every one of these cells carries a title. */
-td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.path-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Same decoupling as the two rules above, and for the same reason: these cells
+   hold generated paths, outbound references and hostnames, which are minted
+   for sibling nodes from one template. They share a long prefix and differ in
+   the tail, so end truncation removes exactly what tells them apart. Measured
+   before changing: on Node Profiles all 21 runtime paths were cut, 207px each,
+   every row rendering the same visible string; on Lines all 62 outbound refs
+   and all 62 domains were cut. Freeing them clears every one of those and is
+   not merely free horizontally but better, because wrapping narrows a column:
+   the Lines table's own overflow goes from 127px to 0. The cost is vertical,
+   about 8% of document height.
+
+   `td.path-cell` rather than `.path-cell`, which was dead. `td.mono` is
+   (0,1,1) and beat a bare `.path-cell` at (0,1,0) regardless of source order,
+   so the sheet claimed a 320px budget for paths while 240px was in force. Note
+   that both numbers are advisory anyway: a `td` in an auto-layout table is
+   sized by the table algorithm, and these cells measured 340px wide against a
+   declared 240px. The cap is a hint here, which is the more reason not to have
+   leaned on `nowrap` to do the cutting. */
+td.mono { max-width: 240px; overflow: hidden; overflow-wrap: anywhere; }
+td.path-cell { max-width: 320px; overflow: hidden; overflow-wrap: anywhere; }
 /* The row action is pinned to the right edge of the scroll container, so a
    table wider than the console still offers its action without a horizontal
    scroll. .table-wrap is a real scrollport in both axes, so this sticks. */
