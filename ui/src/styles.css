@@ -306,8 +306,20 @@ th[aria-sort="ascending"] .sort-button, th[aria-sort="descending"] .sort-button 
 .collector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0; }
 .collector-grid > div { min-width: 0; padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--border, #d9dde2); border-bottom: 1px solid var(--border, #d9dde2); }
 .collector-grid strong, .collector-grid small { display: block; margin-top: var(--sp-1); }
+/* A panel whose content is not a table has no .table-wrap to catch an
+   overflow, so the budget has to be on the cell. This grid's tracks are
+   `1fr`, and a 1fr track will not shrink below its item's min-content width,
+   so one unbreakable token sets the track wider than the panel and the whole
+   grid blows out: measured 379px past a 342px panel at 375. `strong` holds
+   node_name || node_id, which falls back to an underscore-joined id when the
+   name is empty, and `p` holds the collector's raw error, which routinely
+   carries a hostname. `small` beside them has had this treatment all along. */
+.collector-grid strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collector-grid small { overflow: hidden; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
-.collector-grid p { margin: var(--sp-1) 0 0; font-size: var(--text-2xs); line-height: 1.45; }
+/* anywhere rather than ellipsis: an error is meant to be read in full, so it
+   wraps mid-token instead of being cut. Same as .attention-body p and
+   .evidence-grid p, which carry the same kind of string. */
+.collector-grid p { margin: var(--sp-1) 0 0; font-size: var(--text-2xs); line-height: 1.45; overflow-wrap: anywhere; }
 
 /* ── line chain workspace ─────────────────────────────────────────────── */
 .chain-plan-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: var(--sp-3); padding: var(--sp-4); border-bottom: 1px solid var(--border, #d9dde2); }
