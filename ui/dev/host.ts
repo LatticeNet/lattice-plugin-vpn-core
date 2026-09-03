@@ -14,7 +14,7 @@
  * frame height is visible here rather than only in production.
  */
 
-import { handlers, type Scenario } from "./fixtures";
+import { handlers, type ContentShape, type Scenario } from "./fixtures";
 
 const ROUTES = ["lines", "users", "profiles", "usage"] as const;
 type Route = (typeof ROUTES)[number];
@@ -138,12 +138,14 @@ function armMeasure(resolve: (value: Measure) => void): void {
   new Promise<Measure>((resolve) => {
     armMeasure(resolve);
     reload();
+
   });
 
 const params = new URLSearchParams(location.search);
 let frameEpoch = 0;
 let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
+let content = (params.get("content") ?? "plain") as ContentShape;
 /* `zoom` magnifies the whole harness for screenshot review on a very wide
  * display, where a 1440px frame is a postage stamp. Harness only. */
 const zoom = params.get("zoom");
@@ -163,6 +165,7 @@ shell.innerHTML = `
     <strong>vpn-core dev harness</strong>
     <label>route <select id="route">${ROUTES.map((value) => `<option${value === route ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>data <select id="scenario">${["production", "hubs", "offfleet", "rich", "dense", "empty", "failing"].map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
+    <label>content <select id="content">${["plain", "hostile"].map((value) => `<option${value === content ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>width <select id="width">${["1440", "2423", "375"].map((value) => `<option${value === width ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <button id="theme" type="button">${dark ? "light" : "dark"}</button>
     <span id="reported"></span>
@@ -190,7 +193,7 @@ function applyChrome(): void {
 }
 
 function reload(): void {
-  const query = new URLSearchParams({ route, scenario, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
+  const query = new URLSearchParams({ route, scenario, content, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
   history.replaceState(null, "", `?${query}`);
   applyChrome();
   // The epoch matters: assigning an identical src, fragment and all, is a
@@ -225,7 +228,7 @@ window.addEventListener("message", (event) => {
       return;
     }
     case "lattice.plugin.call": {
-      const table = handlers(scenario);
+      const table = handlers(scenario, content);
       const key = `${String(data.service).split("/").pop()}/${data.method}`;
       const handler = table[key];
       // Latency, so loading and skeleton states are visible rather than theoretical.
@@ -260,6 +263,10 @@ document.getElementById("scenario")!.addEventListener("change", (event) => {
   scenario = (event.target as HTMLSelectElement).value as Scenario;
   reload();
 });
+document.getElementById("content")!.addEventListener("change", (event) => {
+  content = (event.target as HTMLSelectElement).value as ContentShape;
+  reload();
+});
 document.getElementById("width")!.addEventListener("change", (event) => {
   width = (event.target as HTMLSelectElement).value;
   reload();
@@ -269,6 +276,186 @@ document.getElementById("theme")!.addEventListener("click", () => {
   applyChrome();
   post({ type: "lattice.host.theme", colorScheme: dark ? "dark" : "light", designTokens: tokens() });
 });
+
+/* ---------------------------------------------------------------------------
+ * `?probe=1` — assert the property, not a threshold.
+ *
+ * The fixture next door had a near miss worth encoding here. It detected a
+ * collector overflow because a hostname was long enough, and when that string
+ * was made more realistic it became 17px shorter than the container, fit, and
+ * the fixture went quiet while still reporting green. The repair was to
+ * lengthen the string, which is a threshold, and a threshold drifts: a font
+ * size, a padding, a grid track or a panel width, all of which live in other
+ * files, move the same margin without anyone touching the string or reading
+ * the comment that says its length matters.
+ *
+ * So this asserts what cannot drift. Not "does the panel overflow by N", which
+ * is a number, but "is anything on screen unreachable", which is a binary. If
+ * every value fits, nothing is clipped and this is silent rather than falsely
+ * green. If a rule regresses, it trips at whatever margin that month happens
+ * to produce.
+ *
+ * Three properties, each a real failure rather than a proxy for one:
+ *
+ *   1. A panel that overflows has lost content outright. `.data-panel` is
+ *      `overflow: clip`, and nothing scrolls a clip box: not the wheel, not
+ *      the keyboard, not focus, not script. Past its edge the content is gone.
+ *   2. A scroller that overflows is fine, provided every pixel is reachable.
+ *      What is checked is that `scrollLeft` actually travels the distance, not
+ *      that the distance is small. Off-screen and gone look identical in a
+ *      screenshot and are not the same thing.
+ *   3. A clipped cell is acceptable only if the full value is recoverable,
+ *      which here means a `title` on it or an ancestor. Clipped with no title
+ *      is information destroyed with no recourse, which is the shape of every
+ *      truncation defect this harness has found.
+ *
+ * Manual, and deliberately so. Layout needs a real engine, jsdom will not
+ * compute any of this, and a browser lane is a real cost to carry for one
+ * property. This makes the check one keystroke instead of a judgement call;
+ * it does not make CI defend it. That remains a decision to take on purpose
+ * rather than drift into.
+ * ------------------------------------------------------------------------- */
+
+type Finding = { property: string; detail: string };
+
+const capped = "td strong, td small, td.mono, .badge, .count, .collector-grid strong, .collector-grid p";
+
+/* The subject the properties are actually about: cells holding row data, and
+ * the collector grid. `capped` deliberately stays wider than this, because a
+ * clipped chip in a panel header is a real defect too and should be reported.
+ * But the guard below must count the thing it is asserting about rather than
+ * something that correlates with it.
+ *
+ * That distinction cost a round. The guard counted everything matching
+ * `capped`, and once the row-count chips landed in the two split panel
+ * headers, an empty usage screen reported "clear (4p 2c)" and took the pass
+ * branch: two header chips reading "0 identities" and "0 nodes", no table
+ * cells at all, and a count that looked healthy. Each change was fine alone
+ * and the combination moved the floor.
+ *
+ * It is the same mistake in a third costume, after a min-width derived from a
+ * floor and a fixture calibrated to a margin. A proxy count fails as silently
+ * as a proxy threshold, so the rule is to report and gate on the subject of
+ * the assertion, never on a stand-in for it. */
+const contentCells = "tbody td strong, tbody td small, tbody td.mono, tbody .badge, .collector-grid strong, .collector-grid p";
+
+function panelName(el: Element): string {
+  const panel = el.closest(".data-panel");
+  return panel?.querySelector("h2")?.textContent?.trim() ?? "(unnamed panel)";
+}
+
+function probeLayout(): Finding[] {
+  const doc = frame.contentDocument;
+  if (!doc) return [{ property: "no-subject", detail: "the frame has no document to probe" }];
+  const panels = Array.from(doc.querySelectorAll<HTMLElement>(".data-panel"));
+  const cells = doc.querySelectorAll(contentCells).length;
+  /* An empty document yields no findings, and no findings printed as "clear"
+   * is how this probe reported a screen that was overflowing by 50px at the
+   * time. Nothing to probe is not the same as nothing wrong, and conflating
+   * them is the whole failure mode.
+   *
+   * The guard covers zero cells as well as zero panels, because the first
+   * version did not and the same failure walked straight through the gap: on
+   * the harness's own landing screen, `route=usage&scenario=production`, it
+   * reported `clear (4p 0c)`. Four panels, no cells, because that scenario
+   * returns no usage rows. Two of the three properties below are about cells,
+   * so a run that examined none has checked almost nothing, and it was saying
+   * so in a word that reads as a pass. Any component of the subject count
+   * being zero is a finding, not a pass. */
+  if (panels.length === 0 || cells === 0) {
+    return [{
+      property: "no-subject",
+      detail: `${panels.length} panels and ${cells} content cells rendered, so ${panels.length === 0 ? "nothing" : "almost nothing"} was checked; this is not a pass. If the route is right, the scenario probably has no rows.`,
+    }];
+  }
+  const findings: Finding[] = [];
+
+  for (const panel of panels) {
+    const over = panel.scrollWidth - panel.clientWidth;
+    if (over > 0) {
+      findings.push({
+        property: "panel-clipped",
+        detail: `${panelName(panel)} overflows its own panel by ${over}px; .data-panel is clip, so that content cannot be scrolled to by any means`,
+      });
+    }
+  }
+
+  for (const wrap of Array.from(doc.querySelectorAll<HTMLElement>(".table-wrap"))) {
+    const need = wrap.scrollWidth - wrap.clientWidth;
+    if (need <= 0) continue;
+    const before = wrap.scrollLeft;
+    wrap.scrollLeft = need;
+    const got = Math.round(wrap.scrollLeft);
+    wrap.scrollLeft = before;
+    if (got < need) {
+      findings.push({
+        property: "scroller-unreachable",
+        detail: `${panelName(wrap)} overflows by ${need}px but scrollLeft stops at ${got}px, so ${need - got}px is unreachable`,
+      });
+    }
+  }
+
+  for (const cell of Array.from(doc.querySelectorAll<HTMLElement>(capped))) {
+    if (cell.scrollWidth <= cell.clientWidth && cell.scrollHeight <= cell.clientHeight) continue;
+    if (cell.closest("[title]")) continue;
+    findings.push({
+      property: "clipped-without-recourse",
+      detail: `${panelName(cell)}: ${cell.tagName.toLowerCase()}.${cell.className || "(no class)"} is clipped and carries no title, so the full value cannot be recovered: ${JSON.stringify((cell.textContent ?? "").trim().slice(0, 48))}`,
+    });
+  }
+
+  return findings;
+}
+
+/* Wait for the document to settle rather than guessing a delay, and rather
+ * than waiting on the panels alone. The panels mount before their data
+ * arrives, so `.data-panel` exists while the rows are still empty: probing
+ * then examined a real but unpopulated screen, found nothing, and printed
+ * clear over a panel that was overflowing by 50px. Waiting on the wrong
+ * signal reads exactly like waiting on the right one.
+ *
+ * Settling on the count of things this probe actually examines is the signal,
+ * not text length and not the panels alone. Text length settled at a plateau
+ * mid-render and the panels exist before their rows do; both produced a probe
+ * that examined one panel and no cells and called it clear. The subject count
+ * only stops growing once what is being checked is on screen, and it is the
+ * same number the pass line reports, so the signal and the evidence are the
+ * same quantity. */
+function subjects(): number {
+  const doc = frame.contentDocument;
+  if (!doc) return 0;
+  return doc.querySelectorAll(".data-panel").length * 1000 + doc.querySelectorAll(contentCells).length;
+}
+
+function runProbe(attempt = 0, last = -1, stable = 0): void {
+  const now = subjects();
+  const settledFor = now === last ? stable + 1 : 0;
+  /* Half a second of no growth, not one sample: a single match is satisfied by
+   * any plateau between two renders. */
+  if ((now === 0 || settledFor < 5) && attempt < 60) {
+    window.setTimeout(() => runProbe(attempt + 1, now, settledFor), 100);
+    return;
+  }
+  const findings = probeLayout();
+  (window as unknown as { __probe?: Finding[] }).__probe = findings;
+  const where = document.getElementById("reported");
+  if (findings.length === 0) {
+    /* A bare "clear" is what let an empty document pass for a sound one, so
+     * it carries what it examined. A pass with a subject count of zero is a
+     * pass over nothing, and now says so on its face. */
+    const doc = frame.contentDocument;
+    const panels = doc?.querySelectorAll(".data-panel").length ?? 0;
+    const content = doc?.querySelectorAll(contentCells).length ?? 0;
+    const chrome = (doc?.querySelectorAll(capped).length ?? 0) - content;
+    /* Content and chrome are reported apart, because it was a single mixed
+     * total that made an empty screen look examined. */
+    console.log(`[probe] clear: ${panels} panels, ${content} content cells and ${chrome} chrome cells examined, nothing clipped without recourse and nothing unreachable`);
+    if (where) where.textContent = `probe: clear (${panels}p ${content}c +${chrome} chrome)`;
+    return;
+  }
+  for (const finding of findings) console.error(`[probe] ${finding.property}: ${finding.detail}`);
+  if (where) where.textContent = `probe: ${findings.length} finding${findings.length === 1 ? "" : "s"}`;
+}
 
 /* `?measure=1` arms the very first mount, so a single fresh tab load yields one
  * number for what the operator actually waits through: no remount, no warm
@@ -280,3 +467,17 @@ if (params.get("measure") === "1") {
 }
 
 reload();
+
+/* `?probe=1` runs the layout assertions once the frame has settled. The delay
+ * is the plugin's own first paint plus its data fetch, not a race fix: probing
+ * before that measures an empty document and reports it clear, which would be
+ * another check that looked like it ran.
+ *
+ * This hook belongs at the end of the file, after the final `reload()`. It was
+ * first written against the wrong `reload();`, the one inside `measureRender`,
+ * where it typechecked, built, and never executed. `?probe=1` reported nothing
+ * and an empty result reads the same as a clean one. That is the exact failure
+ * this probe exists to make impossible, produced while writing it. */
+if (params.get("probe") === "1") {
+  frame.addEventListener("load", () => window.setTimeout(() => runProbe(), 150));
+}

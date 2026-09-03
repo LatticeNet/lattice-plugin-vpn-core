@@ -588,7 +588,21 @@ function usersWithUsage(scenario: Scenario) {
   }));
 }
 
-export function handlers(scenario: Scenario): Record<string, (payload: any) => unknown> {
+export function handlers(scenario: Scenario, content: ContentShape = "plain"): Record<string, (payload: any) => unknown> {
+  const table = buildHandlers(scenario);
+  if (content !== "hostile") return table;
+  /* One shared `seen` map across every endpoint, so a node rewritten in
+   * lines/list reads the same in usage/summary. Per-call maps would give the
+   * same row two different names on two screens, which is a harness bug that
+   * looks exactly like the product bug this fixture exists to find. */
+  const seen = new Map<string, number>();
+  const hits = new Map<string, number>();
+  return Object.fromEntries(
+    Object.entries(table).map(([route, fn]) => [route, (payload: any) => harden(fn(payload), seen, hits)]),
+  );
+}
+
+function buildHandlers(scenario: Scenario): Record<string, (payload: any) => unknown> {
   const groups = scenario === "hubs" ? buildHubFleet() : buildLines(scenario);
   const chains = buildChains(scenario);
   const flat = groups.flatMap((group) => group.lines);
@@ -696,4 +710,128 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
       };
     },
   };
+}
+
+/* ---------------------------------------------------------------------------
+ * Content shape, orthogonal to the seven scenarios above.
+ *
+ * Every value of `Scenario` is a topology: how the fleet is wired and which
+ * edges the control plane can see. None of them says anything about the shape
+ * of the strings the server returns, and that is the axis every defect in the
+ * usage-screen review came from. A server enum this build has not learned, an
+ * unbreakable token in a collector error, node names distinguished only by a
+ * trailing suffix, and identifiers that share a prefix because they are
+ * time-ordered: none depends on how the fleet is wired, and none of the seven
+ * scenarios can express any of them. Four rounds of careful work kept shipping
+ * and kept being broken by the next fixture for exactly that reason.
+ *
+ * So this is a modifier rather than an eighth scenario. Adding it to that enum
+ * would put a content shape in a list that means topology, and the next reader
+ * would take it for one. `hostile` composes with any topology.
+ *
+ * It rewrites display strings only. Structure, counts, ids used as keys and
+ * every number are untouched, so a topology renders the same shape of screen
+ * either way and only the text is adversarial.
+ * ------------------------------------------------------------------------- */
+
+export type ContentShape = "plain" | "hostile";
+
+/* Values chosen because each one broke something real, not because each one is
+ * long. Length alone is the easy case and the caps already handle it. */
+const HOSTILE = {
+  /* Sibling nodes named from one template, differing only past the cut. */
+  name: (i: number) =>
+    `${["frankfurt-equinix-fr5", "amsterdam-equinix-am7", "singapore-equinix-sg3"][i % 3]}` +
+    `-transit-egress-cluster-node-${String((i % 9) + 1).padStart(2, "0")}-` +
+    (i % 2 ? "secondary" : "primary"),
+  /* ULIDs are lexicographically time-ordered, so ids minted seconds apart
+   * share a long prefix and differ in the tail. End truncation removes
+   * precisely the distinguishing part. */
+  ulid: (i: number) =>
+    `nd_01J8ZQK4X9F7M2P5R8T1V4W7Y0B3D6G9J2L5N8Q1S4U7X0Z3C6F9H2K5M8P1R4` +
+    `${String.fromCharCode(65 + (i % 26))}${i % 10}`,
+  /* Generated paths have the same property for the same reason. */
+  path: (i: number) =>
+    `/var/lib/lattice/managed/sing-box/generated/production/cluster-am7/` +
+    `node-${String((i % 9) + 1).padStart(2, "0")}/config.observed.json`,
+  /* An identity that outgrows any cap a cell can be given. */
+  identity: (i: number) =>
+    `network.operations.oncall.${String(i).padStart(2, "0")}.${i % 2 ? "secondary" : "primary"}` +
+    `@subsidiary-holdings.example.invalid`,
+  /* A realistic resolver failure whose hostname has no break opportunity: no
+   * space, no hyphen, no dot inside the label. The surrounding message wraps
+   * at its spaces, so what has to overflow is the label alone.
+   *
+   * Its length is load-bearing and was measured, not chosen for looks. At the
+   * 2xs size this renders at, the shorter form of this name wanted 325px in a
+   * 342px collector grid, so it fit with 17px to spare and the fixture stopped
+   * detecting the defect it was built for. A hostile value that fits is not
+   * hostile, it is a green run that proves nothing. Sized against the
+   * container it has to break, with margin, and re-verified after. */
+  unbreakable: () =>
+    "dial tcp: lookup collector_internal_am7_transit_egress_cluster_secondary_endpoint_observed " +
+    "on 10.0.0.1:53: no such host",
+  /* A value this build has not learned. Label helpers echo an unrecognised
+   * server enum verbatim, so the widest string a cell can hold is not bounded
+   * by anything this repo knows about. */
+  enum: (i: number) =>
+    (i % 2
+      ? "reality_sni_fallback_via_upstream_relay_chain_unverified"
+      : "multi_hop_relay_with_reality_fallback_egress"),
+};
+
+/* Rewritten by field name rather than by path, so a fixture growing a new row
+ * is covered without touching this. Field names were read out of the fixtures
+ * rather than guessed: an identity is `email`, not `name` (`name` is a display
+ * label like "Operations"), and a collector failure is `error` on the usage
+ * rows and `last_error` on profiles. My first attempt guessed and rewrote only
+ * the node names, which rendering it immediately showed. */
+const HOSTILE_FIELDS: Record<string, (i: number) => string> = {
+  node_name: HOSTILE.name,
+  tag: HOSTILE.name,
+  email: HOSTILE.identity,
+  line_hash_id: HOSTILE.ulid,
+  downstream_line_uuid: HOSTILE.ulid,
+  config_path: HOSTILE.path,
+  outbound_ref: HOSTILE.path,
+  last_error: HOSTILE.unbreakable,
+  error: HOSTILE.unbreakable,
+  discovery_error: HOSTILE.unbreakable,
+  attribution_reason: HOSTILE.enum,
+};
+
+/* Enums are handled separately and deliberately sparingly. An unrecognised
+ * enum was a real defect, because the label helpers echo a value this build
+ * has not learned verbatim and nothing bounds its width. But these fields
+ * drive rendering branches rather than only text, so rewriting every row would
+ * change the topology's meaning: every collector would read as broken and the
+ * scenario would no longer be the scenario. Only the first occurrence of each
+ * is replaced, which puts one unknown value beside known ones, which is also
+ * the shape the real bug arrived in. */
+const HOSTILE_ENUMS = new Set(["role", "collector_state", "status", "collector_status"]);
+
+/* Identity fields keep a stable rewrite per original value, so the same node
+ * reads the same everywhere it appears and a reader can still follow one row
+ * across two tables. A fresh counter per field would break that. */
+export function harden<T>(value: T, seen = new Map<string, number>(), hits = new Map<string, number>()): T {
+  if (Array.isArray(value)) return value.map((item) => harden(item, seen, hits)) as unknown as T;
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof item === "string" && item !== "" && HOSTILE_ENUMS.has(key)) {
+      const n = hits.get(key) ?? 0;
+      hits.set(key, n + 1);
+      out[key] = n === 0 ? HOSTILE.enum(hits.size) : item;
+      continue;
+    }
+    const rewrite = HOSTILE_FIELDS[key];
+    if (rewrite && typeof item === "string" && item !== "") {
+      const memo = `${key}:${item}`;
+      if (!seen.has(memo)) seen.set(memo, seen.size);
+      out[key] = rewrite(seen.get(memo)!);
+    } else {
+      out[key] = harden(item, seen, hits);
+    }
+  }
+  return out as T;
 }
