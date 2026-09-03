@@ -329,12 +329,25 @@ function probeLayout(): Finding[] {
   const doc = frame.contentDocument;
   if (!doc) return [{ property: "no-subject", detail: "the frame has no document to probe" }];
   const panels = Array.from(doc.querySelectorAll<HTMLElement>(".data-panel"));
+  const cells = doc.querySelectorAll(capped).length;
   /* An empty document yields no findings, and no findings printed as "clear"
    * is how this probe reported a screen that was overflowing by 50px at the
    * time. Nothing to probe is not the same as nothing wrong, and conflating
-   * them is the whole failure mode. Say so instead. */
-  if (panels.length === 0) {
-    return [{ property: "no-subject", detail: "no .data-panel rendered, so nothing was checked; this is not a pass" }];
+   * them is the whole failure mode.
+   *
+   * The guard covers zero cells as well as zero panels, because the first
+   * version did not and the same failure walked straight through the gap: on
+   * the harness's own landing screen, `route=usage&scenario=production`, it
+   * reported `clear (4p 0c)`. Four panels, no cells, because that scenario
+   * returns no usage rows. Two of the three properties below are about cells,
+   * so a run that examined none has checked almost nothing, and it was saying
+   * so in a word that reads as a pass. Any component of the subject count
+   * being zero is a finding, not a pass. */
+  if (panels.length === 0 || cells === 0) {
+    return [{
+      property: "no-subject",
+      detail: `${panels.length} panels and ${cells} capped cells rendered, so ${panels.length === 0 ? "nothing" : "almost nothing"} was checked; this is not a pass. If the route is right, the scenario probably has no rows.`,
+    }];
   }
   const findings: Finding[] = [];
 
