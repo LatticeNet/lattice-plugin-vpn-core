@@ -25,9 +25,17 @@ export type PageState = Record<string, string>;
 export const PAGE_STATE_MAX_KEYS = 16;
 export const PAGE_STATE_KEY_PATTERN = /^[a-z][a-z0-9_]{0,23}$/;
 export const PAGE_STATE_MAX_VALUE_LENGTH = 256;
+/** The console's own query keys. They never cross the bridge either way. */
+export const RESERVED_PAGE_STATE_KEYS: ReadonlySet<string> = new Set(["redirect", "next", "code", "state", "token", "sso_error", "totp_challenge", "mfa"]);
 
 function validEntry(key: string, value: unknown): value is string {
-  return PAGE_STATE_KEY_PATTERN.test(key) && typeof value === "string" && value.length <= PAGE_STATE_MAX_VALUE_LENGTH;
+  return PAGE_STATE_KEY_PATTERN.test(key) && !RESERVED_PAGE_STATE_KEYS.has(key) &&
+    typeof value === "string" && value.length <= PAGE_STATE_MAX_VALUE_LENGTH;
+}
+
+/** The entries of a record without the console's reserved keys. */
+export function withoutReservedKeys(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !RESERVED_PAGE_STATE_KEYS.has(key)));
 }
 
 /**

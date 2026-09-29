@@ -161,3 +161,19 @@ describe("sending state to the host", () => {
     expect(sent).toEqual([]);
   });
 });
+
+describe("the console's reserved keys", () => {
+  it("never cross in either direction", () => {
+    for (const key of ["redirect", "next", "code", "state", "token", "sso_error", "totp_challenge", "mfa"]) {
+      expect(validPageState({ view: "lines", [key]: "x" }), key).toBeUndefined();
+      expect(filterPageState([["view", "lines"], [key, "x"]]), key).toEqual({ view: "lines" });
+    }
+  });
+
+  it("are never keys this plugin writes", () => {
+    const busy = state({ linesView: "lines", usageView: "user", group: "bank", q: "hr", open: "lh_9", period: "30d", stack: "role", expand: ["u_2"] });
+    for (const route of ["lines", "usage", "users", "profiles"]) {
+      expect(validPageState(encodePageState(route, busy)), route).toEqual(encodePageState(route, busy));
+    }
+  });
+});

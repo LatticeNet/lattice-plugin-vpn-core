@@ -187,6 +187,12 @@ describe("page state over the bridge", () => {
     expect(init.pluginRoute).toBe("lines");
     expect(init.pageState).toBeUndefined();
     client.dispose();
+
+    const reserved = harness();
+    const next = new BridgeClient(reserved.win);
+    reserved.dispatch(initMessage(next.nonce, { pageState: { view: "lines", redirect: "/login", token: "t" } }));
+    expect((await next.init).pageState).toEqual({ view: "lines" });
+    next.dispose();
   });
 
   it("posts the full state with the nonce to the host origin, and nothing invalid or after dispose", () => {

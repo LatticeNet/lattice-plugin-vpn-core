@@ -278,8 +278,10 @@ const pageState = computed<PageState>(() => encodePageState(route.value, {
   expand: [...expandedUsers.value],
 }));
 
-/* The state goes out only after init: before it, the page has not seen the
- * address, and its defaults would overwrite a pasted link. */
+/* The state goes out only after init, and only once the operator changes
+ * something: before init the page has not seen the address, and right after
+ * it the page's reading of that address (defaults filled in, unknown values
+ * dropped) is not a reason to rewrite a pasted link. */
 let stateSender: StateSender | undefined;
 let hostKeepsState = false;
 
@@ -288,7 +290,7 @@ function adoptPageState(value: HostInit): void {
   if (value.pageState) applyPageState(decodePageState(value.pageState));
   const client = bridge;
   stateSender?.dispose();
-  stateSender = createStateSender((state) => client?.sendState(state), { baseline: value.pageState ?? {} });
+  stateSender = createStateSender((state) => client?.sendState(state), { baseline: pageState.value });
   publishPageState(pageState.value);
 }
 

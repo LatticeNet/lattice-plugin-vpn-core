@@ -1,4 +1,4 @@
-import { validPageState, type PageState } from "./pageState";
+import { validPageState, withoutReservedKeys, type PageState } from "./pageState";
 
 export interface CallableInterface {
   service: string;
@@ -233,7 +233,11 @@ function parseInit(message: Record<string, unknown>): HostInit | undefined {
   // The host filters its query before sending it, so a state that still
   // breaks the rules is a host fault; it is set aside rather than failing
   // the start, and the page falls back to its own document query.
-  const pageState = message.pageState === undefined ? undefined : validPageState(message.pageState);
+  // A reserved console key should never arrive; if one does, it is dropped
+  // on its own rather than costing the rest of the state.
+  const pageState = message.pageState === undefined
+    ? undefined
+    : validPageState(isRecord(message.pageState) ? withoutReservedKeys(message.pageState) : message.pageState);
   return {
     version: message.version,
     pluginId: message.pluginId,
