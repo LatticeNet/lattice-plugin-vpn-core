@@ -172,7 +172,9 @@ const STATES_PER_MINUTE = 60;
 let stateTimes: number[] = [];
 let readySeen = false;
 /* `fail=usage/query` fails that one call in any scenario, so a partial
- * failure (lines read, usage refused) can be looked at, not only a total one. */
+ * failure (lines read, usage refused) can be looked at, not only a total one.
+ * `fail=usage/query@30d` fails it only for that period, so a period switch
+ * whose read fails can be looked at after a good first read. */
 const failCalls = new Set(params.getAll("fail"));
 let dark = params.get("theme") !== "light";
 let width = params.get("width") ?? "1440";
@@ -297,7 +299,8 @@ window.addEventListener("message", (event) => {
       const handler = table[key];
       // Latency, so loading and skeleton states are visible rather than theoretical.
       window.setTimeout(() => {
-        if (scenario === "failing" || failCalls.has(key)) {
+        const period = (data.payload as { period?: unknown } | undefined)?.period;
+        if (scenario === "failing" || failCalls.has(key) || (typeof period === "string" && failCalls.has(`${key}@${period}`))) {
           post({ type: "lattice.host.error", id: data.id, message: `upstream refused ${key}: 503 service unavailable` });
           return;
         }
