@@ -197,9 +197,9 @@ onBeforeUnmount(() => closeMenu());
         <p v-if="totalLines" class="lines-state">
           <template v-if="summary.uniform"><strong>{{ totalLines }} {{ summary.uniform }}</strong></template>
           <template v-else>
-            <template v-for="(item, index) in summary.counts" :key="item.label"><span v-if="index">, </span><span class="status-dot" :data-tone="item.tone">{{ item.count }} {{ item.label }}</span></template>
+            <span v-for="item in summary.counts" :key="item.label" class="status-dot" :data-tone="item.tone">{{ item.count }} {{ item.label }}</span>
           </template>
-          <span> · {{ summary.configErrors }} config {{ summary.configErrors === 1 ? 'error' : 'errors' }}</span>
+          <span>{{ summary.uniform ? '· ' : '' }}{{ summary.configErrors }} config {{ summary.configErrors === 1 ? 'error' : 'errors' }}</span>
         </p>
       </div>
       <div class="lines-controls">

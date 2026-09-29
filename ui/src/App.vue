@@ -1205,7 +1205,7 @@ onBeforeUnmount(() => {
           <RefreshCw v-else :size="15" aria-hidden="true" />
           Refresh
         </button>
-        <button v-if="route === 'lines' && canRollout" class="button button-primary" type="button" @click="openRollout"><Plus :size="15" aria-hidden="true" /> Roll out managed lines</button>
+        <button v-if="route === 'lines' && canRollout && allLines.length" class="button button-primary" type="button" @click="openRollout"><Plus :size="15" aria-hidden="true" /> Roll out managed lines</button>
       </div>
     </header>
 
@@ -1295,7 +1295,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else-if="linesView === 'lines'" class="layer-body" role="tabpanel" aria-label="Lines">
-        <p v-if="!lineUsageKnown" class="panel-inline-note standalone-note"><CircleAlert :size="14" aria-hidden="true" /> {{ lineUsageNote }}</p>
+        <p v-if="!lineUsageKnown && allLines.length" class="panel-inline-note standalone-note"><CircleAlert :size="14" aria-hidden="true" /> {{ lineUsageNote }}</p>
         <LinesTable
           v-model:group-by="groupBy"
           v-model:search="search"
@@ -1341,7 +1341,8 @@ onBeforeUnmount(() => {
         <div v-else class="empty-state">
           <Radar :size="26" aria-hidden="true" />
           <strong>Nothing needs attention</strong>
-          <p>Every line reports a clean config, every relay resolves to a fleet endpoint, and the lines that report liveness are running.</p>
+          <p v-if="allLines.length">Every line reports a clean config, every relay resolves to a fleet endpoint, and the lines that report liveness are running.</p>
+          <p v-else>No node has reported a line, so there is nothing here to check yet.</p>
         </div>
       </section>
     </template>
@@ -1595,7 +1596,7 @@ onBeforeUnmount(() => {
           <div><span>Endpoint</span><strong class="mono">{{ formatLineEndpoint(lineDetail) }}</strong><small>listen {{ formatLineListen(lineDetail) }}</small></div>
           <div><span>Reality SNI</span><strong class="mono">{{ formatLineDomain(lineDetail) }}</strong><small>server name</small></div>
           <div><span>Users</span><strong>{{ lineDetail.user_known ? lineDetail.user_count : 'unknown' }}</strong><small>{{ lineDetail.user_known ? 'reported by the node' : 'the node did not report a count' }}</small></div>
-          <div><span>Outbound</span><strong class="mono">{{ lineDetail.outbound_ref || 'none' }}</strong><small v-if="lineDetail.outbound_server">{{ lineDetail.outbound_server }}<span v-if="lineDetail.outbound_port">:{{ lineDetail.outbound_port }}</span></small><small v-else>{{ lineDetail.outbound_ref ? 'direct' : 'traffic here has nowhere to go' }}</small></div>
+          <div><span>Outbound</span><strong class="mono">{{ lineDetail.outbound_ref || 'none' }}</strong><small v-if="lineDetail.outbound_server">{{ lineDetail.outbound_server }}<span v-if="lineDetail.outbound_port">:{{ lineDetail.outbound_port }}</span></small><small v-else>{{ !lineDetail.outbound_ref ? 'traffic here has nowhere to go' : lineDetail.outbound_ref === 'direct' ? 'traffic leaves the fleet here' : 'no server named' }}</small></div>
         </div>
 
         <section class="detail-section"><h3>Chain</h3>

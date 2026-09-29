@@ -643,7 +643,8 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 
 /* ── the Lines collection ───────────────────────────────────────────────── */
 .lines-header { align-items: flex-start; }
-.lines-state { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--sp-1); }
+.lines-state { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--sp-3); }
+.lines-state strong + span { margin-left: calc(-1 * var(--sp-2)); }
 .lines-state strong { font-weight: 650; color: var(--foreground, #17191c); }
 .lines-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); }
 .lines-controls .search-input { width: 300px; }
@@ -693,6 +694,8 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .modal.sheet > header { position: sticky; top: 0; z-index: 2; background: var(--card, #fff); }
 .modal.sheet > header h2 { overflow-wrap: anywhere; }
 .sheet-proof { margin: var(--sp-2) 0 0; }
+/* Two identity cards a row even on a phone; one a row made the sheet a scroll of cards. */
+.modal.sheet .detail-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .chain-path { display: flex; flex-wrap: wrap; gap: var(--sp-2) 28px; margin: 0; padding: 0; list-style: none; }
 .chain-hop { position: relative; display: grid; min-width: 0; flex: 1 1 150px; gap: 2px; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); background: var(--card, #fff); }
 .chain-hop + .chain-hop::before { position: absolute; top: 50%; left: -22px; color: var(--muted-foreground, #65707b); content: "\2192"; transform: translateY(-50%); }
