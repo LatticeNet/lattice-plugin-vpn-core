@@ -12,8 +12,16 @@
  * not wire it to layout, exactly as PluginFrameHost.vue does. The reported
  * number is printed in the bar so a plugin that still tries to drive its own
  * frame height is visible here rather than only in production.
+ *
+ * It keeps the plugin's page state in its own address the way the console
+ * does (bridge v1, "Plugin page state in the console address"): every query
+ * key that is not one of the harness's own is page state, handed to the
+ * plugin as `pageState` in init, and a `lattice.plugin.state` replaces those
+ * keys with a history replace, without reloading the frame. `oldhost=1`
+ * plays a host that predates the contract: no `pageState`, messages ignored.
  */
 
+import { filterPageState, validPageState, type PageState } from "../src/pageState";
 import { handlers, SCENARIOS, type Scenario } from "./fixtures";
 
 const ROUTES = ["lines", "users", "profiles", "usage"] as const;
@@ -141,6 +149,8 @@ function armMeasure(resolve: (value: Measure) => void): void {
   });
 
 const params = new URLSearchParams(location.search);
+/* The harness's own keys. Everything else in the address is page state. */
+const HARNESS_KEYS = new Set(["route", "scenario", "theme", "width", "frame", "fail", "zoom", "measure", "plugin", "oldhost"]);
 let frameEpoch = 0;
 let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
@@ -148,9 +158,19 @@ let scenario = (params.get("scenario") ?? "production") as Scenario;
  * display, where a 1440px frame is a postage stamp. Harness only. */
 const zoom = params.get("zoom");
 if (zoom) document.documentElement.style.zoom = zoom;
-/* `plugin` is forwarded to the plugin document's own query string, so a
- * reviewer can open a lens or a node by URL (`plugin=lens%3Dtopology`). */
-const pluginQuery = params.get("plugin") ?? "";
+/* `oldhost=1` answers like a console from before page state: init carries no
+ * `pageState` and state messages are ignored, so the fallback can be seen. */
+const oldHost = params.get("oldhost") === "1";
+/* Page state, filtered by the contract's rules as the console filters its
+ * query. `plugin=<encoded query>` is the older spelling from when the harness
+ * forwarded it to the frame's own query, read only when no key names state. */
+const addressState = [...params].filter(([key]) => !HARNESS_KEYS.has(key));
+let pageState: PageState = filterPageState(addressState.length ? addressState : new URLSearchParams(params.get("plugin") ?? ""));
+/* The console's budget: 60 states in any 60 seconds per frame, and nothing
+ * before the plugin has said it is ready. Both reset with the frame. */
+const STATES_PER_MINUTE = 60;
+let stateTimes: number[] = [];
+let readySeen = false;
 /* `fail=usage/query` fails that one call in any scenario, so a partial
  * failure (lines read, usage refused) can be looked at, not only a total one. */
 const failCalls = new Set(params.getAll("fail"));
@@ -169,6 +189,7 @@ shell.innerHTML = `
     <label>width <select id="width">${["1440", "2423", "375"].map((value) => `<option${value === width ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <button id="theme" type="button">${dark ? "light" : "dark"}</button>
     <span id="reported"></span>
+    <span id="state"></span>
   </div>
   <div class="viewport" id="viewport">
     <div class="frame-wrap" id="wrap"><iframe id="frame" title="plugin"></iframe></div>
@@ -179,6 +200,7 @@ const frame = document.getElementById("frame") as HTMLIFrameElement;
 const wrap = document.getElementById("wrap") as HTMLDivElement;
 const viewport = document.getElementById("viewport") as HTMLDivElement;
 const reported = document.getElementById("reported") as HTMLSpanElement;
+const stateNote = document.getElementById("state") as HTMLSpanElement;
 
 function tokens(): Record<string, string> {
   return dark ? DARK : LIGHT;
@@ -192,16 +214,28 @@ function applyChrome(): void {
   (document.getElementById("theme") as HTMLButtonElement).textContent = dark ? "light" : "dark";
 }
 
-function reload(): void {
+/** The harness's keys, then the page state, as the console would hold it. */
+function writeAddress(): void {
   const query = new URLSearchParams({ route, scenario, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
   for (const key of failCalls) query.append("fail", key);
+  if (zoom) query.set("zoom", zoom);
+  if (oldHost) query.set("oldhost", "1");
+  for (const [key, value] of Object.entries(pageState)) query.set(key, value);
   history.replaceState(null, "", `?${query}`);
+}
+
+function reload(): void {
+  writeAddress();
   applyChrome();
+  stateTimes = [];
+  readySeen = false;
+  stateNote.textContent = oldHost ? "old host: page state not kept" : "";
   // The epoch matters: assigning an identical src, fragment and all, is a
   // same-document navigation, so the frame would keep running and the route or
   // data the operator just picked would never reach a fresh plugin.
   frameEpoch += 1;
-  frame.src = `/index.html?frame=${frameEpoch}${pluginQuery ? `&${pluginQuery}` : ""}#lattice_nonce=${NONCE}&host_origin=${encodeURIComponent(location.origin)}`;
+  // No page state in the frame URL: the console's frame URL has no query.
+  frame.src = `/index.html?frame=${frameEpoch}#lattice_nonce=${NONCE}&host_origin=${encodeURIComponent(location.origin)}`;
 }
 
 function post(message: Record<string, unknown>): void {
@@ -218,8 +252,37 @@ window.addEventListener("message", (event) => {
         type: "lattice.host.init", version: "1", pluginId: PLUGIN_ID,
         pluginVersion: "0.0.0-dev", pluginRoute: route, locale: "en",
         colorScheme: dark ? "dark" : "light", designTokens: tokens(), interfaces: INTERFACES,
+        ...(oldHost ? {} : { pageState: { ...pageState } }),
       });
+      readySeen = true;
       return;
+    case "lattice.plugin.state": {
+      if (oldHost || !readySeen) return;
+      const now = Date.now();
+      stateTimes = stateTimes.filter((time) => now - time < 60_000);
+      if (stateTimes.length >= STATES_PER_MINUTE) {
+        stateNote.textContent = "state ignored: over 60 a minute";
+        return;
+      }
+      stateTimes.push(now);
+      const state = validPageState(data.state);
+      if (!state) {
+        stateNote.textContent = "state dropped: breaks the contract's rules";
+        return;
+      }
+      // Harness only: a state key that is also a harness key cannot live in
+      // this address. The console has no such keys; say so rather than guess.
+      const clash = Object.keys(state).filter((key) => HARNESS_KEYS.has(key));
+      if (clash.length) {
+        stateNote.textContent = `state dropped: ${clash.join(", ")} is a harness key`;
+        return;
+      }
+      pageState = state;
+      writeAddress();
+      const query = new URLSearchParams(state).toString();
+      stateNote.textContent = `state ${query || "(default)"}`;
+      return;
+    }
     case "lattice.plugin.resize": {
       // Accepted and ignored, like the real host. The frame height never
       // depends on anything the plugin says. Reported only so a plugin still
@@ -258,6 +321,8 @@ window.addEventListener("message", (event) => {
 
 document.getElementById("route")!.addEventListener("change", (event) => {
   route = (event.target as HTMLSelectElement).value as Route;
+  // Another plugin route is another console page with its own query.
+  pageState = {};
   reload();
 });
 document.getElementById("scenario")!.addEventListener("change", (event) => {
