@@ -38,7 +38,7 @@ import {
   type StateSender,
   type VpnPageState,
 } from "./pageState";
-import { bytesByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
+import { bytesByLine, egressByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
 import UsageScreen from "./UsageScreen.vue";
 import {
   attributionLabel,
@@ -51,6 +51,7 @@ import {
   quotaState,
   roleLabel,
   summarizeAllocation,
+  usageAfterFailedRead,
   type UsageLineRow,
   type StackBy,
   type UsagePeriod,
@@ -203,7 +204,10 @@ const lines = ref<LineGroup[]>([]);
 const chains = ref<LineChain[]>([]);
 const users = ref<VpnUser[]>([]);
 const profiles = ref<Profile[]>([]);
-const usage = ref<UsageResult>({ by_user: [], by_node: [], rows: [], collectors: [], per_line: false, lines: [] });
+const emptyUsage = (): UsageResult => ({ by_user: [], by_node: [], rows: [], collectors: [], per_line: false, lines: [] });
+const usage = ref<UsageResult>(emptyUsage());
+/** The period `usage` was read for; undefined until a read succeeds. */
+const usageReadPeriod = ref<UsagePeriod>();
 /* The period is the operator's choice and it drives the server call, so it
  * lives here rather than inside the screen: a refresh must reload the period
  * being looked at, not the default one. */
@@ -340,6 +344,7 @@ const lineUsageKnown = computed(() => !!lineUsage.value && !lineUsageError.value
 const lineTraffic = computed<LineTrafficIndex>(() => ({
   known: lineUsageKnown.value,
   byLine: bytesByLine(lineUsage.value?.lines),
+  egressByLine: egressByLine(lineUsage.value?.lines),
   reportingNodes: new Set((lineUsage.value?.collectors ?? []).filter((row) => row.status === "ok").map((row) => row.node_id)),
 }));
 const lineNodeTraffic = computed(() => trafficByNode(lineUsage.value?.lines));
@@ -630,10 +635,20 @@ async function loadCurrent(background = false): Promise<void> {
         // the user listing carries each quota. Both are the same cached read
         // models the other views use, so this costs cache reads on the server
         // rather than a second fleet walk.
-        const [usageResult, lineResult] = await Promise.all([
-          pluginCall<UsageResult>(SERVICES.usage, "query", { period: usagePeriod.value }),
-          pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list"),
-        ]);
+        const period = usagePeriod.value;
+        let usageResult: UsageResult;
+        let lineResult: { groups: LineGroup[] };
+        try {
+          [usageResult, lineResult] = await Promise.all([
+            pluginCall<UsageResult>(SERVICES.usage, "query", { period }),
+            pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list"),
+          ]);
+        } catch (cause) {
+          usage.value = usageAfterFailedRead(usage.value, usageReadPeriod.value, period, emptyUsage());
+          if (usageReadPeriod.value !== period) usageReadPeriod.value = undefined;
+          throw cause;
+        }
+        usageReadPeriod.value = period;
         usage.value = { ...usageResult, rows: usageResult.rows ?? [], lines: usageResult.lines ?? [], collectors: usageResult.collectors ?? [] };
         lines.value = lineResult.groups ?? [];
         // Quotas belong to the identity, not to the usage rows, so the screen
@@ -1566,7 +1581,7 @@ onBeforeUnmount(() => {
         :previous="usage.previous"
         :view="usageView"
         :stack="usageStack"
-        :observed-at="observedAtLabel"
+        :observed-at="usageReadPeriod === usagePeriod ? observedAtLabel : ''"
         :can-open-users="canOpenEvidence"
         @period="setUsagePeriod"
         @view="(value) => (usageView = value)"

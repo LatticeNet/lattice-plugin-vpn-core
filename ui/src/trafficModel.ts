@@ -106,6 +106,21 @@ export function bytesByLine(lines: readonly UsageLineRow[] | undefined): Map<str
   return index;
 }
 
+/**
+ * Bytes per line hash over the rows that left the fleet there (exit, direct,
+ * shared). A relay line's entry bytes are the same traffic an exit line
+ * counts again, so a sum over a relay and its exit adds these, never both.
+ */
+export function egressByLine(lines: readonly UsageLineRow[] | undefined): Map<string, number> {
+  const index = new Map<string, number>();
+  for (const row of lines ?? []) {
+    const hash = row.line_hash_id?.trim();
+    if (!hash || !EGRESS_ROLES.has(row.role)) continue;
+    index.set(hash, (index.get(hash) ?? 0) + safeBytes(row.used_bytes));
+  }
+  return index;
+}
+
 export interface NodeTraffic {
   nodeID: string;
   nodeName?: string;

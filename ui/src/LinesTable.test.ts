@@ -34,7 +34,12 @@ function render(traffic: LineTrafficIndex, over: Partial<{ groups: LineGroup[]; 
   }));
 }
 
-const known: LineTrafficIndex = { known: true, byLine: new Map([["e1", 97.6 * GiB], ["r1", 30 * GiB], ["r2", 10 * GiB]]), reportingNodes: new Set(["exit", "hub"]) };
+const known: LineTrafficIndex = {
+  known: true,
+  byLine: new Map([["e1", 97.6 * GiB], ["r1", 30 * GiB], ["r2", 10 * GiB]]),
+  egressByLine: new Map([["e1", 97.6 * GiB]]),
+  reportingNodes: new Set(["exit", "hub"]),
+};
 
 describe("the Lines table", () => {
   it("says a state every line shares once, in the header, and drops the column", async () => {
@@ -60,7 +65,7 @@ describe("the Lines table", () => {
   });
 
   it("says unknown, never zero, when the usage read failed", async () => {
-    const html = await render({ known: false, byLine: new Map(), reportingNodes: new Set() });
+    const html = await render({ known: false, byLine: new Map(), egressByLine: new Map(), reportingNodes: new Set() });
     expect(html).toContain(">unknown<");
     expect(html).not.toContain("0 B");
   });

@@ -28,17 +28,25 @@ import { lineStatus, type Line, type LineChain, type LineGroup } from "./vpnMode
 export type RouteState = "healthy" | "warning" | "error";
 
 export interface RouteBox extends NodeLayoutBox {
-  /** Relayed bytes for a node that dials out, egress for one that does not. */
+  /** Relayed bytes for a node that dials out, egress for one that does not,
+   *  and both summed for a hub that is also an exit (distinct traffic). */
   bytes?: number;
-  /** What the figure on the box means. */
-  measure: "relayed" | "egress" | "none";
+  /** Bytes that entered this node's relay lines and went on to another node. */
+  relayed?: number;
+  /** Bytes that left the fleet from this node. */
+  egress?: number;
+  /** What the figure on the box means; `both` shows relayed and egress. */
+  measure: "relayed" | "egress" | "both" | "none";
   /** Usage was read but this node's collector did not report: unknown, not zero. */
   silent: boolean;
   hasOutgoing: boolean;
 }
 
 export interface RouteEdge extends NodeLayoutEdge {
+  /** Undefined when unknown, drawn at the thinnest width but dotted. */
   bytes?: number;
+  /** Usage was read, but the node the edge leaves from did not report. */
+  unknown: boolean;
   width: number;
   state: RouteState;
   /**
@@ -69,7 +77,7 @@ export interface RouteTraffic {
   reportingNodes?: ReadonlySet<string>;
 }
 
-export const ROUTE_BOX_WIDTH = 290;
+export const ROUTE_BOX_WIDTH = 330;
 export const ROUTE_BOX_HEIGHT = 26;
 export const ROUTE_MAX_STROKE = 12;
 const ROUTE_ROW_GAP = 5;
@@ -99,12 +107,22 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
   }
 
   const outgoing = new Set(graph.edges.map((edge) => edge.from));
+  const exitNodes = new Set(groups.filter((group) => group.lines.some((line) => lineRole(line) === "exit")).map((group) => group.node_id));
+  const measureOf = (box: NodeBox): RouteBox["measure"] => {
+    if (box.offFleet) return "none";
+    if (!outgoing.has(box.id)) return "egress";
+    return box.nodeID && exitNodes.has(box.nodeID) ? "both" : "relayed";
+  };
   const silent = (nodeID: string | undefined) => !!traffic.known && !!nodeID && !!traffic.reportingNodes && !traffic.reportingNodes.has(nodeID);
+  const measured = (box: NodeBox): boolean => traffic.known && !box.offFleet && !!box.nodeID && !silent(box.nodeID);
+  const relayedOf = (box: NodeBox): number | undefined => (measured(box) ? traffic.byNode.get(box.nodeID!)?.repeated ?? 0 : undefined);
+  const egressOf = (box: NodeBox): number | undefined => (measured(box) ? traffic.byNode.get(box.nodeID!)?.egress ?? 0 : undefined);
   const boxBytes = (box: NodeBox): number | undefined => {
-    if (!traffic.known || box.offFleet || !box.nodeID || silent(box.nodeID)) return undefined;
-    const node = traffic.byNode.get(box.nodeID);
-    if (outgoing.has(box.id)) return node?.repeated ?? 0;
-    return node?.egress ?? 0;
+    if (!measured(box)) return undefined;
+    const measure = measureOf(box);
+    if (measure === "relayed") return relayedOf(box);
+    if (measure === "egress") return egressOf(box);
+    return (relayedOf(box) ?? 0) + (egressOf(box) ?? 0);
   };
   const order = (a: NodeBox, b: NodeBox): number =>
     (boxBytes(b) ?? 0) - (boxBytes(a) ?? 0) || b.lines - a.lines || a.label.localeCompare(b.label);
@@ -142,7 +160,7 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
   const height = Math.max(layout.height, ...layout.nodes.map((node) => node.y + ROUTE_BOX_HEIGHT + ROUTE_PAD));
 
   const offFleetIDs = new Set(layout.nodes.filter((node) => node.offFleet).map((node) => node.id));
-  const measured = layout.edges.map((edge) => {
+  const weighed = layout.edges.map((edge) => {
     const hashes = edge.sourceLineHashes ?? [];
     const states: Record<RouteState, number> = { healthy: 0, warning: 0, error: 0 };
     let bytes = 0;
@@ -159,15 +177,19 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
     const state = (Object.keys(states) as RouteState[])
       .filter((key) => states[key] > 0)
       .sort((a, b) => STATE_RANK[b] - STATE_RANK[a])[0] ?? "healthy";
-    return { edge, bytes, states, state };
+    // Bytes behind a silent collector are not a measurement, so they neither
+    // widen this edge nor set the scale for the others.
+    const unknown = traffic.known && silent(edge.from);
+    return { edge, bytes: unknown ? 0 : bytes, unknown, states, state };
   });
-  const maxBytes = measured.reduce((value, item) => Math.max(value, item.bytes), 0);
-  const maxCount = measured.reduce((value, item) => Math.max(value, item.edge.count), 0);
+  const maxBytes = weighed.reduce((value, item) => Math.max(value, item.bytes), 0);
+  const maxCount = weighed.reduce((value, item) => Math.max(value, item.edge.count), 0);
   const weightedBy = traffic.known && maxBytes > 0 ? "bytes" : "lines";
 
-  const edges: RouteEdge[] = measured.map(({ edge, bytes, states, state }) => ({
+  const edges: RouteEdge[] = weighed.map(({ edge, bytes, unknown, states, state }) => ({
     ...edge,
-    bytes: traffic.known && !silent(edge.from) ? bytes : undefined,
+    bytes: traffic.known && !unknown ? bytes : undefined,
+    unknown,
     width: weightedBy === "bytes" ? routeStroke(bytes, maxBytes) : routeStroke(edge.count, maxCount),
     state,
     states,
@@ -179,7 +201,9 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
   const boxes: RouteBox[] = layout.nodes.map((node) => ({
     ...node,
     bytes: boxBytes(node),
-    measure: node.offFleet ? "none" : outgoing.has(node.id) ? "relayed" : "egress",
+    relayed: measureOf(node) === "egress" ? undefined : relayedOf(node),
+    egress: measureOf(node) === "relayed" ? undefined : egressOf(node),
+    measure: measureOf(node),
     silent: !node.offFleet && silent(node.nodeID),
     hasOutgoing: outgoing.has(node.id),
   }));

@@ -128,6 +128,16 @@ export type UsageView = (typeof USAGE_VIEWS)[number];
 export const STACK_BY = ["exit", "role"] as const;
 export type StackBy = (typeof STACK_BY)[number];
 
+/**
+ * What the Usage page keeps after a read fails. Figures read for the period
+ * being asked about stay, beside the error and the time they were read.
+ * Figures read for another period go: under the new period's name they would
+ * be a claim about days nobody read.
+ */
+export function usageAfterFailedRead<T>(current: T, readFor: string | undefined, requested: string, empty: T): T {
+  return readFor === requested ? current : empty;
+}
+
 export function isUsagePeriod(value: string): value is UsagePeriod {
   return (USAGE_PERIODS as readonly string[]).includes(value);
 }

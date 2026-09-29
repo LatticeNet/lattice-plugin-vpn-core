@@ -623,11 +623,13 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 .route-legend-swatch[data-state="warning"] { border-top-color: var(--tone-warn); }
 .route-legend-swatch[data-state="error"] { border-top-color: var(--tone-danger); }
 .route-legend-swatch[data-state="off"] { border-top-style: dashed; }
+.route-legend-swatch[data-state="unknown"] { border-top-style: dotted; }
 .route-columns text { fill: var(--muted-foreground, #65707b); font-size: 10px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
 .route-edge { fill: none; stroke: var(--muted-foreground, #85919d); stroke-linecap: butt; opacity: 0.42; transition: opacity var(--duration-fast, 100ms) ease-out; }
 .route-edge[data-state="warning"] { stroke: var(--tone-warn); opacity: 0.85; }
 .route-edge[data-state="error"] { stroke: var(--tone-danger); opacity: 0.9; }
 .route-edge[data-off="true"] { stroke-dasharray: 6 4; }
+.route-edge[data-unknown="true"] { stroke-dasharray: 1 4; stroke-linecap: round; }
 .route-map-figure[data-hover="true"] .route-edge { opacity: 0.1; }
 .route-map-figure[data-hover="true"] .route-edge[data-lit="true"] { opacity: 0.95; }
 .route-box { cursor: pointer; outline: 0; }

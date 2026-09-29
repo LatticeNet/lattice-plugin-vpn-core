@@ -17,6 +17,7 @@ import {
   flatLines,
   groupByLabel,
   groupLines,
+  groupTraffic,
   protocolSummary,
   roleSummary,
   stateSummary,
@@ -80,13 +81,10 @@ watch(() => [props.search, props.groupBy], () => { page.value = 1; });
 const groupPage = computed(() => pageRows(rows.value, page.value, GROUP_PAGE));
 const flatPage = computed(() => pageRows(flatRows.value, page.value, FLAT_PAGE));
 const pager = computed(() => (flat.value ? flatPage.value : groupPage.value));
+const groupFigures = computed(() => new Map(groupPage.value.rows.map((group) => [group.key, groupTraffic(group.agg, props.groupBy)])));
 
 function bytesCell(bytes: number | undefined): string {
   return bytes === undefined ? "unknown" : formatBytes(bytes);
-}
-function aggBytes(agg: GroupAggregate): string {
-  if (agg.unknownBytes === agg.lines) return "unknown";
-  return `${agg.unknownBytes ? "at least " : ""}${formatBytes(agg.bytes)}`;
 }
 function aggUsers(agg: GroupAggregate): string {
   if (!agg.users.unknownLines) return String(agg.users.known);
@@ -264,7 +262,7 @@ onBeforeUnmount(() => closeMenu());
               <td class="mono"><span class="cell-text">{{ protocolSummary(group.agg) }}</span><small>{{ ports(group.agg) }}</small></td>
               <td>{{ targetSummary(group.agg) }}</td>
               <td class="num mono">{{ aggUsers(group.agg) }}</td>
-              <td class="num mono" :data-unknown="group.agg.unknownBytes === group.agg.lines || undefined">{{ aggBytes(group.agg) }}</td>
+              <td class="num mono" :data-unknown="groupFigures.get(group.key)?.unknown || undefined">{{ groupFigures.get(group.key)?.figure }}<small v-if="groupFigures.get(group.key)?.note">{{ groupFigures.get(group.key)?.note }}</small></td>
               <td v-if="showState"><span class="status-dot" :data-tone="group.agg.worst.tone">{{ aggState(group.agg) }}</span></td>
               <td v-if="canOpenEvidence" class="menu-cell">
                 <button v-if="group.nodeID" class="icon-button" type="button" :aria-label="`Evidence for ${group.label}`" :aria-expanded="menu?.key === `group:${group.key}`" aria-haspopup="menu" @click.stop="openMenu($event, `group:${group.key}`, group.label, nodeMenu(group.nodeID))"><Ellipsis :size="15" aria-hidden="true" /></button>

@@ -3,7 +3,8 @@
  * The route map: relay hubs on the left, the nodes they dial on the right,
  * one edge per node pair. Width is the period's bytes on the lines behind an
  * edge, colour is the worst state among them, and an endpoint outside the
- * fleet is dashed. Pointing at a box lights its edges and dims the rest;
+ * fleet is dashed. An edge from a node whose collector is silent is dotted:
+ * its width is not a small amount, it is no measurement. Pointing at a box lights its edges and dims the rest;
  * choosing one opens its lines.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
@@ -65,11 +66,24 @@ function clip(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
 }
 
-/** The one figure a box has room for: its bytes, or its line count without usage. */
+/** The figure a box has room for: its bytes, or its line count without
+ *  usage. A hub that is also an exit carries two kinds of traffic and shows
+ *  both, since either alone would hide the other. */
 function boxFigure(box: RouteBox): string {
   if (box.silent) return "unknown";
   if (box.bytes === undefined) return `${box.lines} ${box.lines === 1 ? "line" : "lines"}`;
+  if (box.measure === "both") return `in ${formatBytes(box.relayed ?? 0)} · out ${formatBytes(box.egress ?? 0)}`;
   return `${box.measure === "relayed" ? "in " : ""}${formatBytes(box.bytes)}`;
+}
+
+/* Room for the name, in characters, beside a figure of so many. The figure
+ * is 10px mono (about 6px a character) ending 9px from the right edge; the
+ * name starts 10px from the left and runs about 7px a character, and keeps a
+ * 10px gap. The full name is always in the title. */
+const NAME_ROOM = ROUTE_BOX_WIDTH - 9 - 10 - 10;
+function nameLimit(box: RouteBox): number {
+  if (box.offFleet) return 40;
+  return Math.min(31, Math.max(12, Math.floor((NAME_ROOM - 6 * boxFigure(box).length) / 7)));
 }
 
 function boxMeta(box: RouteBox): string {
@@ -77,13 +91,16 @@ function boxMeta(box: RouteBox): string {
   const lines = `${box.lines} ${box.lines === 1 ? "line" : "lines"}`;
   if (box.silent) return `traffic unknown, its collector is not reporting · ${lines}`;
   if (box.bytes === undefined) return lines;
+  if (box.measure === "both") return `${formatBytes(box.relayed ?? 0)} relayed, ${formatBytes(box.egress ?? 0)} out · ${lines}`;
   return `${formatBytes(box.bytes)} ${box.measure === "relayed" ? "relayed" : "out"} · ${lines}`;
 }
 
 function edgeName(edge: RouteEdge): string {
   const from = names.value.get(edge.from) ?? edge.from;
   const to = names.value.get(edge.to) ?? edge.to;
-  const traffic = edge.bytes === undefined ? "traffic unknown" : `${formatBytes(edge.bytes)} in ${props.periodLabel}`;
+  const traffic = edge.unknown
+    ? `traffic unknown, the collector on ${from} is not reporting`
+    : edge.bytes === undefined ? "traffic unknown" : `${formatBytes(edge.bytes)} in ${props.periodLabel}`;
   const states = edge.states.error || edge.states.warning
     ? [edge.states.error ? `${edge.states.error} with an error` : "", edge.states.warning ? `${edge.states.warning} with a warning` : ""].filter(Boolean).join(", ")
     : "every line healthy";
@@ -106,6 +123,7 @@ const legend = computed(() => {
   if (present.has("warning")) items.push({ key: "warning", label: "a line warns", cls: "warning" });
   if (present.has("error")) items.push({ key: "error", label: "a line errors", cls: "error" });
   if (props.map.edges.some((edge) => edge.offFleet)) items.push({ key: "off", label: "outside the fleet", cls: "off" });
+  if (props.map.edges.some((edge) => edge.unknown)) items.push({ key: "unknown", label: "hub not reporting, traffic unknown", cls: "unknown" });
   return items;
 });
 </script>
@@ -138,6 +156,7 @@ const legend = computed(() => {
               :d="path(edge)"
               :data-state="edge.state"
               :data-off="edge.offFleet ? 'true' : undefined"
+              :data-unknown="edge.unknown ? 'true' : undefined"
               :data-lit="touches(edge, hovered) ? 'true' : undefined"
               :style="{ strokeWidth: edge.width }"
             >
@@ -163,7 +182,7 @@ const legend = computed(() => {
             @keydown.space.prevent="choose(box)"
           >
             <rect :width="ROUTE_BOX_WIDTH" :height="ROUTE_BOX_HEIGHT" rx="4" />
-            <text class="route-box-name" x="10" :y="ROUTE_BOX_HEIGHT / 2 + 4">{{ clip(box.label, box.offFleet ? 40 : 31) }}</text>
+            <text class="route-box-name" x="10" :y="ROUTE_BOX_HEIGHT / 2 + 4">{{ clip(box.label, nameLimit(box)) }}</text>
             <text v-if="!box.offFleet" class="route-box-meta" :data-unknown="box.silent || undefined" :x="ROUTE_BOX_WIDTH - 9" :y="ROUTE_BOX_HEIGHT / 2 + 4" text-anchor="end">{{ boxFigure(box) }}</text>
             <title>{{ boxName(box) }}</title>
           </g>

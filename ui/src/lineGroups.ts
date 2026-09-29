@@ -18,7 +18,7 @@
 
 import { buildNodeRows, lineRole, type Bank, type LineRole } from "./fleetRows";
 import { isRelayCandidate } from "./chainTopology";
-import type { Line, LineGroup } from "./vpnModel";
+import { formatBytes, type Line, type LineGroup } from "./vpnModel";
 
 export type GroupBy = "node" | "bank" | "exit" | "none";
 export const GROUP_BY: readonly GroupBy[] = ["node", "bank", "exit", "none"];
@@ -87,16 +87,29 @@ export function stateSummary(groups: readonly LineGroup[]): StateSummary {
 export interface LineTrafficIndex {
   known: boolean;
   byLine: ReadonlyMap<string, number>;
+  /** The part of each line's bytes that left the fleet there. */
+  egressByLine: ReadonlyMap<string, number>;
   /** Nodes whose collector reported; a silent line there moved nothing. */
   reportingNodes: ReadonlySet<string>;
 }
 
-export function lineBytes(traffic: LineTrafficIndex | undefined, line: Line): number | undefined {
+function indexed(traffic: LineTrafficIndex | undefined, map: "byLine" | "egressByLine", line: Line): number | undefined {
   if (!traffic?.known) return undefined;
   const hash = line.line_hash_id?.trim();
-  const bytes = hash ? traffic.byLine.get(hash) : undefined;
+  const bytes = hash ? traffic[map].get(hash) : undefined;
   if (bytes !== undefined) return bytes;
+  // A line with rows elsewhere in the index moved bytes, none of them egress.
+  if (map === "egressByLine" && hash && traffic.byLine.has(hash)) return 0;
   return traffic.reportingNodes.has(line.node_id) ? 0 : undefined;
+}
+
+export function lineBytes(traffic: LineTrafficIndex | undefined, line: Line): number | undefined {
+  return indexed(traffic, "byLine", line);
+}
+
+/** The line's bytes that left the fleet there; undefined when unknown. */
+export function lineEgress(traffic: LineTrafficIndex | undefined, line: Line): number | undefined {
+  return indexed(traffic, "egressByLine", line);
 }
 
 export interface LineTarget {
@@ -171,6 +184,8 @@ export interface LineEntry {
   state: LineState;
   /** undefined is unknown, never zero. */
   bytes?: number;
+  /** The part of `bytes` that left the fleet on this line. */
+  egress?: number;
 }
 
 export interface GroupAggregate {
@@ -185,6 +200,11 @@ export interface GroupAggregate {
   users: { known: number; unknownLines: number };
   /** Sum over members whose traffic is known. */
   bytes: number;
+  /** The part of `bytes` that left the fleet through these lines. */
+  egress: number;
+  /** The rest: bytes that entered at a hub or passed a middle hop, which an
+   *  exit counts again when it leaves. */
+  forwarded: number;
   /** Members whose traffic is unknown; the sum is a floor when non-zero. */
   unknownBytes: number;
   /** The worst state among the members, and how many lines hold it. */
@@ -204,7 +224,10 @@ export interface LineGroupRow {
 }
 
 function entryOf(index: FleetIndex, traffic: LineTrafficIndex | undefined, group: LineGroup, line: Line): LineEntry {
-  return { group, line, role: lineRole(line), target: lineTarget(index, line), state: lineStateOf(line), bytes: lineBytes(traffic, line) };
+  return {
+    group, line, role: lineRole(line), target: lineTarget(index, line), state: lineStateOf(line),
+    bytes: lineBytes(traffic, line), egress: lineEgress(traffic, line),
+  };
 }
 
 function byPort(a: LineEntry, b: LineEntry): number {
@@ -221,6 +244,7 @@ export function aggregate(entries: readonly LineEntry[]): GroupAggregate {
   let knownUsers = 0;
   let unknownUsers = 0;
   let bytes = 0;
+  let egress = 0;
   let unknownBytes = 0;
   let worst: LineState | undefined;
   let worstCount = 0;
@@ -238,7 +262,10 @@ export function aggregate(entries: readonly LineEntry[]): GroupAggregate {
     if (entry.line.user_known) knownUsers += entry.line.user_count;
     else unknownUsers += 1;
     if (entry.bytes === undefined) unknownBytes += 1;
-    else bytes += entry.bytes;
+    else {
+      bytes += entry.bytes;
+      egress += Math.min(entry.egress ?? 0, entry.bytes);
+    }
     if (!worst || entry.state.rank > worst.rank) {
       worst = entry.state;
       worstCount = 1;
@@ -256,6 +283,8 @@ export function aggregate(entries: readonly LineEntry[]): GroupAggregate {
     offFleet,
     users: { known: knownUsers, unknownLines: unknownUsers },
     bytes,
+    egress,
+    forwarded: bytes - egress,
     unknownBytes,
     worst: { ...(worst ?? fallback), count: worstCount },
     uniformState: entries.length > 0 && worstCount === entries.length,
@@ -270,6 +299,36 @@ function row(key: string, label: string, sub: string, entries: LineEntry[], node
 /** Heaviest first when traffic is known, then by name, so the order is stable. */
 function byTraffic(a: LineGroupRow, b: LineGroupRow): number {
   return b.agg.bytes - a.agg.bytes || a.label.localeCompare(b.label);
+}
+
+/** Exit groups rank by what left through them, not by bytes counted twice. */
+function byEgress(a: LineGroupRow, b: LineGroupRow): number {
+  return b.agg.egress - a.agg.egress || b.agg.bytes - a.agg.bytes || a.label.localeCompare(b.label);
+}
+
+/**
+ * The traffic figure a group row shows. An exit group holds the exit line and
+ * every relay line reaching it, which carry the same traffic twice, so its
+ * figure is the egress alone and the relays' bytes are a note beside it. Any
+ * other group sums distinct traffic, and when it holds both kinds (a hub that
+ * is also an exit) the note splits the sum. A sum over members of which some
+ * are unknown is a floor and says so.
+ */
+export function groupTraffic(agg: GroupAggregate, by: GroupBy): { figure: string; note?: string; unknown: boolean } {
+  if (agg.lines > 0 && agg.unknownBytes === agg.lines) return { figure: "unknown", unknown: true };
+  const floor = agg.unknownBytes ? "at least " : "";
+  if (by === "exit") {
+    return {
+      figure: `${floor}${formatBytes(agg.egress)}`,
+      note: agg.forwarded > 0 ? `left here · ${formatBytes(agg.forwarded)} entered at hubs` : "left here",
+      unknown: false,
+    };
+  }
+  return {
+    figure: `${floor}${formatBytes(agg.bytes)}`,
+    note: agg.egress > 0 && agg.forwarded > 0 ? `egress ${formatBytes(agg.egress)} · relayed ${formatBytes(agg.forwarded)}` : undefined,
+    unknown: false,
+  };
 }
 
 function bankSub(bank: Bank): string {
@@ -337,7 +396,7 @@ export function groupLines(groups: readonly LineGroup[], by: GroupBy, traffic?: 
           ? `leaves here, reached by ${relays.length} relay ${relays.length === 1 ? "line" : "lines"} on ${hubs} ${hubs === 1 ? "hub" : "hubs"}`
           : "leaves here, no relay in front";
     return row(key, bucket.label, sub, bucket.entries, bucket.kind === "node" ? key : undefined);
-  }).sort(byTraffic);
+  }).sort(byEgress);
 }
 
 /** Search results: every matching line, flat, heaviest first. */

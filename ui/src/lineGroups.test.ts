@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { chainPath } from "./linePath";
 import {
+  GROUP_BY,
   groupLines,
+  groupTraffic,
   flatLines,
   lineBytes,
+  lineEgress,
   lineStateOf,
   protocolSummary,
   roleSummary,
@@ -13,7 +16,8 @@ import {
   type LineTrafficIndex,
 } from "./lineGroups";
 import { ROUTE_MAX_STROKE, buildRouteMap, routeShape, routeStroke } from "./routeMap";
-import { trafficByNode, type NodeTraffic } from "./trafficModel";
+import { bytesByLine, egressByLine, roleTotals, trafficByNode, type NodeTraffic } from "./trafficModel";
+import type { UsageLineRow } from "./usageModel";
 import type { Line, LineGroup } from "./vpnModel";
 
 const GiB = 1024 ** 3;
@@ -47,7 +51,17 @@ const fleet: LineGroup[] = [
   { node_id: "d", node_name: "[cd]-huoshan-shanghai", lines: [line("d1", "d", { listen_port: 34099 })] },
 ];
 
-const byLine = new Map<string, number>([["r1", 10 * GiB], ["r2", 5 * GiB], ["r3", 2 * GiB], ["r4", 1 * GiB], ["e1", 16 * GiB], ["e2", 2 * GiB], ["d1", 4 * GiB]]);
+/* What the collectors said: the relays' bytes entered at their hubs, and the
+ * exits and the direct node's line are where the same traffic left. */
+const usageRow = (hash: string, node: string, role: string, bytes: number): UsageLineRow => ({
+  node_id: node, line_hash_id: hash, tag: hash, role, uplink: 0, downlink: bytes, used_bytes: bytes, attribution: "none", counted: true,
+});
+const usageRows: UsageLineRow[] = [
+  usageRow("r1", "h1", "entry", 10 * GiB), usageRow("r2", "h1", "entry", 5 * GiB), usageRow("r3", "h1", "entry", 2 * GiB),
+  usageRow("r4", "h2", "entry", 1 * GiB), usageRow("e1", "e1", "exit", 16 * GiB), usageRow("e2", "e2", "exit", 2 * GiB),
+  usageRow("d1", "d", "direct", 4 * GiB),
+];
+const byLine = bytesByLine(usageRows);
 const byNode = new Map<string, NodeTraffic>([
   ["h1", { nodeID: "h1", egress: 0, repeated: 17 * GiB, total: 17 * GiB }],
   ["h2", { nodeID: "h2", egress: 0, repeated: 1 * GiB, total: 1 * GiB }],
@@ -55,7 +69,7 @@ const byNode = new Map<string, NodeTraffic>([
   ["e2", { nodeID: "e2", egress: 2 * GiB, repeated: 0, total: 2 * GiB }],
   ["d", { nodeID: "d", egress: 4 * GiB, repeated: 0, total: 4 * GiB }],
 ]);
-const known: LineTrafficIndex = { known: true, byLine, reportingNodes: new Set(["e1", "e2", "h1", "h2", "d"]) };
+const known: LineTrafficIndex = { known: true, byLine, egressByLine: egressByLine(usageRows), reportingNodes: new Set(["e1", "e2", "h1", "h2", "d"]) };
 
 describe("route map edge weights", () => {
   const map = buildRouteMap(fleet, [], { known: true, byLine, byNode });
@@ -110,8 +124,22 @@ describe("route map edge weights", () => {
   it("says unknown, not zero, for a node whose collector is silent", () => {
     const silent = buildRouteMap(fleet, [], { known: true, byLine, byNode, reportingNodes: new Set(["e1", "e2", "h1", "d", "m"]) });
     expect(silent.boxes.find((box) => box.id === "h2")).toMatchObject({ silent: true, bytes: undefined });
-    expect(silent.edges.find((value) => value.from === "h2")?.bytes).toBeUndefined();
+    expect(silent.edges.find((value) => value.from === "h2")).toMatchObject({ bytes: undefined, unknown: true, width: 1 });
+    expect(silent.edges.find((value) => value.from === "h1" && value.to === "e1")?.unknown).toBe(false);
     expect(silent.boxes.find((box) => box.id === "h1")).toMatchObject({ silent: false, bytes: 17 * GiB });
+    // Without usage no edge is "unknown": the whole map says it is weighted by line counts.
+    expect(buildRouteMap(fleet, [], { known: false, byLine: new Map(), byNode: new Map() }).edges.every((value) => !value.unknown)).toBe(true);
+  });
+
+  it("shows both figures on a hub that is also an exit", () => {
+    // h1 relays through r1 to r3 and its own line x1 exits directly.
+    const both = new Map(byNode);
+    both.set("h1", { nodeID: "h1", egress: 3 * GiB, repeated: 17 * GiB, total: 20 * GiB });
+    const h1 = buildRouteMap(fleet, [], { known: true, byLine, byNode: both }).boxes.find((box) => box.id === "h1");
+    expect(h1).toMatchObject({ measure: "both", relayed: 17 * GiB, egress: 3 * GiB, bytes: 20 * GiB });
+    // A hub with no exit line of its own keeps the one figure.
+    expect(map.boxes.find((box) => box.id === "h2")).toMatchObject({ measure: "relayed", relayed: 1 * GiB, egress: undefined });
+    expect(map.boxes.find((box) => box.id === "e1")).toMatchObject({ measure: "egress", relayed: undefined, egress: 16 * GiB });
   });
 
   it("reads the route shape from line roles", () => {
@@ -143,11 +171,12 @@ describe("group rows carry aggregates in every member column", () => {
   });
 
   it("keeps an unknown traffic figure unknown and makes the sum a floor", () => {
-    const partial: LineTrafficIndex = { known: true, byLine, reportingNodes: new Set(["e1"]) };
+    const partial: LineTrafficIndex = { ...known, reportingNodes: new Set(["e1"]) };
     const m = groupLines(fleet, "node", partial).find((group) => group.key === "m")!;
     expect(m.entries[0].bytes).toBeUndefined();
     expect(m.agg.unknownBytes).toBe(1);
-    expect(lineBytes({ known: false, byLine, reportingNodes: new Set() }, fleet[0].lines[0])).toBeUndefined();
+    expect(lineBytes({ ...known, known: false }, fleet[0].lines[0])).toBeUndefined();
+    expect(lineEgress({ ...known, known: false }, fleet[0].lines[0])).toBeUndefined();
     expect(lineBytes(known, fleet[2].lines[3])).toBe(0);
   });
 
@@ -168,6 +197,34 @@ describe("group rows carry aggregates in every member column", () => {
     expect(e1.sub).toBe("leaves here, reached by 3 relay lines on 2 hubs");
     expect(groups.find((group) => group.key.startsWith("off:"))?.entries[0].line.line_hash_id).toBe("m1");
     expect(groups.find((group) => group.key === "h1")?.entries.map((entry) => entry.line.line_hash_id)).toEqual(["x1"]);
+  });
+
+  it("never counts a relay's bytes as egress, in any grouping", () => {
+    const rowsOf = (hashes: string[]) => usageRows.filter((row) => hashes.includes(row.line_hash_id ?? ""));
+    for (const by of GROUP_BY) {
+      const groups = groupLines(fleet, by, known);
+      for (const group of groups) {
+        const members = group.entries.map((entry) => entry.line.line_hash_id);
+        expect(group.agg.egress, `${by} ${group.key}`).toBe(roleTotals(rowsOf(members)).egress);
+        expect(group.agg.forwarded, `${by} ${group.key}`).toBe(roleTotals(rowsOf(members)).repeated);
+      }
+      expect(groups.reduce((sum, group) => sum + group.agg.egress, 0), by).toBe(roleTotals(usageRows).egress);
+    }
+  });
+
+  it("heads an exit group with what left through it and names the relays' bytes apart", () => {
+    const groups = groupLines(fleet, "exit", known);
+    const e1 = groups.find((group) => group.key === "e1")!;
+    // 16 GiB left through e1; the 16 GiB its three relays carried is the same traffic.
+    expect(e1.agg.bytes).toBe(32 * GiB);
+    expect(groupTraffic(e1.agg, "exit")).toEqual({ figure: "16.0 GiB", note: "left here · 16.0 GiB entered at hubs", unknown: false });
+    expect(groups[0].key).toBe("e1");
+    expect(groupTraffic(groups.find((group) => group.key === "d")!.agg, "exit")).toEqual({ figure: "4.0 GiB", note: "left here", unknown: false });
+    // A hub that is also an exit sums distinct traffic, and says how it splits.
+    const h1 = groupLines(fleet, "node", { ...known, egressByLine: new Map([...egressByLine(usageRows), ["x1", 3 * GiB]]), byLine: new Map([...byLine, ["x1", 3 * GiB]]) })
+      .find((group) => group.key === "h1")!;
+    expect(groupTraffic(h1.agg, "node")).toEqual({ figure: "20.0 GiB", note: "egress 3.0 GiB · relayed 17.0 GiB", unknown: false });
+    expect(groupTraffic(groupLines(fleet, "node", { ...known, known: false })[0].agg, "exit")).toEqual({ figure: "unknown", unknown: true });
   });
 
   it("returns one group for none and flattens search results heaviest first", () => {

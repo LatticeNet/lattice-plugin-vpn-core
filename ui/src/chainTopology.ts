@@ -652,11 +652,28 @@ export function layoutNodeGraph(graph: NodeGraph, maxRows = NODE_LAYOUT_MAX_ROWS
 
   const rank = new Map<string, number>();
   let frontier = graph.nodes.filter((node) => !incoming.has(node.id)).map((node) => node.id);
+  // An edge back to a node still on the walk from a source closes a cycle
+  // (A to B to C to B). Ranking along it would push the cycle one column
+  // right on every pass until the pass limit, so it is left out of the
+  // ranking. It is still drawn.
+  const closesCycle = new Set<string>();
+  const walk = new Map<string, "open" | "done">();
+  const visit = (id: string): void => {
+    walk.set(id, "open");
+    for (const target of outgoing.get(id) ?? []) {
+      const seen = walk.get(target);
+      if (seen === "open") closesCycle.add(`${id}\u0000${target}`);
+      else if (!seen) visit(target);
+    }
+    walk.set(id, "done");
+  };
+  for (const id of frontier) visit(id);
   for (const id of frontier) rank.set(id, 0);
   for (let depth = 0; depth < graph.nodes.length && frontier.length; depth += 1) {
     const next: string[] = [];
     for (const id of frontier) {
       for (const target of outgoing.get(id) ?? []) {
+        if (closesCycle.has(`${id}\u0000${target}`)) continue;
         const candidate = (rank.get(id) ?? 0) + 1;
         if ((rank.get(target) ?? -1) < candidate) {
           rank.set(target, candidate);
