@@ -120,6 +120,10 @@ export interface AllocatedNode {
 export const USAGE_PERIODS = ["today", "7d", "30d", "all"] as const;
 export type UsagePeriod = (typeof USAGE_PERIODS)[number];
 
+/** The Usage layers, in the order the tab row offers them. */
+export const USAGE_VIEWS = ["overview", "node", "line", "user"] as const;
+export type UsageView = (typeof USAGE_VIEWS)[number];
+
 export function isUsagePeriod(value: string): value is UsagePeriod {
   return (USAGE_PERIODS as readonly string[]).includes(value);
 }

@@ -70,8 +70,14 @@ describe("route map edge weights", () => {
   });
 
   it("colours an edge by the worst line on it", () => {
-    expect(edge("h2", "e1")).toMatchObject({ state: "error", states: { healthy: 0, warning: 0, error: 1 } });
+    expect(edge("h2", "e1")).toMatchObject({ state: "error", states: { healthy: 1, warning: 0, error: 1 } });
     expect(edge("h1", "e1")?.state).toBe("healthy");
+  });
+
+  it("counts the line an edge dials, so a dead exit listener reddens the routes into it", () => {
+    const dead = fleet.map((group) => group.node_id === "e2" ? { ...group, lines: [{ ...group.lines[0], service_state: "down" }] } : group);
+    const map = buildRouteMap(dead, [], { known: true, byLine, byNode });
+    expect(map.edges.find((value) => value.from === "h1" && value.to === "e2")?.state).toBe("error");
   });
 
   it("marks an edge onto an endpoint outside the fleet", () => {
@@ -99,6 +105,13 @@ describe("route map edge weights", () => {
     expect(heavy?.bytes).toBeUndefined();
     expect(heavy?.width).toBe(ROUTE_MAX_STROKE);
     expect(blind.directOnly.bytes).toBeUndefined();
+  });
+
+  it("says unknown, not zero, for a node whose collector is silent", () => {
+    const silent = buildRouteMap(fleet, [], { known: true, byLine, byNode, reportingNodes: new Set(["e1", "e2", "h1", "d", "m"]) });
+    expect(silent.boxes.find((box) => box.id === "h2")).toMatchObject({ silent: true, bytes: undefined });
+    expect(silent.edges.find((value) => value.from === "h2")?.bytes).toBeUndefined();
+    expect(silent.boxes.find((box) => box.id === "h1")).toMatchObject({ silent: false, bytes: 17 * GiB });
   });
 
   it("reads the route shape from line roles", () => {

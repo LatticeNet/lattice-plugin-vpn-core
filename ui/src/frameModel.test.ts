@@ -16,17 +16,17 @@ describe("vpn-core frame model", () => {
     expect(read("./bridge.ts")).not.toContain("lattice.plugin.resize");
   });
 
-  it("pages the fleet lens by node without ever paging the count or the search", () => {
-    // The slice is cut from nodeRows, which is the searched whole set, so a
-    // pager can never quietly narrow what the page reports on.
-    const app = read("./App.vue");
-    expect(app).toContain("pageRows(nodeRows.value, nodePage.value, NODE_PAGE_SIZE)");
-    expect(app).toContain('v-for="row in nodePageData.rows"');
+  it("pages the Lines table by group without ever paging the count or the search", () => {
+    // The slice is cut from the grouped, searched whole set, so a pager can
+    // never quietly narrow what the page reports on.
+    const table = read("./LinesTable.vue");
+    expect(table).toContain("pageRows(rows.value, page.value, GROUP_PAGE)");
+    expect(table).toContain("pageRows(flatRows.value, page.value, FLAT_PAGE)");
+    expect(table).toContain('v-for="group in groupPage.rows"');
     // The header counts the whole matching set, never the page.
-    expect(app).toContain("{{ nodeRows.length }} {{ nodeRows.length === 1 ? 'node' : 'nodes' }} · {{ fleetSummary.lines }} lines");
-    expect(app).not.toContain("nodePageData.rows.length }} shown");
-    // A new search invalidates the current page.
-    expect(app).toContain("watch(search, () => { nodePage.value = 1; });");
+    expect(table).toContain("{{ matching }} of {{ totalLines }} lines match");
+    // A new search or grouping invalidates the current page.
+    expect(table).toContain("watch(() => [props.search, props.groupBy], () => { page.value = 1; });");
   });
 
   it("keeps the document as the only vertical scroller", () => {

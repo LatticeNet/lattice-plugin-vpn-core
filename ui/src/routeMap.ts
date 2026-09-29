@@ -32,6 +32,8 @@ export interface RouteBox extends NodeLayoutBox {
   bytes?: number;
   /** What the figure on the box means. */
   measure: "relayed" | "egress" | "none";
+  /** Usage was read but this node's collector did not report: unknown, not zero. */
+  silent: boolean;
   hasOutgoing: boolean;
 }
 
@@ -39,7 +41,10 @@ export interface RouteEdge extends NodeLayoutEdge {
   bytes?: number;
   width: number;
   state: RouteState;
-  /** Lines behind the edge in each state, for the accessible name. */
+  /**
+   * Lines on the edge in each state: the relays behind it and the lines they
+   * dial, because a relay onto a dead listener is a broken route too.
+   */
   states: Record<RouteState, number>;
   offFleet: boolean;
 }
@@ -60,16 +65,22 @@ export interface RouteTraffic {
   known: boolean;
   byLine: ReadonlyMap<string, number>;
   byNode: ReadonlyMap<string, NodeTraffic>;
+  /** Nodes whose collector reported. Absent means every node is taken as reporting. */
+  reportingNodes?: ReadonlySet<string>;
 }
 
-export const ROUTE_BOX_WIDTH = 212;
-export const ROUTE_BOX_HEIGHT = 36;
+export const ROUTE_BOX_WIDTH = 290;
+export const ROUTE_BOX_HEIGHT = 26;
 export const ROUTE_MAX_STROKE = 12;
-const ROUTE_ROW_GAP = 8;
-const ROUTE_RANK_GAP = 150;
+const ROUTE_ROW_GAP = 5;
+const ROUTE_RANK_GAP = 160;
 const ROUTE_PAD = 12;
-/** A rank past this many rows wraps into a second column. */
-export const ROUTE_MAX_ROWS = 14;
+/**
+ * A rank past this many rows wraps into a second column. Set high on
+ * purpose: an edge into a wrapped column passes under the column before it
+ * and reads as a hop between two exits, which is worse than a tall map.
+ */
+export const ROUTE_MAX_ROWS = 40;
 
 const STATE_RANK: Record<RouteState, number> = { healthy: 0, warning: 1, error: 2 };
 
@@ -88,8 +99,9 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
   }
 
   const outgoing = new Set(graph.edges.map((edge) => edge.from));
+  const silent = (nodeID: string | undefined) => !!traffic.known && !!nodeID && !!traffic.reportingNodes && !traffic.reportingNodes.has(nodeID);
   const boxBytes = (box: NodeBox): number | undefined => {
-    if (!traffic.known || box.offFleet || !box.nodeID) return undefined;
+    if (!traffic.known || box.offFleet || !box.nodeID || silent(box.nodeID)) return undefined;
     const node = traffic.byNode.get(box.nodeID);
     if (outgoing.has(box.id)) return node?.repeated ?? 0;
     return node?.egress ?? 0;
@@ -106,15 +118,43 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
     order,
   });
 
+  // A later hop (a relay behind a relay) sits level with what feeds it, not
+  // at the top of its column, so its edge runs across instead of up the page.
+  const byID = new Map(layout.nodes.map((node) => [node.id, node]));
+  const ranks = [...new Set(layout.nodes.map((node) => node.rank))].sort((a, b) => a - b);
+  for (const rank of ranks.slice(2)) {
+    const members = layout.nodes.filter((node) => node.rank === rank);
+    if (new Set(members.map((node) => node.x)).size !== 1) continue;
+    const wanted = members.map((node) => {
+      const sources = graph.edges.filter((edge) => edge.to === node.id).map((edge) => byID.get(edge.from)).filter((box): box is NodeLayoutBox => !!box);
+      return { node, y: sources.length ? sources.reduce((sum, box) => sum + box.y, 0) / sources.length : node.y };
+    }).sort((a, b) => a.y - b.y);
+    let floor = ROUTE_PAD;
+    for (const item of wanted) {
+      item.node.y = Math.max(item.y, floor);
+      floor = item.node.y + ROUTE_BOX_HEIGHT + ROUTE_ROW_GAP;
+    }
+  }
+  for (const edge of layout.edges) {
+    edge.y1 = (byID.get(edge.from)?.y ?? 0) + ROUTE_BOX_HEIGHT / 2;
+    edge.y2 = (byID.get(edge.to)?.y ?? 0) + ROUTE_BOX_HEIGHT / 2;
+  }
+  const height = Math.max(layout.height, ...layout.nodes.map((node) => node.y + ROUTE_BOX_HEIGHT + ROUTE_PAD));
+
   const offFleetIDs = new Set(layout.nodes.filter((node) => node.offFleet).map((node) => node.id));
   const measured = layout.edges.map((edge) => {
     const hashes = edge.sourceLineHashes ?? [];
     const states: Record<RouteState, number> = { healthy: 0, warning: 0, error: 0 };
     let bytes = 0;
+    const involved = new Set<string>();
     for (const hash of hashes) {
+      involved.add(hash);
+      for (const target of lineByHash.get(hash)?.jump_edges ?? []) involved.add(target);
+      bytes += traffic.byLine.get(hash) ?? 0;
+    }
+    for (const hash of involved) {
       const line = lineByHash.get(hash);
       if (line) states[lineStatus(line)] += 1;
-      bytes += traffic.byLine.get(hash) ?? 0;
     }
     const state = (Object.keys(states) as RouteState[])
       .filter((key) => states[key] > 0)
@@ -127,7 +167,7 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
 
   const edges: RouteEdge[] = measured.map(({ edge, bytes, states, state }) => ({
     ...edge,
-    bytes: traffic.known ? bytes : undefined,
+    bytes: traffic.known && !silent(edge.from) ? bytes : undefined,
     width: weightedBy === "bytes" ? routeStroke(bytes, maxBytes) : routeStroke(edge.count, maxCount),
     state,
     states,
@@ -140,6 +180,7 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
     ...node,
     bytes: boxBytes(node),
     measure: node.offFleet ? "none" : outgoing.has(node.id) ? "relayed" : "egress",
+    silent: !node.offFleet && silent(node.nodeID),
     hasOutgoing: outgoing.has(node.id),
   }));
 
@@ -157,7 +198,7 @@ export function buildRouteMap(groups: readonly LineGroup[], chains: readonly Lin
     boxes,
     edges,
     width: layout.width,
-    height: layout.height,
+    height,
     weightedBy,
     directOnly: { nodes: directNodes, bytes: traffic.known ? directBytes : undefined },
   };
