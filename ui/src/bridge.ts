@@ -1,3 +1,5 @@
+import { validPageState, type PageState } from "./pageState";
+
 export interface CallableInterface {
   service: string;
   methods: string[];
@@ -12,6 +14,12 @@ export interface HostInit {
   colorScheme: string;
   designTokens: Record<string, string>;
   interfaces: CallableInterface[];
+  /**
+   * The query of the console's plugin route, when the host carries page
+   * state in its address. Absent from a host that predates that, which is
+   * how the page knows to keep the state in its own document instead.
+   */
+  pageState?: PageState;
 }
 
 type Pending = {
@@ -23,7 +31,8 @@ type Pending = {
 type PluginMessage =
   | { type: "lattice.plugin.ready"; nonce: string }
   | { type: "lattice.plugin.call"; nonce: string; id: string; service: string; method: string; payload: unknown }
-  | { type: "lattice.plugin.cancel"; nonce: string; id: string };
+  | { type: "lattice.plugin.cancel"; nonce: string; id: string }
+  | { type: "lattice.plugin.state"; nonce: string; state: PageState };
 
 const TOKEN_NAMES = new Set([
   "--background", "--foreground", "--card", "--card-foreground", "--muted",
@@ -92,6 +101,17 @@ export class BridgeClient {
     });
     promise.catch(() => {});
     return { promise, cancel };
+  }
+
+  /**
+   * Hand the page's full state to the console for its address. There is no
+   * answer: a host that keeps page state replaces its query with this, and
+   * one that does not ignores the message.
+   */
+  sendState(state: PageState): void {
+    if (this.disposed) return;
+    const valid = validPageState(state);
+    if (valid) this.post({ type: "lattice.plugin.state", nonce: this.nonce, state: valid });
   }
 
   dispose(): void {
@@ -210,6 +230,10 @@ function parseInit(message: Record<string, unknown>): HostInit | undefined {
         !value.methods.every((method) => typeof method === "string")) return undefined;
     interfaces.push({ service: value.service, methods: value.methods as string[] });
   }
+  // The host filters its query before sending it, so a state that still
+  // breaks the rules is a host fault; it is set aside rather than failing
+  // the start, and the page falls back to its own document query.
+  const pageState = message.pageState === undefined ? undefined : validPageState(message.pageState);
   return {
     version: message.version,
     pluginId: message.pluginId,
@@ -219,6 +243,7 @@ function parseInit(message: Record<string, unknown>): HostInit | undefined {
     colorScheme: message.colorScheme,
     designTokens: message.designTokens,
     interfaces,
+    ...(pageState ? { pageState } : {}),
   };
 }
 

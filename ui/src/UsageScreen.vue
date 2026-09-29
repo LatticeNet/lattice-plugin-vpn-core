@@ -57,6 +57,7 @@ import {
   USAGE_PERIODS,
   type UsageCollectorRow,
   type UsageLineRow,
+  type StackBy,
   type UsagePeriod,
   type UsageView,
 } from "./usageModel";
@@ -83,14 +84,17 @@ const props = withDefaults(defineProps<{
   series?: UsageSeries;
   previous?: UsagePrevious;
   view?: UsageView;
+  /** How the overview's daily chart stacks. The page keeps it with the layer. */
+  stack?: StackBy;
   /** When the page last heard from the control plane, for the proof line. */
   observedAt?: string;
   /** The console can be asked to open Users. */
   canOpenUsers?: boolean;
-}>(), { view: "overview", observedAt: "", canOpenUsers: false, series: undefined, previous: undefined, from: undefined, to: undefined });
+}>(), { view: "overview", stack: "exit", observedAt: "", canOpenUsers: false, series: undefined, previous: undefined, from: undefined, to: undefined });
 const emit = defineEmits<{
   period: [value: UsagePeriod];
   view: [value: UsageView];
+  stack: [value: StackBy];
   openUsers: [];
 }>();
 
@@ -129,8 +133,7 @@ const periodSentence = computed(() => SENTENCE[props.period] ?? `in ${periodLabe
 const beforeLabel = computed(() => BEFORE[props.period] ?? "the previous period");
 const previousRange = computed(() => formatDayRange(props.previous?.from, props.previous?.to));
 
-type StackBy = "exit" | "role";
-const stackBy = ref<StackBy>("exit");
+const stackBy = computed(() => props.stack);
 const stack = computed(() => (series.value ? (stackBy.value === "exit" ? stackByExit(series.value, 6) : stackByRole(series.value)) : undefined));
 const chartLabel = computed(() => stackBy.value === "exit"
   ? `Daily egress ${periodSentence.value}, stacked by exit: the six largest and the rest together`
@@ -309,8 +312,8 @@ function setView(value: UsageView): void {
         </div>
         <div v-if="series && hasTraffic && !failed" class="segmented" role="group" aria-label="Stack the bars by">
           <span class="segmented-label">Stack by</span>
-          <button class="segmented-option" type="button" :aria-pressed="stackBy === 'exit'" @click="stackBy = 'exit'">exit</button>
-          <button class="segmented-option" type="button" :aria-pressed="stackBy === 'role'" @click="stackBy = 'role'">role</button>
+          <button class="segmented-option" type="button" :aria-pressed="stackBy === 'exit'" @click="emit('stack', 'exit')">exit</button>
+          <button class="segmented-option" type="button" :aria-pressed="stackBy === 'role'" @click="emit('stack', 'role')">role</button>
         </div>
       </header>
       <div v-if="failed" class="empty-state">

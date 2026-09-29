@@ -124,6 +124,10 @@ export type UsagePeriod = (typeof USAGE_PERIODS)[number];
 export const USAGE_VIEWS = ["overview", "node", "line", "user"] as const;
 export type UsageView = (typeof USAGE_VIEWS)[number];
 
+/** How the overview's daily chart stacks: the largest exits, or line roles. */
+export const STACK_BY = ["exit", "role"] as const;
+export type StackBy = (typeof STACK_BY)[number];
+
 export function isUsagePeriod(value: string): value is UsagePeriod {
   return (USAGE_PERIODS as readonly string[]).includes(value);
 }

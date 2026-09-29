@@ -157,3 +157,53 @@ describe("BridgeClient host origin pinning", () => {
     expect(() => new BridgeClient(win)).toThrow("Invalid plugin host origin");
   });
 });
+
+describe("page state over the bridge", () => {
+  const initMessage = (nonce: string, extra: Record<string, unknown> = {}) => ({
+    type: "lattice.host.init", nonce, version: "1",
+    pluginId: "latticenet.vpn-core", pluginVersion: "0.8.0", pluginRoute: "lines",
+    locale: "en", colorScheme: "dark", designTokens: {}, interfaces: [], ...extra,
+  });
+
+  it("carries the console's page state from init, and its absence from an older host", async () => {
+    const withState = harness();
+    const client = new BridgeClient(withState.win);
+    withState.dispatch(initMessage(client.nonce, { pageState: { view: "lines", open: "lh_0042" } }));
+    expect((await client.init).pageState).toEqual({ view: "lines", open: "lh_0042" });
+    client.dispose();
+
+    const older = harness();
+    const oldClient = new BridgeClient(older.win);
+    older.dispatch(initMessage(oldClient.nonce));
+    expect("pageState" in (await oldClient.init)).toBe(false);
+    oldClient.dispose();
+  });
+
+  it("sets aside a page state that breaks the rules and still starts", async () => {
+    const { win, dispatch } = harness();
+    const client = new BridgeClient(win);
+    dispatch(initMessage(client.nonce, { pageState: { View: "lines" } }));
+    const init = await client.init;
+    expect(init.pluginRoute).toBe("lines");
+    expect(init.pageState).toBeUndefined();
+    client.dispose();
+  });
+
+  it("posts the full state with the nonce to the host origin, and nothing invalid or after dispose", () => {
+    const posts: Array<{ message: unknown; origin: string }> = [];
+    const { win } = harness();
+    (win.parent as { postMessage: unknown }).postMessage = (message: unknown, origin: string) => posts.push({ message, origin });
+    const client = new BridgeClient(win);
+    posts.length = 0;
+    client.sendState({ view: "lines", group: "exit" });
+    expect(posts).toEqual([{
+      message: { type: "lattice.plugin.state", nonce: client.nonce, state: { view: "lines", group: "exit" } },
+      origin: "https://dash.example",
+    }]);
+    client.sendState({ q: "x".repeat(257) });
+    expect(posts).toHaveLength(1);
+    client.dispose();
+    client.sendState({ view: "topology" });
+    expect(posts).toHaveLength(1);
+  });
+});

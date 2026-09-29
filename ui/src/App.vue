@@ -23,16 +23,24 @@ import {
 import { BridgeClient, canCall, type HostInit } from "./bridge";
 import { attentionItems, livenessSummary, summarizeFleet, type AttentionItem } from "./fleetRows";
 import LineChainWorkspace from "./LineChainWorkspace.vue";
-import { isGroupBy, lineBytes, lineStateOf, type GroupBy, type LineTrafficIndex } from "./lineGroups";
+import { lineBytes, lineStateOf, type GroupBy, type LineTrafficIndex } from "./lineGroups";
 import { chainPath, hopRoleLabel } from "./linePath";
 import LinesOverview from "./LinesOverview.vue";
 import LinesTable from "./LinesTable.vue";
-import { currentQuery, pick, writeQuery } from "./pageQuery";
+import {
+  createStateSender,
+  decodePageState,
+  documentPageState,
+  encodePageState,
+  writeDocumentState,
+  type LinesView,
+  type PageState,
+  type StateSender,
+  type VpnPageState,
+} from "./pageState";
 import { bytesByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
 import UsageScreen from "./UsageScreen.vue";
 import {
-  USAGE_PERIODS,
-  USAGE_VIEWS,
   attributionLabel,
   collectorLabel,
   collectorReports,
@@ -44,6 +52,7 @@ import {
   roleLabel,
   summarizeAllocation,
   type UsageLineRow,
+  type StackBy,
   type UsagePeriod,
   type UsageView,
 } from "./usageModel";
@@ -198,7 +207,11 @@ const usage = ref<UsageResult>({ by_user: [], by_node: [], rows: [], collectors:
 /* The period is the operator's choice and it drives the server call, so it
  * lives here rather than inside the screen: a refresh must reload the period
  * being looked at, not the default one. */
-const usagePeriod = ref<UsagePeriod>(pick(currentQuery().get("period"), USAGE_PERIODS, "7d"));
+/* Before the host says where the operator was, the page starts from its own
+ * document query: empty under any real console, set only when a host that
+ * keeps no page state let the frame keep it (see pageState.ts). */
+const startState = decodePageState(documentPageState());
+const usagePeriod = ref<UsagePeriod>(startState.period);
 const managedDefs = ref<ManagedLineDef[]>([]);
 
 let bridge: BridgeClient | undefined;
@@ -206,6 +219,7 @@ try {
   bridge = new BridgeClient(window);
   bridge.init.then(async (value) => {
     init.value = value;
+    adoptPageState(value);
     await loadCurrent();
   }).catch((cause) => {
     bootError.value = safeErrorMessage(cause, "Plugin host unavailable");
@@ -224,26 +238,63 @@ const routeMeta = computed(() => ({
   usage: { title: "Usage", description: "Traffic over time, per exit, and who it belongs to where that is known.", icon: Gauge },
 }[route.value] ?? { title: "VPN Core", description: "sing-box management", icon: Radar }));
 // ── layers ───────────────────────────────────────────────────────────────
-// Lines has four layers over one dataset and Usage four over its own. Each is
-// a place in the document's address bar (`?view=`), with the open line
-// (`?open=`), the table's grouping (`?group=`) and its search (`?q=`) beside
-// it, so a reload lands where the operator was and a link names a state.
-const documentQuery = currentQuery();
-type LinesView = "overview" | "lines" | "topology" | "attention";
-const LINES_VIEWS: readonly LinesView[] = ["overview", "lines", "topology", "attention"];
-/* `?lens=` is the older spelling from the lens switch; a saved link keeps working. */
-const LEGACY_LENS: Record<string, LinesView> = { fleet: "lines", topology: "topology", attention: "attention" };
-const linesView = ref<LinesView>(pick(documentQuery.get("view") ?? LEGACY_LENS[documentQuery.get("lens") ?? ""], LINES_VIEWS, "overview"));
-const usageView = ref<UsageView>(pick(documentQuery.get("view"), USAGE_VIEWS, "overview"));
-const groupBy = ref<GroupBy>(isGroupBy(documentQuery.get("group")) ? (documentQuery.get("group") as GroupBy) : "node");
-const search = ref(documentQuery.get("q") ?? "");
-/** A line named by `?open=`, opened once the listing that holds it arrives. */
-let pendingOpen = documentQuery.get("open") ?? "";
-watch(linesView, (value) => writeQuery({ view: value, lens: undefined }, { view: "overview" }));
-watch(usageView, (value) => writeQuery({ view: value }, { view: "overview" }));
-watch(groupBy, (value) => writeQuery({ group: value }, { group: "node" }));
-watch(search, (value) => writeQuery({ q: value.trim() || undefined }));
-watch(usagePeriod, (value) => writeQuery({ period: value }, { period: "7d" }));
+// Lines has four layers over one dataset and Usage four over its own. The
+// layer (`view`), the open line (`open`), the table's grouping (`group`) and
+// search (`q`), and Usage's period and chart stacking are the page's state,
+// and the console keeps it in its own address (pageState.ts), so a reload
+// lands where the operator was and a link names a state.
+const linesView = ref<LinesView>(startState.linesView);
+const usageView = ref<UsageView>(startState.usageView);
+const groupBy = ref<GroupBy>(startState.group);
+const search = ref(startState.q);
+const usageStack = ref<StackBy>(startState.stack);
+/** A line named by the address, opened once the listing that holds it arrives. */
+const pendingOpen = ref(startState.open);
+
+function applyPageState(state: VpnPageState): void {
+  linesView.value = state.linesView;
+  usageView.value = state.usageView;
+  groupBy.value = state.group;
+  search.value = state.q;
+  pendingOpen.value = state.open;
+  usagePeriod.value = state.period;
+  usageStack.value = state.stack;
+  expandedUsers.value = new Set(state.expand);
+}
+
+const pageState = computed<PageState>(() => encodePageState(route.value, {
+  linesView: linesView.value,
+  usageView: usageView.value,
+  group: groupBy.value,
+  q: search.value,
+  // Until the listing arrives, a line the address asked for stays asked for.
+  open: lineDetailOpen.value ? (lineDetail.value?.line_hash_id ?? "") : pendingOpen.value,
+  period: usagePeriod.value,
+  stack: usageStack.value,
+  expand: [...expandedUsers.value],
+}));
+
+/* The state goes out only after init: before it, the page has not seen the
+ * address, and its defaults would overwrite a pasted link. */
+let stateSender: StateSender | undefined;
+let hostKeepsState = false;
+
+function adoptPageState(value: HostInit): void {
+  hostKeepsState = value.pageState !== undefined;
+  if (value.pageState) applyPageState(decodePageState(value.pageState));
+  const client = bridge;
+  stateSender?.dispose();
+  stateSender = createStateSender((state) => client?.sendState(state), { baseline: value.pageState ?? {} });
+  publishPageState(pageState.value);
+}
+
+function publishPageState(state: PageState): void {
+  if (!stateSender) return;
+  // A host that keeps no page state ignores the message; the frame's own
+  // query is then the only place the state can survive a frame reload.
+  if (!hostKeepsState) writeDocumentState(state);
+  stateSender.push(state);
+}
 
 const fleetSummary = computed(() => summarizeFleet(lines.value));
 const attention = computed(() => attentionItems(lines.value));
@@ -419,10 +470,10 @@ function usedLabel(user: VpnUser): string {
   return `${prefix}${formatBytes(user.used_period_bytes)}`;
 }
 
-/* Same deep-link contract as the fleet lens above: `?expand=<user_id>` opens
- * an identity's allocated nodes, so a host, a reviewer or an agent can link
+/* Page state like the layers above: `expand=<user_id>,<user_id>` opens those
+ * identities' allocated nodes, so a host, a reviewer or an agent can link
  * straight to the state being discussed. */
-const expandedUsers = ref(new Set<string>(documentQuery.getAll("expand").filter(Boolean)));
+const expandedUsers = ref(new Set<string>(startState.expand));
 function toggleUser(id: string): void {
   expandedUsers.value = toggled(expandedUsers.value, id);
 }
@@ -553,9 +604,9 @@ async function loadCurrent(background = false): Promise<void> {
           lineUsageError.value = "";
         }
         await Promise.all(calls);
-        if (pendingOpen) {
-          const found = findLine(pendingOpen);
-          pendingOpen = "";
+        if (pendingOpen.value) {
+          const found = findLine(pendingOpen.value);
+          pendingOpen.value = "";
           if (found) void openLineDetails(found.group, found.line);
         }
         break;
@@ -861,7 +912,6 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   lineUsersError.value = "";
   lineUserAdd.value = "";
   lineDetailOpen.value = true;
-  writeQuery({ open: line.line_hash_id });
   if (canViewLineDetails.value) {
     lineDetailBusy.value = true;
     try {
@@ -886,7 +936,6 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
 }
 
 function closeLineDetails(): void {
-  writeQuery({ open: undefined });
   lineDetailOpen.value = false;
   lineDetailBusy.value = false;
   lineDetailError.value = "";
@@ -1179,6 +1228,11 @@ watch(openOverlayKey, async (key) => {
 // the host sizes itself, so a page that reported its own height was running a
 // full synchronous layout of an 8800px document on every body resize and
 // throwing the answer away.
+
+/* Here rather than beside pageState: the watcher reads its getter at once,
+ * and that getter touches refs declared further down the setup. */
+watch(pageState, publishPageState);
+
 onMounted(() => {
   document.addEventListener("pointerdown", recordAnchor, true);
   window.addEventListener("keydown", onKeydown);
@@ -1187,6 +1241,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", recordAnchor, true);
   window.removeEventListener("keydown", onKeydown);
+  stateSender?.dispose();
   bridge?.dispose();
 });
 </script>
@@ -1510,10 +1565,12 @@ onBeforeUnmount(() => {
         :series="usage.series"
         :previous="usage.previous"
         :view="usageView"
+        :stack="usageStack"
         :observed-at="observedAtLabel"
         :can-open-users="canOpenEvidence"
         @period="setUsagePeriod"
         @view="(value) => (usageView = value)"
+        @stack="(value) => (usageStack = value)"
         @open-users="openUsers"
       />
     </template>
