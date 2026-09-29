@@ -749,9 +749,15 @@ function dayWeights(count: number, seed: number): number[] {
   });
 }
 
-type RoleName = "entry" | "relay" | "exit" | "direct";
+type RoleName = "entry" | "relay" | "exit" | "direct" | "shared";
 
-function productionRoles(groups: FleetGroup[]): Map<string, RoleName | undefined> {
+/**
+ * A chain target that also serves its own users is `shared`, and its bytes
+ * are egress like an exit's. "dense" carries one so the rule is exercised.
+ */
+const DENSE_SHARED = "[Metix]-Aaitr-ATT-VDS|VLESS-REALITY-29555.json";
+
+function productionRoles(groups: FleetGroup[], scenario?: Scenario): Map<string, RoleName | undefined> {
   const targeted = new Set<string>();
   for (const group of groups) for (const line of group.lines) for (const hash of line.jump_edges ?? []) targeted.add(hash);
   const roles = new Map<string, RoleName | undefined>();
@@ -761,6 +767,7 @@ function productionRoles(groups: FleetGroup[]): Map<string, RoleName | undefined
     if (!hasOutbound) roles.set(line.line_hash_id, undefined);
     else if (relays) roles.set(line.line_hash_id, targeted.has(line.line_hash_id) ? "relay" : "entry");
     else roles.set(line.line_hash_id, targeted.has(line.line_hash_id) ? "exit" : "direct");
+    if (scenario === "dense" && `${group.node_name}|${line.name}` === DENSE_SHARED) roles.set(line.line_hash_id, "shared");
   }
   return roles;
 }
@@ -780,7 +787,7 @@ interface ProductionUsage {
 
 function productionUsage(groups: FleetGroup[], scenario: Scenario, period: string, users: Array<{ id: string; email: string }>): ProductionUsage {
   const scale = PERIOD_SCALE[period] ?? 1;
-  const roles = productionRoles(groups);
+  const roles = productionRoles(groups, scenario);
   const nodeOf = new Map<string, FleetGroup>();
   const lineOf = new Map<string, FixtureLine>();
   for (const group of groups) for (const line of group.lines) {
@@ -792,7 +799,7 @@ function productionUsage(groups: FleetGroup[], scenario: Scenario, period: strin
   // Bytes on every line that is not an entry: exits by node, directs by line.
   const bytes = new Map<string, number>();
   for (const group of groups) {
-    const exits = group.lines.filter((line) => roles.get(line.line_hash_id) === "exit");
+    const exits = group.lines.filter((line) => roles.get(line.line_hash_id) === "exit" || roles.get(line.line_hash_id) === "shared");
     const labIndex = LAB_EXITS.indexOf(group.node_name);
     const nodeExit = EXIT_7D[group.node_name] ?? (labIndex >= 0 ? LAB_EXIT_7D[labIndex] : 0);
     const split = exits.length === 2 ? [0.7, 0.3] : exits.map(() => 1 / Math.max(1, exits.length));
@@ -857,6 +864,9 @@ function productionUsage(groups: FleetGroup[], scenario: Scenario, period: strin
         const user = users[seat % users.length];
         if (role === "entry") {
           Object.assign(row, { attribution: "named", attribution_proof: "proof", attribution_reason: "user counter on this line folds to this identity", user_id: user.id, email: user.email, counted: true });
+        } else if (role === "shared") {
+          // Its own users, besides the relayed traffic it carries.
+          Object.assign(row, { attribution: "credential", attribution_proof: "proof", attribution_reason: "inbound vless uuid is this user's credential", user_id: user.id, email: user.email, counted: true });
         } else if (role === "exit") {
           const upstream = [...lineOf.values()].find((value) => (value.jump_edges ?? []).includes(line.line_hash_id));
           Object.assign(row, { attribution: "none", attribution_reason: "reached through a relay; counted at the entry line", counted_at: upstream?.line_hash_id });
@@ -895,7 +905,7 @@ function productionUsage(groups: FleetGroup[], scenario: Scenario, period: strin
     })),
     truncated: false,
   };
-  const egress = rows.filter((row) => row.role === "exit" || row.role === "direct").reduce((sum, row) => sum + row.used_bytes, 0);
+  const egress = rows.filter((row) => row.role === "exit" || row.role === "direct" || row.role === "shared").reduce((sum, row) => sum + row.used_bytes, 0);
   const ratio = PREVIOUS_RATIO[period];
   const before = dayList(days.length * 2).slice(0, days.length);
   const previous = ratio ? { from: before[0], to: before[before.length - 1], egress_bytes: Math.round(egress * ratio) } : undefined;

@@ -75,6 +75,12 @@ describe("dense and legacy", () => {
     expect(new Set(lines.map((line) => line.service_state))).toEqual(new Set(["running", "down", "restarting"]));
     expect(lines.some((line) => line.status === "error")).toBe(true);
     expect(seriesEgressGap(usage.series!, usage.lines)).toBe(0);
+    // One chain target serves its own users too; its bytes are egress.
+    const shared = usage.lines.filter((row) => row.role === "shared");
+    expect(shared).toHaveLength(1);
+    expect(roleTotals(usage.lines).egress).toBe(usage.lines.filter((row) => ["exit", "direct", "shared"].includes(row.role)).reduce((sum, row) => sum + row.used_bytes, 0));
+    expect(usage.series!.rows.some((row) => row.role === "shared")).toBe(true);
+    expect(usage.series!.rows.every((row) => row.role !== "unknown")).toBe(true);
     expect(usage.collectors.filter((row) => row.status !== "ok")).toHaveLength(2);
     expect(attributionSummary(usage.lines).share).toBeGreaterThan(0.1);
   });

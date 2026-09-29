@@ -30,8 +30,8 @@ const props = defineProps<{
   byNode: ReadonlyMap<string, NodeTraffic>;
   /** Nodes whose collector reported; a node outside it has unknown traffic. */
   reportingNodes: ReadonlySet<string>;
-  series?: UsageSeries | null;
-  previous?: UsagePrevious | null;
+  series?: UsageSeries;
+  previous?: UsagePrevious;
   periodLabel: string;
   canAct: (item: AttentionItem) => boolean;
   actionLabel: (item: AttentionItem) => string;
@@ -123,7 +123,7 @@ const orphanLines = computed(() => props.groups.reduce((sum, group) => sum + gro
       <strong>{{ usageKnown && egress !== undefined ? formatBytes(egress) : 'unknown' }}</strong>
       <small v-if="!usageKnown">{{ usageNote }}</small>
       <small v-else-if="change">{{ change.label }} against the previous {{ periodLabel }} ({{ formatBytes(change.previousBytes) }})</small>
-      <small v-else>exit and direct lines; no earlier period reported to compare with</small>
+      <small v-else>exit, direct and shared lines; no earlier period reported to compare with</small>
     </div>
     <div>
       <span>Route shape</span>

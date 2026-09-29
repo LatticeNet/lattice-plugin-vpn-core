@@ -178,10 +178,10 @@ interface UsageResult {
   period?: string;
   from?: string;
   to?: string;
-  /** Daily bytes per node and role. Absent from a server older than design-22. */
-  series?: UsageSeries | null;
-  /** The equal-length window before this one, for today, 7d and 30d. */
-  previous?: UsagePrevious | null;
+  /** Daily bytes per node and role. Omitted by a server older than design-22. */
+  series?: UsageSeries;
+  /** The equal-length window before this one, for today, 7d and 30d; omitted otherwise. */
+  previous?: UsagePrevious;
 }
 
 const init = ref<HostInit>();

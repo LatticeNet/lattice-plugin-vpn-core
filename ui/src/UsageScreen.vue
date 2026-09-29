@@ -3,7 +3,7 @@
  * The Usage screen: time first, identity when it exists.
  *
  * Four layers over one read. Overview leads with egress, what left the fleet
- * on exit and direct lines, and its change against the window before; the
+ * on exit, direct and shared lines, and its change against the window before; the
  * picture is the daily series stacked by exit or by role. By node, By line and
  * By user are the collections behind it.
  *
@@ -80,8 +80,8 @@ const props = withDefaults(defineProps<{
    * rather than print 0 B under five headings.
    */
   failed: boolean;
-  series?: UsageSeries | null;
-  previous?: UsagePrevious | null;
+  series?: UsageSeries;
+  previous?: UsagePrevious;
   view?: UsageView;
   /** When the page last heard from the control plane, for the proof line. */
   observedAt?: string;
@@ -302,7 +302,7 @@ function setView(value: UsageView): void {
         <div>
           <h2 id="usage-chart-title">{{ series ? (stackBy === 'exit' ? 'Daily egress by exit' : 'Daily bytes by role') : failed || !hasTraffic ? 'Daily egress' : 'Egress by exit' }}</h2>
           <template v-if="!failed && hasTraffic">
-            <p v-if="series && stackBy === 'role'">Exit and direct at the bottom are egress. Entry and middle hop above them are that traffic counted again on its way.</p>
+            <p v-if="series && stackBy === 'role'">Exit, shared and direct at the bottom are egress. Entry and middle hop above them are that traffic counted again on its way.</p>
             <p v-else-if="series">Each bar is one day; the six largest exits have their own segment and the rest share one.</p>
             <p v-else>The daily view needs a newer server, which reports usage per day. These are the period totals per exit it would have stacked.</p>
           </template>

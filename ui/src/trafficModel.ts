@@ -1,10 +1,11 @@
 /**
  * trafficModel.ts, traffic over time for the Lines and Usage layers.
  *
- * The headline figure everywhere is egress: the bytes on exit and direct
- * lines, which is what left the fleet and what a provider bills. A relay hub
- * counts the same traffic again as it enters (`entry`), and a middle hop
- * counts it once more (`relay`). Those bytes are real and they are shown, but
+ * The headline figure everywhere is egress: the bytes on exit, direct and
+ * shared lines (a shared line is a chain target that also serves its own
+ * users), counted once at the node where they leave the fleet. That is what a
+ * provider bills. A relay hub counts the same traffic again as it enters
+ * (`entry`), and a middle hop counts it once more (`relay`). Those bytes are real and they are shown, but
  * never added to egress; a page that summed every role would report 568 GiB
  * for a week in which 313 GiB left.
  *
@@ -23,7 +24,9 @@ import type { UsageLineRow } from "./usageModel";
 
 export interface UsageSeriesRow {
   node_id: string;
+  /** Omitted when the server has no name for the node. */
   node_name?: string;
+  /** entry, exit, relay, direct or shared; never unknown. */
   role: string;
   /** Aligned with `UsageSeries.days`, uplink plus downlink. */
   bytes: number[];
@@ -44,7 +47,7 @@ export interface UsagePrevious {
 }
 
 /** Roles whose bytes left the fleet. The contract's definition of egress. */
-export const EGRESS_ROLES: ReadonlySet<string> = new Set(["exit", "direct"]);
+export const EGRESS_ROLES: ReadonlySet<string> = new Set(["exit", "direct", "shared"]);
 /** Roles that count egress a second time, on the way in or in the middle. */
 export const REPEAT_ROLES: ReadonlySet<string> = new Set(["entry", "relay"]);
 
@@ -61,9 +64,11 @@ export interface RoleTotals {
   direct: number;
   entry: number;
   relay: number;
-  /** Any other role the server sent (`shared`, `unknown`), kept visible. */
+  /** A chain target that also serves its own users; egress. */
+  shared: number;
+  /** Any role the contract does not name, kept visible and out of egress. */
   other: number;
-  /** exit plus direct: what left the fleet. */
+  /** exit plus direct plus shared: what left the fleet. */
   egress: number;
   /** entry plus relay: the same traffic counted again on the way. */
   repeated: number;
@@ -72,7 +77,7 @@ export interface RoleTotals {
 }
 
 export function roleTotals(lines: readonly UsageLineRow[] | undefined): RoleTotals {
-  const totals: RoleTotals = { exit: 0, direct: 0, entry: 0, relay: 0, other: 0, egress: 0, repeated: 0, total: 0 };
+  const totals: RoleTotals = { exit: 0, direct: 0, entry: 0, relay: 0, shared: 0, other: 0, egress: 0, repeated: 0, total: 0 };
   for (const row of lines ?? []) {
     const bytes = safeBytes(row.used_bytes);
     totals.total += bytes;
@@ -81,10 +86,11 @@ export function roleTotals(lines: readonly UsageLineRow[] | undefined): RoleTota
       case "direct": totals.direct += bytes; break;
       case "entry": totals.entry += bytes; break;
       case "relay": totals.relay += bytes; break;
+      case "shared": totals.shared += bytes; break;
       default: totals.other += bytes;
     }
   }
-  totals.egress = totals.exit + totals.direct;
+  totals.egress = totals.exit + totals.direct + totals.shared;
   totals.repeated = totals.entry + totals.relay;
   return totals;
 }
@@ -141,7 +147,7 @@ function aligned(row: UsageSeriesRow, length: number): number[] {
   return values;
 }
 
-/** Egress per day: the exit and direct rows summed. */
+/** Egress per day: the exit, direct and shared rows summed. */
 export function egressByDay(series: UsageSeries): number[] {
   const days = series.days.length;
   const totals = new Array<number>(days).fill(0);
@@ -236,18 +242,19 @@ export function stackByExit(series: UsageSeries, top = 6): DailyStack {
   return finishStack([...series.days], kept);
 }
 
-const ROLE_ORDER = ["exit", "direct", "entry", "relay"];
+const ROLE_ORDER = ["exit", "shared", "direct", "entry", "relay"];
 const ROLE_LABEL: Record<string, string> = {
   exit: "exit",
+  shared: "shared exit",
   direct: "direct",
   entry: "entry at a relay hub",
   relay: "middle hop",
 };
 
 /**
- * Every byte reported, stacked by line role. Exit and direct sit at the
- * bottom because they are the egress the headline counts; entry and relay
- * sit above them because they are that traffic counted again.
+ * Every byte reported, stacked by line role. Exit, shared and direct sit at
+ * the bottom because they are the egress the headline counts; entry and
+ * relay sit above them because they are that traffic counted again.
  */
 export function stackByRole(series: UsageSeries): DailyStack {
   const days = series.days.length;

@@ -45,8 +45,15 @@ describe("egress is exit plus direct, and entry is the same traffic counted agai
     expect(totals.total).toBeCloseTo(totals.egress + totals.repeated, 0);
   });
 
+  it("counts a shared line, a chain target with its own users, as egress", () => {
+    const totals = roleTotals([row("a", "shared", 3), row("a", "exit", 2)]);
+    expect(totals.shared).toBe(3 * GiB);
+    expect(totals.egress).toBe(5 * GiB);
+    expect(trafficByNode([row("a", "shared", 3)]).get("a")?.egress).toBe(3 * GiB);
+  });
+
   it("keeps a role the contract does not name out of egress, and visible", () => {
-    const totals = roleTotals([row("a", "shared", 3)]);
+    const totals = roleTotals([row("a", "unknown", 3)]);
     expect(totals.egress).toBe(0);
     expect(totals.other).toBe(3 * GiB);
   });
@@ -77,34 +84,35 @@ const series: UsageSeries = {
     { node_id: "b", node_name: "B", role: "exit", bytes: [5, 5, 5] },
     { node_id: "c", node_name: "C", role: "direct", bytes: [1, 2, 3] },
     { node_id: "d", role: "exit", bytes: [0, 1, 0] },
+    { node_id: "e", node_name: "E", role: "shared", bytes: [2, 2, 2] },
     { node_id: "hub", node_name: "Hub", role: "entry", bytes: [14, 24, 34] },
   ],
 };
 
 describe("series folding", () => {
   it("sums egress per day from exit and direct rows only", () => {
-    expect(egressByDay(series)).toEqual([16, 28, 38]);
+    expect(egressByDay(series)).toEqual([18, 30, 40]);
   });
 
   it("stacks the top exits and folds the rest into others, day totals equal to egress", () => {
     const stack = stackByExit(series, 2);
-    expect(stack.segments.map((segment) => segment.label)).toEqual(["A", "B", "2 other exits"]);
+    expect(stack.segments.map((segment) => segment.label)).toEqual(["A", "B", "3 other exits"]);
     expect(stack.segments[2].key).toBe(OTHERS_KEY);
-    expect(stack.segments[2].values).toEqual([1, 3, 3]);
+    expect(stack.segments[2].values).toEqual([3, 5, 5]);
     expect(stack.totals).toEqual(egressByDay(series));
-    expect(stack.max).toBe(38);
+    expect(stack.max).toBe(40);
   });
 
   it("does not invent an others segment when every exit has its own", () => {
     const stack = stackByExit(series, 6);
     expect(stack.segments.some((segment) => segment.key === OTHERS_KEY)).toBe(false);
-    expect(stack.segments.map((segment) => segment.key)).toEqual(["a", "b", "c", "d"]);
+    expect(stack.segments.map((segment) => segment.key)).toEqual(["a", "b", "c", "e", "d"]);
   });
 
   it("stacks by role with egress at the bottom and the repeated count above it", () => {
     const stack = stackByRole(series);
-    expect(stack.segments.map((segment) => segment.key)).toEqual(["exit", "direct", "entry"]);
-    expect(stack.totals).toEqual([30, 52, 72]);
+    expect(stack.segments.map((segment) => segment.key)).toEqual(["exit", "shared", "direct", "entry"]);
+    expect(stack.totals).toEqual([32, 54, 74]);
   });
 
   it("gives one node's daily bytes, narrowed by role, and nothing for a node with no row", () => {
@@ -119,7 +127,7 @@ describe("series folding", () => {
   });
 
   it("holds the series to the line rows on egress", () => {
-    const lines = [row("a", "exit", 0, { used_bytes: 60 }), row("b", "exit", 0, { used_bytes: 15 }), row("c", "direct", 0, { used_bytes: 6 }), row("d", "exit", 0, { used_bytes: 1 })];
+    const lines = [row("a", "exit", 0, { used_bytes: 60 }), row("b", "exit", 0, { used_bytes: 15 }), row("c", "direct", 0, { used_bytes: 6 }), row("d", "exit", 0, { used_bytes: 1 }), row("e", "shared", 0, { used_bytes: 6 })];
     expect(seriesEgressGap(series, lines)).toBe(0);
     expect(seriesEgressGap(series, lines.slice(1))).toBe(60);
   });
