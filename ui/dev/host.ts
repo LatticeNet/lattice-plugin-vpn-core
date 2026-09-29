@@ -151,6 +151,9 @@ if (zoom) document.documentElement.style.zoom = zoom;
 /* `plugin` is forwarded to the plugin document's own query string, so a
  * reviewer can open a lens or a node by URL (`plugin=lens%3Dtopology`). */
 const pluginQuery = params.get("plugin") ?? "";
+/* `fail=usage/query` fails that one call in any scenario, so a partial
+ * failure (lines read, usage refused) can be looked at, not only a total one. */
+const failCalls = new Set(params.getAll("fail"));
 let dark = params.get("theme") !== "light";
 let width = params.get("width") ?? "1440";
 /** The height of the console's main region. The frame gets exactly this. */
@@ -191,6 +194,7 @@ function applyChrome(): void {
 
 function reload(): void {
   const query = new URLSearchParams({ route, scenario, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
+  for (const key of failCalls) query.append("fail", key);
   history.replaceState(null, "", `?${query}`);
   applyChrome();
   // The epoch matters: assigning an identical src, fragment and all, is a
@@ -230,7 +234,7 @@ window.addEventListener("message", (event) => {
       const handler = table[key];
       // Latency, so loading and skeleton states are visible rather than theoretical.
       window.setTimeout(() => {
-        if (scenario === "failing") {
+        if (scenario === "failing" || failCalls.has(key)) {
           post({ type: "lattice.host.error", id: data.id, message: `upstream refused ${key}: 503 service unavailable` });
           return;
         }
