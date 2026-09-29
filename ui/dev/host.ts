@@ -14,7 +14,7 @@
  * frame height is visible here rather than only in production.
  */
 
-import { handlers, type Scenario } from "./fixtures";
+import { handlers, SCENARIOS, type Scenario } from "./fixtures";
 
 const ROUTES = ["lines", "users", "profiles", "usage"] as const;
 type Route = (typeof ROUTES)[number];
@@ -162,7 +162,7 @@ shell.innerHTML = `
   <div class="bar">
     <strong>vpn-core dev harness</strong>
     <label>route <select id="route">${ROUTES.map((value) => `<option${value === route ? " selected" : ""}>${value}</option>`).join("")}</select></label>
-    <label>data <select id="scenario">${["production", "hubs", "offfleet", "rich", "dense", "empty", "failing"].map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
+    <label>data <select id="scenario">${SCENARIOS.map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>width <select id="width">${["1440", "2423", "375"].map((value) => `<option${value === width ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <button id="theme" type="button">${dark ? "light" : "dark"}</button>
     <span id="reported"></span>
