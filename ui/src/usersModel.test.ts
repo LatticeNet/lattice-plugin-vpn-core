@@ -9,6 +9,7 @@ import {
   expiryRelative,
   filterLineOptions,
   groupUsers,
+  identityConditions,
   identityState,
   inView,
   lineOptions,
@@ -103,7 +104,39 @@ describe("the collection at a glance", () => {
     expect(summary).toMatchObject({ total: 5, enabled: 4, disabled: 1, attributed: 1, withQuota: 1, overQuota: 0 });
     expect(summary.expiring.map((value) => value.id)).toEqual(["m-017", "probe"]);
     expect(summary.unbound.map((value) => value.id).sort()).toEqual(["idle", "m-017", "owner"]);
-    expect(summary.states.map((value) => [value.key, value.count])).toEqual([["expiring", 2], ["unbound", 2], ["disabled", 1]]);
+    // m-017 expires within 30 days and has no line: it counts in both, as
+    // the attention list counts it, so "3 no line" agrees with "3 bound to no line".
+    expect(summary.states.map((value) => [value.key, value.count])).toEqual([["expiring", 2], ["unbound", 3], ["disabled", 1]]);
+    expect(summary.states.find((value) => value.key === "unbound")!.count).toBe(summary.unbound.length);
+    expect(summary.states.find((value) => value.key === "expiring")!.count).toBe(summary.expiring.length);
+  });
+
+  it("gives a row every condition it is in, worst first, and a disabled one only disabled", () => {
+    expect(identityConditions(users[1], NOW).map((value) => value.key)).toEqual(["expiring", "unbound"]);
+    expect(identityState(users[1], NOW).key).toBe("expiring");
+    expect(identityConditions(users[0], NOW).map((value) => value.key)).toEqual(["expiring"]);
+    expect(identityConditions(users[3], NOW).map((value) => value.key)).toEqual(["disabled"]);
+    expect(identityConditions(user("fine", { bindings: bound }), NOW).map((value) => value.key)).toEqual(["active"]);
+    const everything = user("all", { quota_bytes: GiB, used_period_bytes: 2 * GiB, expires_at: at(-1) });
+    expect(identityConditions(everything, NOW).map((value) => value.key)).toEqual(["expired", "over_quota", "unbound"]);
+  });
+
+  it("names identities over their quota, furthest over first, and the metric agrees", () => {
+    const quota = [
+      user("near", { bindings: bound, quota_bytes: 10 * GiB, used_period_bytes: 11 * GiB }),
+      user("far", { bindings: bound, quota_bytes: 10 * GiB, used_period_bytes: 25 * GiB }),
+      user("under", { bindings: bound, quota_bytes: 10 * GiB, used_period_bytes: 2 * GiB }),
+      user("off", { enabled: false, bindings: bound, quota_bytes: GiB, used_period_bytes: 5 * GiB }),
+    ];
+    const summary = usersSummary(quota, NOW);
+    expect(summary.overQuota).toBe(2);
+    expect(summary.overQuotaUsers.map((value) => value.id)).toEqual(["far", "near"]);
+    expect(summary.states.find((value) => value.key === "over_quota")!.count).toBe(2);
+    const items = usersAttention(quota, NOW, day);
+    expect(items.map((item) => [item.key, item.view, item.severity])).toEqual([["over_quota", "over_quota", "error"]]);
+    expect(items[0].claim).toBe("2 enabled identities are over their quota");
+    expect(items[0].evidence).toContain("far@example.invalid (25.0 GiB of 10.0 GiB)");
+    expect(quota.filter((value) => inView(value, "over_quota", NOW)).map((value) => value.id)).toEqual(["near", "far"]);
   });
 
   it("lists attention as claim, proof and the view that shows the rows", () => {

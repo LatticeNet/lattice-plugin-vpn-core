@@ -680,8 +680,9 @@ async function runRollout(): Promise<void> {
 // moment of the read: expiry and "within 30 days" are judged against it.
 const usersNow = computed(() => refreshedAt.value ?? Date.now());
 const userSummary = computed(() => usersSummary(users.value, usersNow.value));
+/* One item per condition, so at most four, and all of them show: a fourth
+ * cut off would be a red number in the metrics with nothing naming it. */
 const userAttention = computed(() => usersAttention(users.value, usersNow.value, formatDay));
-const USER_ATTENTION_SHOWN = 3;
 const lineChoices = computed(() => lineOptions(lines.value));
 /** Why the line list is missing on the Users page, when it is. */
 const usersLinesError = ref("");
@@ -1526,7 +1527,7 @@ onBeforeUnmount(() => {
       <div class="layer-body users-body">
         <section v-if="userAttention.length" class="data-panel attention-strip" aria-label="Attention">
           <ol class="attention-list">
-            <li v-for="item in userAttention.slice(0, USER_ATTENTION_SHOWN)" :key="item.key" class="attention-item" :data-severity="item.severity">
+            <li v-for="item in userAttention" :key="item.key" class="attention-item" :data-severity="item.severity">
               <span class="status-dot" :data-tone="item.severity">{{ item.severity }}</span>
               <p class="attention-line" :title="`${item.claim}. ${item.evidence}`"><strong>{{ item.claim }}</strong> <span>{{ item.evidence }}</span></p>
               <div class="attention-actions">

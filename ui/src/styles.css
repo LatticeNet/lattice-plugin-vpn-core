@@ -231,6 +231,7 @@ th[aria-sort="ascending"] .sort-mark, th[aria-sort="descending"] .sort-mark { op
 th[aria-sort="ascending"] .sort-button, th[aria-sort="descending"] .sort-button { color: var(--foreground, #17191c); }
 
 .status-dot { display: inline-flex; max-width: 260px; align-items: center; gap: var(--sp-1); overflow: hidden; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.conditions { display: inline-flex; flex-wrap: wrap; gap: 2px var(--sp-2); }
 .status-dot::before { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; content: ""; }
 .status-dot[data-tone="healthy"] { color: var(--tone-ok); }
 .status-dot[data-tone="warning"] { color: var(--tone-warn); }

@@ -114,7 +114,7 @@ export interface VpnPageState {
   open: string;
   period: UsagePeriod;
   stack: StackBy;
-  /** Users: the subset the attention list points at. */
+  /** Users: the subset the attention list points at, kept as `show`. */
   usersView: UsersView;
   usersGroup: UsersGroupBy;
   usersSort: UserSort;
@@ -159,7 +159,7 @@ export function encodePageState(route: string, state: VpnPageState): PageState {
     put("period", state.period, DEFAULT_PAGE_STATE.period);
     put("stack", state.stack, DEFAULT_PAGE_STATE.stack);
   } else if (route === "users") {
-    put("view", state.usersView, DEFAULT_PAGE_STATE.usersView);
+    put("show", state.usersView, DEFAULT_PAGE_STATE.usersView);
     put("group", state.usersGroup, DEFAULT_PAGE_STATE.usersGroup);
     put("q", state.q.trim());
     put("sort", encodeUserSort(state.usersSort));
@@ -172,10 +172,14 @@ export function encodePageState(route: string, state: VpnPageState): PageState {
 
 /**
  * Address entries read back into state. It does not need the route: `view`
- * is read as a Lines layer, a Usage layer and a Users subset, and whichever
- * the route shows is the one that counts; `group` likewise. Anything unknown
- * or out of range falls back to the default, so a stale or hand-edited link
- * still opens a page.
+ * is read as a Lines layer and a Usage layer, and whichever the route shows
+ * is the one that counts; `group` likewise. Anything unknown or out of range
+ * falls back to the default, so a stale or hand-edited link still opens a
+ * page.
+ *
+ * `view` names layers (design 23, 3.4), so the Users subset the attention
+ * list points at is `show`. A link from before that says `view=unbound`;
+ * it is read when there is no `show`, and never written back.
  *
  * `expand=<id>,<id>` is the Users page's older key, from when a row opened
  * its allocated nodes in place. That is the identity panel now, so the first
@@ -191,7 +195,7 @@ export function decodePageState(state: PageState): VpnPageState {
     open: state.open ?? legacyExpand(state.expand),
     period: pick(state.period, USAGE_PERIODS, DEFAULT_PAGE_STATE.period),
     stack: pick(state.stack, STACK_BY, DEFAULT_PAGE_STATE.stack),
-    usersView: isUsersView(state.view) ? state.view : DEFAULT_PAGE_STATE.usersView,
+    usersView: isUsersView(state.show) ? state.show : isUsersView(state.view) ? state.view : DEFAULT_PAGE_STATE.usersView,
     usersGroup: isUsersGroupBy(state.group) ? state.group : DEFAULT_PAGE_STATE.usersGroup,
     usersSort: parseUserSort(state.sort),
   };

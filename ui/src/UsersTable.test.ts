@@ -48,6 +48,25 @@ describe("the identities table", () => {
     expect(html).not.toContain("row-chevron");
   });
 
+  it("counts each condition in the head, shows both on a row in two, and never greys a warning however common", async () => {
+    const soonUnbound = user("soon", { group: "metix", expires_at: new Date(NOW + 5 * DAY).toISOString() });
+    const html = await render({ users: [...users, soonUnbound] });
+    // m-1, m-2 and soon have no line: the head says 3, as the attention list does.
+    expect(html).toContain(">3 no line<");
+    expect(html).toContain(">2 expiring<");
+    expect(html).toMatch(/data-user-open="soon"[\s\S]*?>expiring<[\s\S]*?>no line</);
+    // "no line" is the most common condition and a warning: it keeps its tone.
+    expect(html).not.toMatch(/data-tone="warning" data-common="true"/);
+    const grouped = await render({ users: [...users, soonUnbound], groupBy: "status" });
+    expect(grouped).toContain("1 identity is in two conditions and is listed under the worse one.");
+  });
+
+  it("does not ask to clear the search to group again when nothing is grouped", async () => {
+    const text = (html: string) => html.replace(/<!--[\s\S]*?-->/g, "");
+    expect(text(await render({ search: "m-" }))).toContain("2 of 4 identities match.</p>");
+    expect(text(await render({ search: "m-", groupBy: "group" }))).toContain("2 of 4 identities match, listed flat. Clear the search to group them again.</p>");
+  });
+
   it("drops a column blank on every identity and says so in the header", async () => {
     const html = await render();
     expect(html).not.toContain(">Quota <");

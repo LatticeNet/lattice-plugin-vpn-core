@@ -59,7 +59,8 @@ describe("encoding this plugin's state", () => {
     ["usage", state({ usageView: "overview", stack: "role", period: "today" }), { period: "today", stack: "role" }],
     ["usage", state({ usageView: "user", period: "all" }), { view: "user", period: "all" }],
     ["users", state(), {}],
-    ["users", state({ usersView: "expiring", usersGroup: "status", q: "metix", usersSort: { key: "expires", reverse: true }, open: "u_1" }), { view: "expiring", group: "status", q: "metix", sort: "-expires", open: "u_1" }],
+    ["users", state({ usersView: "expiring", usersGroup: "status", q: "metix", usersSort: { key: "expires", reverse: true }, open: "u_1" }), { show: "expiring", group: "status", q: "metix", sort: "-expires", open: "u_1" }],
+    ["users", state({ usersView: "over_quota" }), { show: "over_quota" }],
     ["users", state({ usersGroup: "group", usersSort: { key: "used", reverse: false } }), { group: "group", sort: "used" }],
     ["profiles", state(), {}],
     ["profiles", state({ open: "node-hkg-edge-01" }), { open: "node-hkg-edge-01" }],
@@ -71,6 +72,14 @@ describe("encoding this plugin's state", () => {
     expect(decodePageState(encoded)).toEqual(value);
   });
 
+  it("keeps view for layers: the Users subset is show, and an older view=unbound link is read, never written", () => {
+    expect(decodePageState({ view: "unbound" }).usersView).toBe("unbound");
+    expect(decodePageState({ view: "expiring", show: "over_quota" }).usersView).toBe("over_quota");
+    expect(decodePageState({ view: "lines" }).usersView).toBe("all");
+    const legacy = decodePageState({ view: "unbound", open: "u_1" });
+    expect(encodePageState("users", legacy)).toEqual({ show: "unbound", open: "u_1" });
+  });
+
   it("writes only the route's own keys, so another page's state never rides along", () => {
     const busy = state({
       linesView: "lines", usageView: "user", group: "bank", q: "hr", open: "lh_9", period: "30d", stack: "role",
@@ -78,7 +87,7 @@ describe("encoding this plugin's state", () => {
     });
     expect(Object.keys(encodePageState("lines", busy))).toEqual(["view", "group", "q", "open"]);
     expect(Object.keys(encodePageState("usage", busy))).toEqual(["view", "period", "stack"]);
-    expect(encodePageState("users", busy)).toEqual({ view: "unbound", group: "status", q: "hr", sort: "quota", open: "lh_9" });
+    expect(encodePageState("users", busy)).toEqual({ show: "unbound", group: "status", q: "hr", sort: "quota", open: "lh_9" });
     expect(encodePageState("profiles", busy)).toEqual({ open: "lh_9" });
   });
 

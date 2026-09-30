@@ -20,7 +20,7 @@
  */
 
 import { quotaState, type AllocatedNode } from "./usageModel";
-import { pageRows, type LineGroup, type VpnUser } from "./vpnModel";
+import { formatBytes, pageRows, type LineGroup, type VpnUser } from "./vpnModel";
 
 export const EXPIRING_WITHIN_DAYS = 30;
 const DAY_MS = 86_400_000;
@@ -138,14 +138,32 @@ export function usageReported(users: readonly VpnUser[]): boolean {
   return users.some((user) => user.used_period_bytes !== undefined || user.allocated_nodes !== undefined);
 }
 
+/**
+ * Every condition an identity is in, worst first. An identity can expire
+ * within 30 days and have no line at once, and the head, the attention list
+ * and the numbers count each condition, so one fact has one number on the
+ * page. A disabled identity is only disabled: it signs in nowhere, so its
+ * expiry or its missing line is not a problem to fix.
+ */
+export function identityConditions(user: VpnUser, now: number): IdentityState[] {
+  if (!user.enabled) return [STATES.disabled];
+  const expiry = expiryOf(user, now).kind;
+  const out: IdentityState[] = [];
+  if (expiry === "expired") out.push(STATES.expired);
+  if (isOverQuota(user)) out.push(STATES.over_quota);
+  if (expiry === "soon") out.push(STATES.expiring);
+  if (!isBound(user)) out.push(STATES.unbound);
+  return out.length ? out : [STATES.active];
+}
+
+/** The worst condition: what a row sorts and groups by. */
 export function identityState(user: VpnUser, now: number): IdentityState {
-  if (!user.enabled) return STATES.disabled;
-  const expiry = expiryOf(user, now);
-  if (expiry.kind === "expired") return STATES.expired;
-  if (isOverQuota(user)) return STATES.over_quota;
-  if (expiry.kind === "soon") return STATES.expiring;
-  if (!isBound(user)) return STATES.unbound;
-  return STATES.active;
+  return identityConditions(user, now)[0]!;
+}
+
+/** A state that says something is wrong, and so never recedes. */
+export function isProblem(state: Pick<IdentityState, "tone">): boolean {
+  return state.tone === "error" || state.tone === "warning";
 }
 
 /** Identity states worst first, for group order and the status sort. */
@@ -172,11 +190,17 @@ export interface UsersSummary {
   expiring: VpnUser[];
   /** Enabled identities with no enabled binding. */
   unbound: VpnUser[];
+  /** Enabled identities past their quota, furthest over first. */
+  overQuotaUsers: VpnUser[];
   overQuota: number;
   withQuota: number;
   /** Sum of each identity's period figure; meaningful only when usage is reported. */
   periodBytes: number;
-  /** Identities per state, worst first; states with no identity are left out. */
+  /**
+   * Identities per condition, worst first; conditions with no identity are
+   * left out. An identity in two conditions counts in both, as it does in the
+   * attention list, so the counts can add up to more than the total.
+   */
   states: StateCount[];
 }
 
@@ -190,14 +214,13 @@ export function usersSummary(users: readonly VpnUser[], now: number): UsersSumma
   const expired: VpnUser[] = [];
   const expiring: VpnUser[] = [];
   const unbound: VpnUser[] = [];
+  const overQuotaUsers: VpnUser[] = [];
   let enabled = 0;
   let attributed = 0;
-  let overQuota = 0;
   let withQuota = 0;
   let periodBytes = 0;
   for (const user of users) {
-    const state = identityState(user, now);
-    counts.set(state.key, (counts.get(state.key) ?? 0) + 1);
+    for (const state of identityConditions(user, now)) counts.set(state.key, (counts.get(state.key) ?? 0) + 1);
     if (isAttributed(user)) attributed += 1;
     if (hasQuota(user)) withQuota += 1;
     periodBytes += user.used_period_bytes ?? 0;
@@ -207,8 +230,9 @@ export function usersSummary(users: readonly VpnUser[], now: number): UsersSumma
     if (expiry === "expired") expired.push(user);
     if (expiry === "soon") expiring.push(user);
     if (!isBound(user)) unbound.push(user);
-    if (isOverQuota(user)) overQuota += 1;
+    if (isOverQuota(user)) overQuotaUsers.push(user);
   }
+  const overBy = (user: VpnUser) => (user.used_period_bytes ?? 0) / (user.quota_bytes || 1);
   return {
     total: users.length,
     enabled,
@@ -218,7 +242,8 @@ export function usersSummary(users: readonly VpnUser[], now: number): UsersSumma
     expired: expired.sort(byExpiry(now, -1)),
     expiring: expiring.sort(byExpiry(now, 1)),
     unbound,
-    overQuota,
+    overQuotaUsers: overQuotaUsers.sort((a, b) => overBy(b) - overBy(a) || compareText(a.email, b.email)),
+    overQuota: overQuotaUsers.length,
     withQuota,
     periodBytes,
     states: STATE_ORDER.filter((key) => counts.has(key)).map((key) => ({ ...pick(STATES[key]), count: counts.get(key)! })),
@@ -231,8 +256,8 @@ function pick(state: IdentityState): Omit<StateCount, "count"> {
 
 // ── attention ────────────────────────────────────────────────────────────
 
-/** A subset of the collection the attention list points at, kept as `view`. */
-export const USERS_VIEWS = ["all", "expired", "expiring", "unbound"] as const;
+/** A subset of the collection the attention list points at, kept as `show`. */
+export const USERS_VIEWS = ["all", "expired", "over_quota", "expiring", "unbound"] as const;
 export type UsersView = (typeof USERS_VIEWS)[number];
 
 export function isUsersView(value: string | undefined): value is UsersView {
@@ -243,6 +268,7 @@ export function inView(user: VpnUser, view: UsersView, now: number): boolean {
   if (view === "all") return true;
   if (!user.enabled) return false;
   if (view === "expired") return expiryOf(user, now).kind === "expired";
+  if (view === "over_quota") return isOverQuota(user);
   if (view === "expiring") return expiryOf(user, now).kind === "soon";
   return !isBound(user);
 }
@@ -252,6 +278,7 @@ export function viewSentence(view: UsersView, count: number): string {
   const one = count === 1;
   switch (view) {
     case "expired": return `${count} enabled ${one ? "identity has" : "identities have"} expired.`;
+    case "over_quota": return `${count} enabled ${one ? "identity is" : "identities are"} over ${one ? "its" : "their"} quota.`;
     case "expiring": return `${count} ${one ? "identity expires" : "identities expire"} within ${EXPIRING_WITHIN_DAYS} days.`;
     case "unbound": return `${count} enabled ${one ? "identity is" : "identities are"} bound to no line.`;
     default: return "";
@@ -289,6 +316,15 @@ export function usersAttention(users: readonly VpnUser[], now: number, formatDay
       key: "expired", severity: "error", view: "expired",
       claim: `${count} enabled ${count === 1 ? "identity has" : "identities have"} expired`,
       evidence: `${names(summary.expired, dated)}. Subscriptions stop listing lines for an expired identity. Extend or clear the expiry, or disable it.`,
+    });
+  }
+  if (summary.overQuotaUsers.length) {
+    const count = summary.overQuotaUsers.length;
+    const usage = (user: VpnUser) => `${user.email} (${formatBytes(user.used_period_bytes ?? 0)} of ${formatBytes(user.quota_bytes)})`;
+    items.push({
+      key: "over_quota", severity: "error", view: "over_quota",
+      claim: `${count} enabled ${count === 1 ? "identity is" : "identities are"} over ${count === 1 ? "its" : "their"} quota`,
+      evidence: `${names(summary.overQuotaUsers, usage)}. Raise or remove the quota in the identity's panel, or disable ${count === 1 ? "it" : "them"}.`,
     });
   }
   if (summary.expiring.length) {

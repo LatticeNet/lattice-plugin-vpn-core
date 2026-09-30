@@ -22,9 +22,10 @@ import {
   expiryRelative,
   formatDay,
   groupUsers,
-  identityState,
+  identityConditions,
   inView,
   isAttributed,
+  isProblem,
   pageUserTable,
   rowsHoldUser,
   searchUsers,
@@ -78,8 +79,14 @@ const show = computed(() => ({
 const showMenu = computed(() => Object.values(props.can).some(Boolean));
 const span = computed(() => 1 + [show.value.group, show.value.status, show.value.expires, show.value.quota, show.value.lines, show.value.used, showMenu.value].filter(Boolean).length);
 
-/* The most common state recedes, so the exceptions are what the eye finds. */
-const commonState = computed(() => [...summary.value.states].sort((a, b) => b.count - a.count)[0]?.key);
+/* The most common state recedes, so the exceptions are what the eye finds.
+ * A problem never recedes: 121 identities with no line is still a warning,
+ * however common, because the attention list says so. */
+const commonState = computed(() => [...summary.value.states].filter((state) => !isProblem(state)).sort((a, b) => b.count - a.count)[0]?.key);
+
+/* Identities in more than one condition: they count once per condition in
+ * the head and once, under the worst, when the table is grouped by status. */
+const multiCondition = computed(() => props.users.filter((user) => identityConditions(user, props.now).length > 1).length);
 
 const searching = computed(() => props.search.trim().length > 0);
 const inScope = computed(() => props.users.filter((user) => inView(user, props.view, props.now)));
@@ -225,7 +232,7 @@ defineExpose({ anchorBefore });
     <header class="panel-header lines-header">
       <div>
         <h2 id="users-title">Identities</h2>
-        <p v-if="users.length" class="lines-state">
+        <p v-if="users.length" class="lines-state" :title="multiCondition ? 'An identity in two conditions counts in both.' : undefined">
           <template v-if="summary.states.length === 1"><strong>{{ summary.states[0].count }} {{ summary.states[0].label }}</strong></template>
           <template v-else>
             <span v-for="state in summary.states" :key="state.key" class="status-dot" :data-tone="state.tone" :data-common="state.key === commonState || undefined">{{ state.count }} {{ state.label }}</span>
@@ -245,7 +252,8 @@ defineExpose({ anchorBefore });
       <span>{{ viewSentence(view, inScope.length) }} Only they are listed.</span>
       <button class="button button-secondary button-compact" type="button" @click="emit('update:view', 'all')">Show all {{ users.length }}</button>
     </p>
-    <p v-if="searching && matched.length" class="panel-inline-note" data-tone="neutral">{{ matched.length }} of {{ inScope.length }} identities match, listed flat. Clear the search to group them again.</p>
+    <p v-if="searching && matched.length" class="panel-inline-note" data-tone="neutral">{{ matched.length }} of {{ inScope.length }} identities match<template v-if="groupBy !== 'none'">, listed flat. Clear the search to group them again</template>.</p>
+    <p v-else-if="groupBy === 'status' && multiCondition" class="panel-inline-note" data-tone="neutral">{{ multiCondition }} {{ multiCondition === 1 ? 'identity is' : 'identities are' }} in two conditions and {{ multiCondition === 1 ? 'is' : 'are' }} listed under the worse one.</p>
 
     <div v-if="outcome && outcomeAfter === ''" class="outcome-note" :data-tone="outcome.tone" role="status">
       <span>{{ outcome.text }}</span>
@@ -292,7 +300,7 @@ defineExpose({ anchorBefore });
                   <small :title="subline(row.user)">{{ subline(row.user) }}</small>
                 </td>
                 <td v-if="show.group"><span class="cell-text" :title="row.user.group || undefined" :data-unknown="!row.user.group || undefined">{{ row.user.group || 'none' }}</span></td>
-                <td v-if="show.status"><span class="status-dot" :data-tone="identityState(row.user, now).tone" :data-common="identityState(row.user, now).key === commonState || undefined">{{ identityState(row.user, now).label }}</span></td>
+                <td v-if="show.status"><span class="conditions"><span v-for="state in identityConditions(row.user, now)" :key="state.key" class="status-dot" :data-tone="state.tone" :data-common="state.key === commonState || undefined">{{ state.label }}</span></span></td>
                 <td v-if="show.expires" :data-unknown="!expiryOf(row.user, now).at || undefined">
                   <span :class="{ 'warn-text': expiryCell(row.user).tone === 'warning', 'error-text': expiryCell(row.user).tone === 'error' }">{{ expiryCell(row.user).text }}</span>
                   <small v-if="expiryCell(row.user).note">{{ expiryCell(row.user).note }}</small>
