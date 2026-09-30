@@ -9,7 +9,8 @@
  * tooltip. Dangerous items sit last, after a separator.
  *
  * The owner opens it from a trigger with `open(event, key, label, items)` and
- * reads `openKey` for the trigger's aria-expanded.
+ * reads `openKey` for the trigger's aria-expanded. `noun` names the menu the
+ * way the trigger does ("Evidence for <line>", "Actions for <identity>").
  */
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 
@@ -21,6 +22,8 @@ export interface RowMenuItem {
   /** Why a disabled item cannot run, shown under it. */
   reason?: string;
 }
+
+const props = withDefaults(defineProps<{ noun?: string }>(), { noun: "Actions" });
 
 const WIDTH = 240;
 const GAP = 4;
@@ -57,7 +60,9 @@ async function open(event: MouseEvent, key: string, label: string, items: RowMen
   menu.value = { key, label, items, ...place(rect, guess) };
   await nextTick();
   if (menuEl.value && menu.value) Object.assign(menu.value, place(rect, menuEl.value.offsetHeight));
-  menuEl.value?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
+  // The first item that can run, or the menu itself when none can: focus
+  // left on the trigger would never see the menu's Escape.
+  (menuEl.value?.querySelector<HTMLElement>("button:not(:disabled)") ?? menuEl.value)?.focus();
   document.addEventListener("pointerdown", onOutside, true);
   window.addEventListener("scroll", dismiss, true);
   window.addEventListener("resize", dismiss);
@@ -113,7 +118,7 @@ onBeforeUnmount(() => close());
 </script>
 
 <template>
-  <div v-if="menu" ref="menuEl" class="row-menu" role="menu" :aria-label="`Actions for ${menu.label}`" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" @keydown="onKey">
+  <div v-if="menu" ref="menuEl" class="row-menu" role="menu" tabindex="-1" :aria-label="`${props.noun} for ${menu.label}`" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" @keydown="onKey">
     <template v-for="(item, index) in ordered" :key="item.label">
       <div v-if="index === firstDanger && index > 0" class="row-menu-separator" role="separator" />
       <button type="button" role="menuitem" :class="{ 'row-menu-danger': item.danger }" :disabled="item.disabled" :aria-describedby="item.disabled && item.reason ? `row-menu-reason-${index}` : undefined" @click="runItem(item)">

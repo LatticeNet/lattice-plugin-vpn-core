@@ -733,14 +733,15 @@ function openUserPanel(user: VpnUser, focusBindings = false): void {
 }
 
 /* Focus goes back to the row that opened the panel, or the same identity's
- * row when that element was re-rendered, or the row given (after a delete). */
-function closeUserPanel(focusRow?: string): void {
-  const id = focusRow ?? userOpenId.value;
+ * row when that element was re-rendered. A delete closes the panel itself
+ * and places focus after the reload. */
+function closeUserPanel(): void {
+  const id = userOpenId.value;
   const opener = userOpener;
   userOpener = null;
   userOpenId.value = "";
   void nextTick(() => {
-    if (!focusRow && opener?.isConnected) {
+    if (opener?.isConnected) {
       opener.focus();
       return;
     }
@@ -903,18 +904,22 @@ async function deleteUser(): Promise<void> {
     await pluginCall(SERVICES.admin, "delete", { id: user.id });
     deleteTarget.value = undefined;
     tellOutcome(user, `${user.email} deleted. Its subscription link no longer answers.`, "success", anchor);
-    const fromPanel = userOpenId.value === user.id;
-    if (fromPanel) closeUserPanel(anchor);
-    await loadCurrent(true);
-    // The row that opened the dialog is gone; the keyboard goes to the row
-    // that now sits where it was, beside the outcome.
-    if (!fromPanel) {
-      await nextTick();
-      const target = anchor
-        ? document.querySelector<HTMLElement>(`[data-user-open="${CSS.escape(anchor)}"]`)
-        : document.querySelector<HTMLElement>(".users-panel [data-user-open]");
-      target?.focus();
+    // The panel, if the delete ran from it, closes without handing focus
+    // back: its opener is the row that is about to go.
+    if (userOpenId.value === user.id) {
+      userOpener = null;
+      userOpenId.value = "";
     }
+    await loadCurrent(true);
+    // Whichever way the delete ran, the keyboard goes to the row that now
+    // sits where the deleted one was, beside the outcome: the row above it,
+    // the first row when it was first, the create action when none is left.
+    await nextTick();
+    const target =
+      (anchor ? document.querySelector<HTMLElement>(`[data-user-open="${CSS.escape(anchor)}"]`) : null) ??
+      document.querySelector<HTMLElement>(".users-panel [data-user-open]") ??
+      document.querySelector<HTMLElement>(".users-panel .empty-state button");
+    target?.focus();
   } catch (cause) {
     deleteError.value = safeErrorMessage(cause, "The identity could not be deleted");
   } finally {

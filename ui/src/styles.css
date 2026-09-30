@@ -681,6 +681,8 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .row-menu button:disabled { opacity: 0.62; }
 .row-menu button small { display: block; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); line-height: 1.4; }
 .row-menu .row-menu-danger { color: var(--tone-danger); }
+.row-menu:focus { outline: none; }
+.row-menu:focus-visible { outline: 2px solid var(--ring, #2c77b8); outline-offset: 2px; }
 .row-menu-separator { height: 1px; margin: var(--sp-1) 0; background: var(--border, #d9dde2); }
 .node-toggle { display: inline-flex; max-width: 100%; align-items: center; gap: var(--sp-1); border: 0; padding: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .node-toggle strong { overflow: hidden; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }

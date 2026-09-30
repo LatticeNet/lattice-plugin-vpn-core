@@ -33,7 +33,9 @@ const result = computed(() => filterLineOptions(props.options, chosen.value ? ""
 const available = computed(() => props.options.filter((option) => !props.exclude.has(option.hash)).length);
 
 watch(() => result.value.shown.length, () => { active.value = 0; });
-/* A line bound elsewhere in the meantime is no longer a choice. */
+/* The choice clears when its line turns up among the bound ones: that is
+ * the bind landing (or a bind made elsewhere). A bind that fails leaves the
+ * line chosen, so Bind can be pressed again. */
 watch(() => props.exclude, (exclude) => {
   if (chosen.value && exclude.has(chosen.value.hash)) clear();
 });
@@ -62,11 +64,11 @@ function onInput(event: Event): void {
 const inputEl = ref<HTMLInputElement>();
 
 /* The Bind button is disabled while the write runs, which would drop focus
- * to the page; it goes back to the field, ready for the next line. */
+ * to the page; it goes back to the field. The choice stays until the bind
+ * lands (see the watch above). */
 function bind(): void {
   if (!chosen.value || props.busy) return;
   emit("pick", chosen.value.hash);
-  clear();
   inputEl.value?.focus();
   listOpen.value = false;
 }

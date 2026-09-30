@@ -256,5 +256,5 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
     </footer>
   </section>
 
-  <RowMenu ref="rowMenu" />
+  <RowMenu ref="rowMenu" noun="Evidence" />
 </template>
