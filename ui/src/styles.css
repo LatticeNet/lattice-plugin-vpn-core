@@ -678,7 +678,11 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .menu-cell { width: 44px; padding-top: 0; padding-bottom: 0; text-align: right; }
 .row-menu { position: fixed; z-index: 1100; display: grid; width: 240px; padding: var(--sp-1); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); background: var(--card, #fff); box-shadow: 0 10px 30px color-mix(in srgb, var(--primary, #1769aa) 6%, rgba(10, 14, 18, 0.28)); }
 .row-menu button { border: 0; border-radius: var(--radius-sm); padding: 7px var(--sp-3); color: var(--foreground, #17191c); background: transparent; font-size: var(--text-sm); text-align: left; }
-.row-menu button:hover, .row-menu button:focus-visible { background: var(--muted, #eef0f2); outline: 0; }
+.row-menu button:hover:not(:disabled), .row-menu button:focus-visible { background: var(--muted, #eef0f2); outline: 0; }
+.row-menu button:disabled { opacity: 0.62; }
+.row-menu button small { display: block; margin-top: 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); line-height: 1.4; }
+.row-menu .row-menu-danger { color: var(--tone-danger); }
+.row-menu-separator { height: 1px; margin: var(--sp-1) 0; background: var(--border, #d9dde2); }
 .node-toggle { display: inline-flex; max-width: 100%; align-items: center; gap: var(--sp-1); border: 0; padding: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .node-toggle strong { overflow: hidden; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
 .node-toggle:focus-visible { outline: 2px solid var(--ring, #2c77b8); outline-offset: 2px; border-radius: 3px; }

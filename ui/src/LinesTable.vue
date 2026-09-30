@@ -9,7 +9,7 @@
  * lines. Each row has one affordance, opening the line's panel; the evidence
  * links sit in one menu at the end of the row.
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { ChevronRight, Ellipsis, Radar } from "@lucide/vue";
 
 import {
@@ -29,6 +29,7 @@ import {
   type LineTrafficIndex,
 } from "./lineGroups";
 import type { EvidenceLens } from "./navigate";
+import RowMenu, { type RowMenuItem } from "./RowMenu.vue";
 import { filterLineGroups, formatBytes, pageRows, type Line, type LineGroup } from "./vpnModel";
 
 const props = defineProps<{
@@ -109,82 +110,24 @@ function nodeLabel(group: LineGroup): string {
 }
 
 /* ── the row menu ────────────────────────────────────────────────────────
- * Fixed to the window, not inside the table: the table scrolls sideways on a
- * phone, and a menu inside it would be clipped by that scrollport. */
-interface MenuItem { label: string; run: () => void }
-const menu = ref<{ key: string; x: number; y: number; items: MenuItem[]; label: string }>();
-let menuButton: HTMLElement | undefined;
-const menuEl = ref<HTMLElement>();
+ * One shared menu (RowMenu.vue) holds each row's secondary actions. */
+const rowMenu = ref<InstanceType<typeof RowMenu>>();
 
-function lineMenu(entry: LineEntry): MenuItem[] {
+function lineMenu(entry: LineEntry): RowMenuItem[] {
   return [
     { label: "Connections through this line", run: () => emit("evidence", entry.group.node_id, "connections", entry.line) },
     { label: "Raw log for this line", run: () => emit("evidence", entry.group.node_id, "log", entry.line) },
   ];
 }
-function nodeMenu(nodeID: string): MenuItem[] {
+function nodeMenu(nodeID: string): RowMenuItem[] {
   return [
     { label: "Connections on this node", run: () => emit("evidence", nodeID, "connections") },
     { label: "Raw log on this node", run: () => emit("evidence", nodeID, "log") },
   ];
 }
-
-async function openMenu(event: MouseEvent, key: string, label: string, items: MenuItem[]): Promise<void> {
-  if (menu.value?.key === key) {
-    closeMenu();
-    return;
-  }
-  menuButton = event.currentTarget as HTMLElement;
-  const rect = menuButton.getBoundingClientRect();
-  const width = 240;
-  const x = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
-  const below = rect.bottom + 4;
-  const y = below + 96 > window.innerHeight ? Math.max(8, rect.top - 4 - 88) : below;
-  menu.value = { key, x, y, items, label };
-  await nextTick();
-  menuEl.value?.querySelector<HTMLElement>("button")?.focus();
-  document.addEventListener("pointerdown", onOutside, true);
-  window.addEventListener("scroll", dismissMenu, true);
-  window.addEventListener("resize", dismissMenu);
+function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuItem[]): void {
+  void rowMenu.value?.open(event, key, label, items);
 }
-function closeMenu(returnFocus = false): void {
-  if (!menu.value) return;
-  menu.value = undefined;
-  document.removeEventListener("pointerdown", onOutside, true);
-  window.removeEventListener("scroll", dismissMenu, true);
-  window.removeEventListener("resize", dismissMenu);
-  if (returnFocus) menuButton?.focus();
-}
-/* Scrolling or resizing moves the row out from under a fixed menu. */
-function dismissMenu(): void {
-  closeMenu();
-}
-function onOutside(event: Event): void {
-  if (menuEl.value?.contains(event.target as Node) || menuButton?.contains(event.target as Node)) return;
-  closeMenu();
-}
-function runItem(item: MenuItem): void {
-  closeMenu(true);
-  item.run();
-}
-function onMenuKey(event: KeyboardEvent): void {
-  const buttons = [...(menuEl.value?.querySelectorAll<HTMLElement>("button") ?? [])];
-  const index = buttons.indexOf(document.activeElement as HTMLElement);
-  if (event.key === "Escape") {
-    event.preventDefault();
-    event.stopPropagation();
-    closeMenu(true);
-  } else if (event.key === "ArrowDown") {
-    event.preventDefault();
-    buttons[(index + 1) % buttons.length]?.focus();
-  } else if (event.key === "ArrowUp") {
-    event.preventDefault();
-    buttons[(index - 1 + buttons.length) % buttons.length]?.focus();
-  } else if (event.key === "Tab") {
-    closeMenu();
-  }
-}
-onBeforeUnmount(() => closeMenu());
 </script>
 
 <template>
@@ -242,7 +185,7 @@ onBeforeUnmount(() => closeMenu());
               <td class="num mono" :data-unknown="entry.bytes === undefined || undefined">{{ bytesCell(entry.bytes) }}</td>
               <td v-if="showState"><span class="status-dot" :data-tone="entry.state.tone" :data-common="entry.state.rank <= 1 || undefined">{{ entry.state.label }}</span></td>
               <td v-if="canOpenEvidence" class="menu-cell">
-                <button class="icon-button" type="button" :aria-label="`Evidence for ${entry.line.name}`" :aria-expanded="menu?.key === entry.line.line_hash_id" aria-haspopup="menu" @click.stop="openMenu($event, entry.line.line_hash_id, entry.line.name, lineMenu(entry))"><Ellipsis :size="15" aria-hidden="true" /></button>
+                <button class="icon-button" type="button" :aria-label="`Evidence for ${entry.line.name}`" :aria-expanded="rowMenu?.openKey === entry.line.line_hash_id" aria-haspopup="menu" @click.stop="openMenu($event, entry.line.line_hash_id, entry.line.name, lineMenu(entry))"><Ellipsis :size="15" aria-hidden="true" /></button>
               </td>
             </tr>
           </tbody>
@@ -265,7 +208,7 @@ onBeforeUnmount(() => closeMenu());
               <td class="num mono" :data-unknown="groupFigures.get(group.key)?.unknown || undefined">{{ groupFigures.get(group.key)?.figure }}<small v-if="groupFigures.get(group.key)?.note">{{ groupFigures.get(group.key)?.note }}</small></td>
               <td v-if="showState"><span class="status-dot" :data-tone="group.agg.worst.tone">{{ aggState(group.agg) }}</span></td>
               <td v-if="canOpenEvidence" class="menu-cell">
-                <button v-if="group.nodeID" class="icon-button" type="button" :aria-label="`Evidence for ${group.label}`" :aria-expanded="menu?.key === `group:${group.key}`" aria-haspopup="menu" @click.stop="openMenu($event, `group:${group.key}`, group.label, nodeMenu(group.nodeID))"><Ellipsis :size="15" aria-hidden="true" /></button>
+                <button v-if="group.nodeID" class="icon-button" type="button" :aria-label="`Evidence for ${group.label}`" :aria-expanded="rowMenu?.openKey === `group:${group.key}`" aria-haspopup="menu" @click.stop="openMenu($event, `group:${group.key}`, group.label, nodeMenu(group.nodeID))"><Ellipsis :size="15" aria-hidden="true" /></button>
               </td>
             </tr>
             <template v-if="!folded.has(group.key)">
@@ -281,7 +224,7 @@ onBeforeUnmount(() => closeMenu());
                 <td class="num mono" :data-unknown="entry.bytes === undefined || undefined">{{ bytesCell(entry.bytes) }}</td>
                 <td v-if="showState"><span class="status-dot" :data-tone="entry.state.tone" :data-common="entry.state.rank <= 1 || undefined">{{ entry.state.label }}</span></td>
                 <td v-if="canOpenEvidence" class="menu-cell">
-                  <button class="icon-button" type="button" :aria-label="`Evidence for ${entry.line.name}`" :aria-expanded="menu?.key === entry.line.line_hash_id" aria-haspopup="menu" @click.stop="openMenu($event, entry.line.line_hash_id, entry.line.name, lineMenu(entry))"><Ellipsis :size="15" aria-hidden="true" /></button>
+                  <button class="icon-button" type="button" :aria-label="`Evidence for ${entry.line.name}`" :aria-expanded="rowMenu?.openKey === entry.line.line_hash_id" aria-haspopup="menu" @click.stop="openMenu($event, entry.line.line_hash_id, entry.line.name, lineMenu(entry))"><Ellipsis :size="15" aria-hidden="true" /></button>
                 </td>
               </tr>
             </template>
@@ -313,7 +256,5 @@ onBeforeUnmount(() => closeMenu());
     </footer>
   </section>
 
-  <div v-if="menu" ref="menuEl" class="row-menu" role="menu" :aria-label="`Evidence for ${menu.label}`" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" @keydown="onMenuKey">
-    <button v-for="item in menu.items" :key="item.label" type="button" role="menuitem" @click="runItem(item)">{{ item.label }}</button>
-  </div>
+  <RowMenu ref="rowMenu" />
 </template>
