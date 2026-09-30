@@ -918,14 +918,47 @@ function productionUsage(groups: FleetGroup[], scenario: Scenario, period: strin
   return { lines: rows, series, previous, collectors };
 }
 
-function productionUsers(scenario: Scenario, groups: FleetGroup[]) {
-  const probeHash = groups.find((group) => group.node_name === "[cd]-qqpw-VDS-cd1")?.lines[0]?.line_hash_id ?? "";
-  const base = [
+/* ── identities ────────────────────────────────────────────────────────────
+ * Production and legacy carry the 134 identities of the 2026-09-30 read: 122
+ * enabled, usage attributed to exactly one (the liveness probe, the one
+ * identity bound to a line), and two that expire within 30 days. Those counts
+ * are real. Everything else about the 131 migrated identities is invented and
+ * marked so: their addresses, groups, protocols, which twelve are disabled,
+ * and every date. Expiries are set relative to the moment the harness first
+ * answers, so "within 30 days" holds whenever it runs. An identity without an
+ * expiry carries Go's zero time, exactly as the server writes it, and the
+ * usage fields are present and zero, as the server's users read model sends
+ * them for identities nothing was counted to. */
+
+const ZERO_TIME = "0001-01-01T00:00:00Z";
+const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString();
+const noUsage = { used_total_bytes: 0, used_period_bytes: 0, last_7d: [0, 0, 0, 0, 0, 0, 0], allocated_nodes: [] as unknown[] };
+
+type FixtureUser = Record<string, any> & { id: string; email: string; enabled: boolean; bindings: Array<{ line_hash_id: string; enabled: boolean; flow_override?: string }> };
+
+/** The probe and the Sub-Store owner, with the usage the production usage read gives them. */
+function productionBase(groups: FleetGroup[]): FixtureUser[] {
+  const probeGroup = groups.find((group) => group.node_name === "[cd]-qqpw-VDS-cd1");
+  const probeLine = probeGroup?.lines[0];
+  const malibu = groups.find((group) => group.node_name === "[cd]-DMIT-pro-malibu");
+  // The probe line moves 0.3 GiB a week in the usage fixture; 30 days is 4.05 weeks of it.
+  const probeBytes = Math.round(0.3 * 4.05 * GiB);
+  const probeUp = Math.round(probeBytes * 0.18);
+  return [
     {
       id: "u_cdcd", email: "cdcd@roobli.invalid", name: "cdcd", enabled: true,
       credentials: [{ protocol: "vless", flow: "xtls-rprx-vision", has_secret: true }],
-      bindings: [], quota_bytes: 0, group: "owner", migrated: true,
+      bindings: [], quota_bytes: 0, group: "owner", migrated: true, expires_at: ZERO_TIME,
       created_at: "2026-05-02T09:12:00Z", updated_at: "2026-09-20T11:00:00Z",
+      ...noUsage,
+      // Sub-Store selects the malibu lines for this identity: allocated, inferred, never counted.
+      allocated_nodes: malibu ? [{
+        node_id: malibu.node_id, node_name: malibu.node_name, collector_state: "ok",
+        lines: malibu.lines.map((line) => ({
+          line_hash_id: line.line_hash_id, tag: line.name.replace(/\.json$/, ""), role: "direct", allocation: "substore",
+          period_uplink: 0, period_downlink: 0, counted: false,
+        })),
+      }] : [],
     },
     {
       id: "u_openjobs", email: "shenzhen-office@openjobs.invalid", name: "OpenJobs Shenzhen", enabled: true,
@@ -933,34 +966,244 @@ function productionUsers(scenario: Scenario, groups: FleetGroup[]) {
       bindings: [], quota_bytes: 1024 * GiB, quota_period: "monthly", quota_reset_day: 1,
       expires_at: "2026-12-31T00:00:00Z", group: "openjobs", migrated: true,
       created_at: "2026-06-11T09:12:00Z", updated_at: "2026-09-01T11:00:00Z",
+      ...noUsage, period_start: "2026-09-01T00:00:00Z", period_end: "2026-10-01T00:00:00Z",
     },
     {
       id: "u_probe", email: "probe@lattice.invalid", name: "Liveness probe", enabled: true,
       credentials: [{ protocol: "vless", has_secret: true }],
-      bindings: [{ line_hash_id: probeHash, enabled: true }], quota_bytes: 0,
-      expires_at: "2026-10-31T00:00:00Z", group: "probe", migrated: false,
+      bindings: probeLine ? [{ line_hash_id: probeLine.line_hash_id, enabled: true }] : [], quota_bytes: 0,
+      expires_at: inDays(20), group: "probe", migrated: false,
       created_at: "2026-09-10T09:12:00Z", updated_at: "2026-09-10T09:12:00Z",
+      used_total_bytes: probeBytes, used_period_bytes: probeBytes,
+      last_7d: [41, 44, 39, 47, 43, 40, 46].map((value) => Math.round(value * 1024 ** 2 * 1.02)),
+      last_seen_at: "2026-09-29T07:58:40Z",
+      allocated_nodes: probeGroup && probeLine ? [{
+        node_id: probeGroup.node_id, node_name: probeGroup.node_name, collector_state: "ok",
+        lines: [{
+          line_hash_id: probeLine.line_hash_id, tag: probeLine.name.replace(/\.json$/, ""), role: "direct", allocation: "binding",
+          period_uplink: probeUp, period_downlink: probeBytes - probeUp, last_seen_at: "2026-09-29T07:58:40Z", counted: true,
+        }],
+      }] : [],
     },
   ];
-  if (scenario !== "dense") return base;
-  const team = Array.from({ length: 9 }, (_, index) => ({
-    id: `u_team_${index + 1}`, email: `team-${index + 1}@example.invalid`, name: `Team seat ${index + 1}`, enabled: index !== 8,
-    credentials: [{ protocol: "vless", has_secret: true }], bindings: [],
-    quota_bytes: [50, 100, 200, 0, 100, 50, 0, 20, 100][index] * GiB, quota_period: "monthly", quota_reset_day: 1,
-    expires_at: index % 3 === 0 ? `2026-1${index % 2}-15T00:00:00Z` : undefined, group: "team", migrated: false,
-    created_at: "2026-07-01T09:12:00Z", updated_at: "2026-09-01T11:00:00Z",
-  }));
-  return [...base, ...USERS, ...team];
 }
 
-function productionProfiles(groups: FleetGroup[]) {
-  return [...groups, { node_id: nodeKey("[cd]-LegendVPS-SG-EVO"), node_name: "[cd]-LegendVPS-SG-EVO", lines: [] }].map((group) => ({
-    node_id: group.node_id, node_name: group.node_name, managed: group.lines.some((line) => line.managed),
-    core: "sing-box", core_version: "1.12.4", config_path: "/etc/sing-box/config.json", stats_api: "127.0.0.1:9090",
-    applied: group.lines.some((line) => line.overlay_status === "applied"),
-    inbound_count: group.lines.length, discovered_count: group.lines.length, discovery_status: "ok",
-    collector: { source: "singbox_stats_api", status: "ok" }, capabilities: ["discover", "apply"],
+/** 131 migrated identities. Invented, as the block comment above says. */
+function migratedIdentities(): FixtureUser[] {
+  const disabled = new Set([11, 22, 33, 44, 55, 66, 77, 88, 99, 110, 121, 131]);
+  const expiry: Record<number, string> = { 17: inDays(9), 40: inDays(75), 63: inDays(160), 22: inDays(-120), 101: inDays(240) };
+  return Array.from({ length: 131 }, (_, index) => {
+    const n = index + 1;
+    return {
+      id: `u_migrated_${n}`, email: `user-${n}@migrated.invalid`, name: `proxy user ${n}`, enabled: !disabled.has(n),
+      credentials: [{ protocol: n % 5 === 0 ? "trojan" : "vless", has_secret: true }],
+      bindings: [], quota_bytes: 0, group: n <= 58 ? "metix" : n <= 79 ? "openjobs" : "",
+      migrated: true, expires_at: expiry[n] ?? ZERO_TIME,
+      created_at: "2026-05-02T09:12:00Z", updated_at: "2026-05-02T09:12:00Z",
+      ...noUsage,
+    };
+  });
+}
+
+function byEmail(a: FixtureUser, b: FixtureUser): number {
+  return a.email < b.email ? -1 : a.email > b.email ? 1 : 0;
+}
+
+/** The dense identities before usage: the production three, the older three and nine seats. */
+function denseSeats(groups: FleetGroup[]): FixtureUser[] {
+  const team = Array.from({ length: 9 }, (_, index) => ({
+    id: `u_team_${index + 1}`, email: `team-${index + 1}@example.invalid`, name: `Team seat ${index + 1}`, enabled: index !== 8,
+    credentials: [{ protocol: "vless", has_secret: true }], bindings: [] as FixtureUser["bindings"],
+    quota_bytes: [50, 100, 200, 0, 100, 50, 0, 20, 100][index] * GiB, quota_period: "monthly", quota_reset_day: 1,
+    expires_at: index % 3 === 0 ? `2026-1${index % 2}-15T00:00:00Z` : ZERO_TIME, group: "team", migrated: false,
+    created_at: "2026-07-01T09:12:00Z", updated_at: "2026-09-01T11:00:00Z",
   }));
+  return [...productionBase(groups).map(({ used_total_bytes, used_period_bytes, last_7d, allocated_nodes, last_seen_at, ...rest }) => rest as FixtureUser), ...USERS.map((user) => ({ ...user }) as FixtureUser), ...team];
+}
+
+/**
+ * Dense: every identity state at once. Usage comes from the dense usage rows
+ * (the seats attribution rotates through), a seat's lines become its
+ * bindings, one seat is past its expiry and one is over its quota. The
+ * expired and over-quota values are invented to show those states.
+ */
+function denseIdentities(groups: FleetGroup[]): FixtureUser[] {
+  const seats = denseSeats(groups);
+  const rows = productionUsage(groups, "dense", "30d", seats).lines.filter((row) => row.user_id && row.counted);
+  return seats.map((seat) => {
+    const mine = rows.filter((row) => row.user_id === seat.id);
+    const used = mine.reduce((sum, row) => sum + row.used_bytes, 0);
+    const nodes = new Map<string, { node_id: string; node_name?: string; collector_state: string; lines: unknown[] }>();
+    for (const row of mine) {
+      const node = nodes.get(row.node_id) ?? nodes.set(row.node_id, { node_id: row.node_id, node_name: row.node_name, collector_state: "ok", lines: [] }).get(row.node_id)!;
+      node.lines.push({
+        line_hash_id: row.line_hash_id, tag: row.tag, role: row.role, allocation: "binding",
+        period_uplink: row.uplink, period_downlink: row.downlink, last_seen_at: "2026-09-29T07:58:40Z", counted: true, estimate: row.estimate,
+      });
+    }
+    const bindings = seat.bindings.length ? seat.bindings : mine.filter((row) => row.line_hash_id).map((row) => ({ line_hash_id: row.line_hash_id!, enabled: true }));
+    const value: FixtureUser = {
+      ...seat, bindings,
+      used_total_bytes: used, used_period_bytes: used,
+      last_7d: [3, 9, 14, 0, 22, 18, 11].map((day) => Math.round((day / 77) * used / 4)),
+      last_seen_at: used ? "2026-09-29T07:58:40Z" : undefined,
+      allocated_nodes: [...nodes.values()],
+      ...(seat.quota_period === "monthly" ? { period_start: "2026-09-01T00:00:00Z", period_end: "2026-10-01T00:00:00Z" } : {}),
+    };
+    // The office identity's counters fold to it, but nothing binds it: counted and unbound.
+    if (seat.id === "u_openjobs") value.bindings = [];
+    if (seat.id === "u_team_3") value.expires_at = inDays(-3);
+    if (seat.id === "u_team_8") value.used_period_bytes = Math.max(used, 23 * GiB);
+    if (seat.id === "u_team_2") {
+      // One allocated node whose collector is silent, so the figure is a floor.
+      value.allocated_nodes = [...value.allocated_nodes, {
+        node_id: nodeKey("[Lab]-exit-jnb-teraco"), node_name: "[Lab]-exit-jnb-teraco", collector_state: "error",
+        lines: [{ line_hash_id: "lh_silent", tag: "VLESS-REALITY-40001", role: "exit", allocation: "binding", period_uplink: 0, period_downlink: 0, counted: false }],
+      }];
+    }
+    return value;
+  });
+}
+
+function productionUsers(scenario: Scenario, groups: FleetGroup[]): FixtureUser[] {
+  if (scenario === "dense") return denseIdentities(groups).sort(byEmail);
+  return [...productionBase(groups), ...migratedIdentities()].sort(byEmail);
+}
+
+/**
+ * The harness keeps what an edit did, per scenario, until the harness page
+ * reloads, so a cleared expiry, a new binding or a delete can be seen after
+ * the page reads the list again. It answers like the server's users-admin
+ * handler: the same field rules, the same refusals.
+ */
+const userStores = new Map<Scenario, FixtureUser[]>();
+let createdIdentities = 0;
+
+function usersOf(scenario: Scenario, build: () => FixtureUser[]): FixtureUser[] {
+  let store = userStores.get(scenario);
+  if (!store) {
+    store = build().map((user) => structuredClone(user));
+    userStores.set(scenario, store);
+  }
+  return store;
+}
+
+/** Forget every edit, as a harness reload does. For tests. */
+export function resetUserStores(): void {
+  userStores.clear();
+}
+
+const EMAIL = /^[^\s@]+@[^\s@]+$/;
+
+function userAdmin(store: FixtureUser[], lineExists: (hash: string) => boolean) {
+  const find = (id: string) => {
+    const user = store.find((value) => value.id === String(id ?? "").trim());
+    if (!user) throw new Error(`vpn-core/users-admin: user "${id}" not found`);
+    return user;
+  };
+  const emailInUse = (email: string, except = "") => store.some((user) => user.email === email && user.id !== except);
+  const applyFields = (user: FixtureUser, payload: Record<string, any>) => {
+    user.name = String(payload.name ?? "").trim();
+    if (payload.enabled !== undefined) user.enabled = !!payload.enabled;
+    if (payload.quota_bytes !== undefined) user.quota_bytes = payload.quota_bytes;
+    if (payload.expires_at !== undefined) {
+      if (Number.isNaN(Date.parse(payload.expires_at))) throw new Error(`parsing time ${JSON.stringify(payload.expires_at)}: cannot parse`);
+      user.expires_at = payload.expires_at;
+    }
+    if (payload.quota_period !== undefined) user.quota_period = payload.quota_period === "monthly" ? "monthly" : "";
+    if (payload.quota_reset_day !== undefined) user.quota_reset_day = payload.quota_reset_day;
+    if (user.quota_period === "monthly" && !user.quota_reset_day) user.quota_reset_day = 1;
+    if (user.quota_period !== "monthly") user.quota_reset_day = 0;
+    user.group = String(payload.group ?? "").trim();
+    user.comment = String(payload.comment ?? "").trim();
+    user.updated_at = new Date().toISOString();
+  };
+  return {
+    create: (payload: Record<string, any>) => {
+      const email = String(payload.email ?? "").trim();
+      if (!EMAIL.test(email)) throw new Error("a valid email identity is required");
+      if (emailInUse(email)) throw new Error(`email "${email}" already exists`);
+      createdIdentities += 1;
+      const user: FixtureUser = {
+        id: `u_new_${createdIdentities}`, email, enabled: true, bindings: [], migrated: false,
+        credentials: (payload.credentials ?? []).map((credential: Record<string, string>) => ({
+          protocol: credential.protocol, flow: credential.flow, has_secret: !!(credential.uuid || credential.password),
+        })),
+        expires_at: ZERO_TIME, quota_bytes: 0,
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...noUsage,
+      };
+      applyFields(user, { enabled: true, ...payload });
+      store.push(user);
+      store.sort(byEmail);
+      return { user };
+    },
+    update: (payload: Record<string, any>) => {
+      const user = find(payload.id);
+      const email = String(payload.email ?? "").trim();
+      if (email) {
+        if (!EMAIL.test(email)) throw new Error("invalid email");
+        if (emailInUse(email, user.id)) throw new Error(`email "${email}" already exists`);
+        user.email = email;
+      }
+      applyFields(user, payload);
+      store.sort(byEmail);
+      return { user };
+    },
+    delete: (payload: Record<string, any>) => {
+      const user = find(payload.id);
+      store.splice(store.indexOf(user), 1);
+      return { ok: true };
+    },
+    bind: (payload: Record<string, any>) => {
+      const user = find(payload.user_id);
+      const hash = String(payload.line_hash_id ?? "").trim();
+      if (!hash) throw new Error("line_hash_id is required");
+      if (!lineExists(hash)) throw new Error(`line "${hash}" is not a known line on any node`);
+      const found = user.bindings.find((binding) => binding.line_hash_id === hash);
+      if (found) found.enabled = true;
+      else user.bindings.push({ line_hash_id: hash, enabled: true });
+      return { user };
+    },
+    unbind: (payload: Record<string, any>) => {
+      const user = find(payload.user_id);
+      user.bindings = user.bindings.filter((binding) => binding.line_hash_id !== payload.line_hash_id);
+      return { user };
+    },
+    rotate: (payload: Record<string, any>) => {
+      const user = find(payload.user_id);
+      const credential = (user.credentials ?? []).find((value: Record<string, unknown>) => value.protocol === payload.protocol);
+      if (!credential) throw new Error(`no ${payload.protocol} credential on this identity`);
+      credential.has_secret = true;
+      return { protocol: payload.protocol, revealed_credential: "4f2a1c88-0d55-4a3e-9d31-6b71f0c2a9de" };
+    },
+  };
+}
+
+/**
+ * Node profiles as the server lists them: one per reporting node plus the
+ * one that reports no line. Production is 25 identical rows. Dense adds the
+ * exceptions a real fleet grows: its two silent collectors, a discovery that
+ * failed, and a managed profile waiting to apply (invented).
+ */
+function productionProfiles(groups: FleetGroup[], scenario: Scenario) {
+  const silent = scenario === "dense" ? DENSE_SILENT : {};
+  return [...groups, { node_id: nodeKey("[cd]-LegendVPS-SG-EVO"), node_name: "[cd]-LegendVPS-SG-EVO", lines: [] }].map((group) => {
+    const profile: Record<string, any> = {
+      node_id: group.node_id, node_name: group.node_name, managed: group.lines.some((line) => line.managed),
+      core: "sing-box", core_version: "1.12.4", config_path: "/etc/sing-box/config.json", stats_api: "127.0.0.1:9090",
+      applied: group.lines.some((line) => line.overlay_status === "applied"),
+      inbound_count: group.lines.length, discovered_count: group.lines.length, discovery_status: "ok",
+      collector: { source: "singbox_stats_api", status: "ok" }, capabilities: ["discover", "apply"],
+    };
+    if (silent[group.node_name]) profile.collector = { source: "singbox_stats_api", status: silent[group.node_name].status === "error" ? "error" : "not configured", last_error: silent[group.node_name].error };
+    if (scenario === "dense" && group.node_name === "[Metix]-DMIT-3") {
+      Object.assign(profile, { discovery_status: "error", discovery_error: "sb: exit status 1: open /etc/sing-box/conf/VLESS-REALITY-52714.json: permission denied", discovered_count: group.lines.length - 1 });
+    }
+    if (scenario === "dense" && group.node_name === "[cd]-DMIT-eb-wee") {
+      Object.assign(profile, { managed: true, applied: false, core_version: "1.12.9" });
+    }
+    return profile;
+  });
 }
 
 export function handlers(scenario: Scenario): Record<string, (payload: any) => unknown> {
@@ -968,7 +1211,14 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
   const groups = production ? buildProductionFleet(scenario) : scenario === "hubs" ? buildHubFleet() : buildLines(scenario);
   const chains = buildChains(scenario);
   const flat = groups.flatMap((group) => group.lines);
-  const users = production ? productionUsers(scenario, groups) : usersWithUsage(scenario);
+  const users = usersOf(scenario, () => {
+    if (production) return productionUsers(scenario, groups);
+    return scenario === "empty" ? [] : (usersWithUsage(scenario) as unknown as FixtureUser[]);
+  });
+  const admin = userAdmin(users, (hash) => flat.some((line) => line.line_hash_id === hash));
+  // Dense attribution rotates through the seats in their own order, so edits
+  // to the store never reshuffle whose traffic is whose.
+  const seats = scenario === "dense" ? denseSeats(groups) : users;
   return {
     "lines/list": () => ({ groups }),
     "lines/chains": () => ({ chains }),
@@ -1004,16 +1254,16 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     "lines/sync_metadata": () => ({ approval: { id: "apr_sync", plan: JSON.stringify({ summary: "write the sidecar identity file" }) } }),
     "lines/reattach": () => ({ ok: true }),
     "users/list": () => ({ users }),
-    "users-admin/create": () => ({ ok: true }),
-    "users-admin/update": () => ({ ok: true }),
-    "users-admin/delete": () => ({ ok: true }),
-    "users-admin/bind": () => ({ ok: true }),
-    "users-admin/unbind": () => ({ ok: true }),
-    "users-admin/rotate": () => ({ protocol: "vless", revealed_credential: "4f2a1c88-0d55-4a3e-9d31-6b71f0c2a9de" }),
+    "users-admin/create": admin.create,
+    "users-admin/update": admin.update,
+    "users-admin/delete": admin.delete,
+    "users-admin/bind": admin.bind,
+    "users-admin/unbind": admin.unbind,
+    "users-admin/rotate": admin.rotate,
     "users-admin/plan_add": () => ({ approval: { id: "apr_add", plan: JSON.stringify({ summary: "sb user add" }) } }),
     "users-admin/plan_update": () => ({ approval: { id: "apr_upd", plan: JSON.stringify({ summary: "sb user update" }) } }),
     "users-admin/plan_remove": () => ({ approval: { id: "apr_del", plan: JSON.stringify({ summary: "sb user del" }) } }),
-    "profiles/query": () => ({ profiles: production ? productionProfiles(groups) : buildProfiles(scenario) }),
+    "profiles/query": () => ({ profiles: production ? productionProfiles(groups, scenario) : buildProfiles(scenario) }),
     "profiles/settings": ({ node_id }: { node_id: string }) => ({
       node_id,
       node_name: node_id.replace("node-", ""),
@@ -1040,7 +1290,7 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     "usage/query": ({ period }: { period?: string }) => {
       const window = period || "30d";
       if (production) {
-        const usage = productionUsage(groups, scenario, window, users);
+        const usage = productionUsage(groups, scenario, window, seats);
         const repeated = usage.lines.filter((row) => row.role === "entry" || row.role === "relay").reduce((sum, row) => sum + row.used_bytes, 0);
         return {
           // The legacy aggregate fields, as production sends them: by_node is
@@ -1078,7 +1328,7 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     },
     "users-admin/usage_query": ({ user_id, node_id, line_hash_id, period }: Record<string, string>) => {
       const key = user_id ? "user_id" : node_id ? "node_id" : "line_hash_id";
-      const source = production ? productionUsage(groups, scenario, period || "30d", users).lines : buildUsageLines(scenario, period || "30d");
+      const source = production ? productionUsage(groups, scenario, period || "30d", seats).lines : buildUsageLines(scenario, period || "30d");
       const lines = source
         .filter((row) => (user_id ? row.user_id === user_id : node_id ? row.node_id === node_id : row.line_hash_id === line_hash_id));
       const used = lines.reduce((sum, row) => sum + row.used_bytes, 0);
