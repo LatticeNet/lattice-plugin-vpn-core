@@ -86,10 +86,12 @@ const props = withDefaults(defineProps<{
   /** How the overview's daily chart stacks. The page keeps it with the layer. */
   stack?: StackBy;
   /** When the page last heard from the control plane, for the proof line. */
-  observedAt?: string;
+  /** "13s" when this period's read is the one on screen, "" otherwise. */
+  observedAge?: string;
+  observedTitle?: string;
   /** The console can be asked to open Users. */
   canOpenUsers?: boolean;
-}>(), { view: "overview", stack: "exit", observedAt: "", canOpenUsers: false, series: undefined, previous: undefined, from: undefined, to: undefined });
+}>(), { view: "overview", stack: "exit", observedAge: "", observedTitle: "", canOpenUsers: false, series: undefined, previous: undefined, from: undefined, to: undefined });
 const emit = defineEmits<{
   period: [value: UsagePeriod];
   view: [value: UsageView];
@@ -241,7 +243,7 @@ function setView(value: UsageView): void {
 
 <template>
   <p class="proof-line usage-proof" aria-live="polite">
-    <span v-if="observedAt">observed at {{ observedAt }}</span>
+    <span v-if="observedAge" :title="observedTitle">observed {{ observedAge }} ago</span>
     <span v-else>not observed yet</span>
     <span v-if="busy">· reading {{ periodLabel(period).toLowerCase() }}</span>
     <span v-if="failed">· the usage read failed</span>

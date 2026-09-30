@@ -71,6 +71,7 @@ import {
 import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
+import { useObservedAge } from "./observedAge";
 import {
   formatBytes,
   formatLineDomain,
@@ -341,16 +342,12 @@ const collectorsLine = computed(() => {
   return ok === all.length ? `${all.length} collectors ok` : `${ok} of ${all.length} collectors ok`;
 });
 
-/* The proof line: when the page last heard from the control plane. The
- * plugin holds no timer (refreshPolicy.test.ts guards that), so the time is
- * absolute and the label is true for as long as the tab is open. */
+/* The proof line: when the page last heard from the control plane, as the
+ * console says it ("observed 13s ago"), with the absolute time in a title.
+ * The age ticks on a display clock that reads nothing (observedAge.ts); the
+ * data is still read only when the operator asks (refreshPolicy.test.ts). */
 const refreshedAt = ref<number>();
-const observedAtLabel = computed(() => {
-  if (!refreshedAt.value) return "";
-  const date = new Date(refreshedAt.value);
-  const pad = (value: number) => value.toString().padStart(2, "0");
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-});
+const observed = useObservedAge(() => refreshedAt.value);
 const livenessLine = computed(() => {
   const service = fleetSummary.value.service;
   if (!service.reported && liveness.value.unprovenNodes) {
@@ -1401,7 +1398,7 @@ onBeforeUnmount(() => {
 
     <template v-else-if="route === 'lines'">
       <p class="proof-line" aria-live="polite">
-        <span v-if="refreshedAt">observed at {{ observedAtLabel }}</span>
+        <span v-if="refreshedAt" :title="observed.title.value">observed {{ observed.age.value }} ago</span>
         <span v-else>not observed yet</span>
         <span>· {{ fleetSummary.nodes }} {{ fleetSummary.nodes === 1 ? 'node reports' : 'nodes report' }}</span>
         <span>· {{ fleetSummary.lines }} lines</span>
@@ -1505,7 +1502,7 @@ onBeforeUnmount(() => {
 
     <template v-else-if="route === 'users'">
       <p class="proof-line" aria-live="polite">
-        <span v-if="refreshedAt">observed at {{ observedAtLabel }}</span>
+        <span v-if="refreshedAt" :title="observed.title.value">observed {{ observed.age.value }} ago</span>
         <span v-else>not observed yet</span>
         <span>· {{ userSummary.total }} {{ userSummary.total === 1 ? 'identity' : 'identities' }}</span>
         <span>· {{ userSummary.enabled }} enabled</span>
@@ -1576,7 +1573,7 @@ onBeforeUnmount(() => {
 
     <template v-else-if="route === 'profiles'">
       <p class="proof-line" aria-live="polite">
-        <span v-if="refreshedAt">observed at {{ observedAtLabel }}</span>
+        <span v-if="refreshedAt" :title="observed.title.value">observed {{ observed.age.value }} ago</span>
         <span v-else>not observed yet</span>
         <span>· {{ profileHeadline.nodes }} {{ profileHeadline.nodes === 1 ? 'node' : 'nodes' }}</span>
         <span>· {{ profileHeadline.collectorsOk === profileHeadline.nodes ? `${profileHeadline.collectorsOk} collectors ok` : `${profileHeadline.collectorsOk} of ${profileHeadline.nodes} collectors ok` }}</span>
@@ -1605,7 +1602,8 @@ onBeforeUnmount(() => {
         :previous="usage.previous"
         :view="usageView"
         :stack="usageStack"
-        :observed-at="usageReadPeriod === usagePeriod ? observedAtLabel : ''"
+        :observed-age="usageReadPeriod === usagePeriod ? observed.age.value : ''"
+        :observed-title="observed.title.value"
         :can-open-users="canOpenEvidence"
         @period="setUsagePeriod"
         @view="(value) => (usageView = value)"
