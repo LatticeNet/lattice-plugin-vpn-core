@@ -315,7 +315,7 @@ export function usersAttention(users: readonly VpnUser[], now: number, formatDay
     items.push({
       key: "expired", severity: "error", view: "expired",
       claim: `${count} enabled ${count === 1 ? "identity has" : "identities have"} expired`,
-      evidence: `${names(summary.expired, dated)}. Subscriptions stop listing lines for an expired identity. Extend or clear the expiry, or disable it.`,
+      evidence: `${names(summary.expired, dated)}. A Sub-Store subscription built for an expired identity fails to render. Extend or clear the expiry, or disable it.`,
     });
   }
   if (summary.overQuotaUsers.length) {
@@ -685,6 +685,10 @@ export interface UserOutcome {
   anchor: string;
   text: string;
   tone: "success" | "error";
+  /** Puts back what the action changed; the note offers it as Undo. */
+  undo?: () => void;
+  /** Where the identity's panel says it: in the Lines section for a binding, at the top otherwise. */
+  section?: "lines";
 }
 
 /**

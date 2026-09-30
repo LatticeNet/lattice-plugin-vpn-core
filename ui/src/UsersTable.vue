@@ -257,6 +257,7 @@ defineExpose({ anchorBefore });
 
     <div v-if="outcome && outcomeAfter === ''" class="outcome-note" :data-tone="outcome.tone" role="status">
       <span>{{ outcome.text }}</span>
+      <button v-if="outcome.undo" class="button button-secondary button-compact" type="button" @click="outcome.undo()">Undo</button>
       <button class="icon-button" type="button" aria-label="Dismiss" @click="emit('dismiss')"><X :size="14" /></button>
     </div>
 
@@ -325,6 +326,7 @@ defineExpose({ anchorBefore });
                 <td :colspan="span">
                   <div class="outcome-note" :data-tone="outcome.tone" role="status">
                     <span>{{ outcome.text }}</span>
+                    <button v-if="outcome.undo" class="button button-secondary button-compact" type="button" @click="outcome.undo()">Undo</button>
                     <button class="icon-button" type="button" aria-label="Dismiss" @click="emit('dismiss')"><X :size="14" /></button>
                   </div>
                 </td>

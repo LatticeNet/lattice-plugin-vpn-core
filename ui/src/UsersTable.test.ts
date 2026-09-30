@@ -61,6 +61,13 @@ describe("the identities table", () => {
     expect(grouped).toContain("1 identity is in two conditions and is listed under the worse one.");
   });
 
+  it("offers Undo in the outcome note when the action can be put back", async () => {
+    const undone: string[] = [];
+    const outcome: UserOutcome = { userId: "m-1", anchor: "m-1", text: "m-1 is no longer bound.", tone: "success", undo: () => undone.push("m-1") };
+    expect(await render({ outcome })).toMatch(/m-1 is no longer bound\.<\/span><button[^>]*>Undo<\/button>/);
+    expect(await render({ outcome: { ...outcome, undo: undefined } })).not.toContain(">Undo<");
+  });
+
   it("does not ask to clear the search to group again when nothing is grouped", async () => {
     const text = (html: string) => html.replace(/<!--[\s\S]*?-->/g, "");
     expect(text(await render({ search: "m-" }))).toContain("2 of 4 identities match.</p>");

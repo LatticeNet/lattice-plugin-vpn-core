@@ -74,7 +74,7 @@ const stateReason = computed(() => {
   if (!user || !state.value) return "";
   switch (state.value.key) {
     case "disabled": return "turned off, so it signs in nowhere";
-    case "expired": return `expired ${expiryRelative(expiry.value)}; subscriptions stop listing lines for it`;
+    case "expired": return `expired ${expiryRelative(expiry.value)}; a Sub-Store subscription built for it fails to render`;
     case "over_quota": return `used ${formatBytes(user.used_period_bytes)} of ${formatBytes(user.quota_bytes)}`;
     case "expiring": return `expires ${expiryRelative(expiry.value)}`;
     case "unbound": return "bound to no line, so it signs in nowhere Lattice manages";
@@ -146,8 +146,9 @@ watch(() => props.focusBindings, async (value) => {
       </div>
 
       <div v-else class="detail-body">
-        <div v-if="outcomeHere" class="outcome-note" :data-tone="outcomeHere.tone" role="status">
+        <div v-if="outcomeHere && outcomeHere.section !== 'lines'" class="outcome-note" :data-tone="outcomeHere.tone" role="status">
           <span>{{ outcomeHere.text }}</span>
+          <button v-if="outcomeHere.undo" class="button button-secondary button-compact" type="button" :disabled="bindBusy" @click="outcomeHere.undo()">Undo</button>
           <button class="icon-button" type="button" aria-label="Dismiss" @click="emit('dismiss')"><X :size="14" /></button>
         </div>
 
@@ -199,6 +200,12 @@ watch(() => props.focusBindings, async (value) => {
         <section id="user-lines" class="detail-section" tabindex="-1" aria-labelledby="user-lines-title">
           <h3 id="user-lines-title">Lines</h3>
           <p class="field-help">Binding records the line against this identity in Lattice. The node gets the credential only when that line is planned and applied.</p>
+          <!-- A binding's outcome sits where the operator clicked, with its Undo. -->
+          <div v-if="outcomeHere && outcomeHere.section === 'lines'" class="outcome-note" :data-tone="outcomeHere.tone" role="status">
+            <span>{{ outcomeHere.text }}</span>
+            <button v-if="outcomeHere.undo" class="button button-secondary button-compact" type="button" :disabled="bindBusy" @click="outcomeHere.undo()">Undo</button>
+            <button class="icon-button" type="button" aria-label="Dismiss" @click="emit('dismiss')"><X :size="14" /></button>
+          </div>
           <div class="binding-list">
             <div v-for="binding in user.bindings" :key="binding.line_hash_id">
               <span class="binding-name">
@@ -244,7 +251,7 @@ watch(() => props.focusBindings, async (value) => {
 
         <section v-if="can.delete" class="detail-section danger-section" aria-labelledby="user-delete">
           <h3 id="user-delete">Delete</h3>
-          <p>Removes the identity, its {{ user.bindings.length }} {{ user.bindings.length === 1 ? 'binding' : 'bindings' }} and its subscription link. Nothing is sent to a node.</p>
+          <p>Removes the identity and its {{ user.bindings.length }} {{ user.bindings.length === 1 ? 'binding' : 'bindings' }}. Sub-Store subscriptions built for it stop rendering. Nothing is sent to a node.</p>
           <div><button class="button button-secondary destructive" type="button" @click="emit('delete', user)"><Trash2 :size="14" aria-hidden="true" /> Delete identity</button></div>
         </section>
         <p v-if="bindBusy || unbindBusy" class="empty-inline" role="status"><LoaderCircle class="spin" :size="13" aria-hidden="true" /> Saving the binding</p>

@@ -698,9 +698,10 @@ const usersTable = ref<InstanceType<typeof UsersTable>>();
 /* The outcome of the last action, shown beside the row it changed and in the
  * identity's panel, until the bridge has a toast. */
 const userOutcome = ref<UserOutcome>();
-function tellOutcome(user: Pick<VpnUser, "id">, text: string, tone: UserOutcome["tone"] = "success", anchor = user.id): void {
-  userOutcome.value = { userId: user.id, anchor, text, tone };
+function tellOutcome(user: Pick<VpnUser, "id">, text: string, tone: UserOutcome["tone"] = "success", anchor = user.id, extra: Pick<UserOutcome, "undo" | "section"> = {}): void {
+  userOutcome.value = { userId: user.id, anchor, text, tone, ...extra };
 }
+const LINES: Pick<UserOutcome, "section"> = { section: "lines" };
 
 const nextExpiryNote = computed(() => {
   const next = userSummary.value.expiring[0];
@@ -844,30 +845,51 @@ async function bindLine(user: VpnUser, hash: string): Promise<void> {
   bindingBusy.value = true;
   try {
     await pluginCall(SERVICES.admin, "bind", { user_id: user.id, line_hash_id: hash });
-    tellOutcome(user, `${user.email} is bound to ${lineTitle(hash)}. The node gets the credential when that line is planned and applied.`);
+    tellOutcome(user, `${user.email} is bound to ${lineTitle(hash)}. The node gets the credential when that line is planned and applied.`, "success", user.id, LINES);
     await loadCurrent(true);
   } catch (cause) {
-    tellOutcome(user, `The binding was not added: ${safeErrorMessage(cause, "the server gave no reason")}`, "error");
+    tellOutcome(user, `The binding was not added: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
   } finally {
     bindingBusy.value = false;
   }
 }
 
+/* Remove runs on one click, so its outcome carries an Undo. The server drops
+ * the binding record with its flow override; a Sub-Store subscription that
+ * gives this identity that line fails to compose from then on (the graph
+ * composer refuses an unbound root), so it fails to render. Undo binds the
+ * line again with the same override. */
 async function unbindLine(user: VpnUser, hash: string): Promise<void> {
   if (!canUnbindUser.value || unbindBusy.value) return;
   unbindBusy.value = true;
+  const before = user.bindings.find((binding) => binding.line_hash_id === hash);
   try {
     await pluginCall(SERVICES.admin, "unbind", { user_id: user.id, line_hash_id: hash });
-    tellOutcome(user, `${user.email} is no longer bound to ${lineTitle(hash)}. The credential stays on that node until the line is planned and applied again.`);
+    const undo = canBindUser.value ? () => void rebindLine(user, hash, before?.flow_override) : undefined;
+    tellOutcome(user, `${user.email} is no longer bound to ${lineTitle(hash)}. A Sub-Store subscription that gives this identity that line fails to render until the line is bound again. The credential stays on the node until the line is planned and applied again.`, "success", user.id, { ...LINES, undo });
     await loadCurrent(true);
   } catch (cause) {
-    tellOutcome(user, `The binding was not removed: ${safeErrorMessage(cause, "the server gave no reason")}`, "error");
+    tellOutcome(user, `The binding was not removed: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
   } finally {
     unbindBusy.value = false;
   }
 }
 
-/* ── delete: breaks the identity's subscription link, so the email is typed ── */
+async function rebindLine(user: VpnUser, hash: string, flowOverride?: string): Promise<void> {
+  if (!hash || bindingBusy.value || !canBindUser.value) return;
+  bindingBusy.value = true;
+  try {
+    await pluginCall(SERVICES.admin, "bind", { user_id: user.id, line_hash_id: hash, ...(flowOverride ? { flow_override: flowOverride } : {}) });
+    tellOutcome(user, `${user.email} is bound to ${lineTitle(hash)} again. Nothing on the node changed in between.`, "success", user.id, LINES);
+    await loadCurrent(true);
+  } catch (cause) {
+    tellOutcome(user, `The binding was not restored: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
+  } finally {
+    bindingBusy.value = false;
+  }
+}
+
+/* ── delete: breaks the Sub-Store subscriptions built for the identity, so the email is typed ── */
 const deleteTarget = ref<VpnUser>();
 const deletingUser = ref(false);
 const deleteTyped = ref("");
@@ -877,11 +899,11 @@ const deleteImpact = computed(() => {
   if (!user) return [] as string[];
   const bindings = user.bindings.length;
   return [
-    "Its subscription link stops answering, so a client that refreshes it loses every line it listed.",
+    "Every Sub-Store subscription built for it fails to render from then on.",
     bindings
       ? `Its ${bindings} line ${bindings === 1 ? "binding goes" : "bindings go"} with it. The credential stays on ${bindings === 1 ? "that line's node" : "those lines' nodes"} until each line is planned and applied again.`
       : "It is bound to no line, so no line loses a binding.",
-    "It cannot be undone. A new identity with the same email gets a new credential and a new subscription link.",
+    "It cannot be undone. A new identity with the same email gets a new credential, and each subscription has to be pointed at it again.",
   ];
 });
 
@@ -901,7 +923,7 @@ async function deleteUser(): Promise<void> {
   try {
     await pluginCall(SERVICES.admin, "delete", { id: user.id });
     deleteTarget.value = undefined;
-    tellOutcome(user, `${user.email} deleted. Its subscription link no longer answers.`, "success", anchor);
+    tellOutcome(user, `${user.email} deleted. Sub-Store subscriptions built for it no longer render.`, "success", anchor);
     // The panel, if the delete ran from it, closes without handing focus
     // back: its opener is the row that is about to go.
     if (userOpenId.value === user.id) {
