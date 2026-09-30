@@ -72,6 +72,7 @@ import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } fr
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
 import { useObservedAge } from "./observedAge";
+import { vRevealSelected } from "./layerTabs";
 import {
   formatBytes,
   formatLineDomain,
@@ -1443,7 +1444,7 @@ onBeforeUnmount(() => {
         <span>· {{ livenessLine }}</span>
         <span v-if="refreshing">· refreshing</span>
       </p>
-      <nav class="layer-tabs" role="tablist" aria-label="Lines layers">
+      <nav v-reveal-selected="linesView" class="layer-tabs" role="tablist" aria-label="Lines layers">
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'overview'" @click="linesView = 'overview'">Overview</button>
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'lines'" @click="linesView = 'lines'">Lines<span class="lens-count">{{ fleetSummary.lines }}</span></button>
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'topology'" @click="linesView = 'topology'">Topology</button>
