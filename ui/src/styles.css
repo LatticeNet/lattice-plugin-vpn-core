@@ -445,6 +445,8 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
    (a resolved line name's hash, a status dot, a badge) is not turned into an
    uppercase block label. */
 .evidence-grid > div > span { display: block; margin-bottom: var(--sp-1); color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-weight: 650; text-transform: uppercase; }
+/* A node name is a name, not a label: shown as the operator typed it. */
+.evidence-grid > div > span.evidence-name { color: var(--foreground, #17191c); font-size: var(--text-xs); text-transform: none; overflow-wrap: anywhere; }
 .evidence-grid p { margin: 0 0 var(--sp-1); font-size: var(--text-xs); line-height: 1.55; overflow-wrap: anywhere; }
 .evidence-grid p:last-child { margin-bottom: 0; }
 .evidence-warn { color: var(--tone-warn); }
@@ -859,11 +861,19 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .narrow-only { display: none !important; }
 @media (max-width: 720px) {
   .narrow-only { display: block !important; }
-  .wide-only { display: none !important; }
   .profiles-table td.line-col small.narrow-only { white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; }
 }
 .issue-list .status-dot { flex: 0 0 auto; }
 @media (max-width: 720px) {
   /* Three lines of evidence per claim on a phone; Show lists every identity it names. */
   .users-body .attention-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
+}
+
+/* On a touch screen every control is at least 44px on its short side. The
+   design review measured the row menu trigger at 30px, Show at 28px and the
+   sort headers at 16px. A mouse keeps the dense layout. */
+@media (pointer: coarse) {
+  .icon-button, .outcome-note .icon-button { width: 44px; height: 44px; }
+  .button, .button-compact, .segmented-option { min-height: 44px; }
+  .sort-button, .fold-all, .node-toggle { min-height: 44px; }
 }

@@ -71,8 +71,8 @@ function issueText(profile: Profile): { text: string; tone: string; more: number
         <tbody>
           <tr v-for="profile in pager.rows" :key="profile.node_id" class="clickable-row" :data-selected="openProfile === profile.node_id || undefined" @click="emit('open', profile)">
             <td class="sticky-first line-col">
-              <button class="row-open" type="button" :data-profile-open="profile.node_id" @click.stop="emit('open', profile)"><strong :title="profileName(profile)">{{ profileName(profile) }}</strong></button>
-              <small class="mono" :class="{ 'wide-only': issueText(profile) }" :title="profile.node_id">{{ profile.node_id }}</small>
+              <!-- The node id is a machine key: it lives in the title and the panel, not under every name (design 23, 3.10). -->
+              <button class="row-open" type="button" :data-profile-open="profile.node_id" @click.stop="emit('open', profile)"><strong :title="profile.node_name ? `${profile.node_name} (${profile.node_id})` : profile.node_id">{{ profileName(profile) }}</strong></button>
               <!-- On a phone the Needs column is off screen; the reason rides under the name. -->
               <small v-if="issueText(profile)" class="narrow-only" :class="issueText(profile)!.tone === 'error' ? 'error-text' : 'warn-text'">{{ issueText(profile)!.text }}</small>
             </td>

@@ -229,7 +229,7 @@ watch(() => props.focusBindings, async (value) => {
             <p v-if="coverageNote(allocation)" class="evidence-warn allocation-note">{{ coverageNote(allocation) }}</p>
             <div class="evidence-grid">
               <div v-for="node in user.allocated_nodes" :key="node.node_id">
-                <span>{{ node.node_name || node.node_id }}</span>
+                <span class="evidence-name" :title="node.node_id">{{ node.node_name || node.node_id }}</span>
                 <p><span class="status-dot" :data-tone="collectorTone(node.collector_state)">{{ collectorLabel(node.collector_state) }}</span></p>
                 <p v-for="line in node.lines" :key="line.line_hash_id" class="allocation-line">
                   <strong :title="line.tag || line.line_hash_id">{{ line.tag || line.line_hash_id }}</strong>
