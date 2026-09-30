@@ -353,6 +353,22 @@ describe("layoutNodeGraph", () => {
     expect(layout.edges).toHaveLength(2);
   });
 
+  it("ranks a cycle reached from a source by its depth, not by the pass limit", () => {
+    // a to b to c to b: the edge c to b closes the cycle and must not push b and c right forever.
+    const nodes = [box("a"), box("b"), box("c"), ...Array.from({ length: 20 }, (_, index) => box(`z${index}`))];
+    const layout = layoutNodeGraph({ nodes, edges: [link("a", "b"), link("b", "c"), link("c", "b")] });
+    const rankOf = (id: string) => layout.nodes.find((node) => node.id === id)!.rank;
+    expect([rankOf("a"), rankOf("b"), rankOf("c")]).toEqual([0, 1, 2]);
+    expect(layout.ranks).toBe(3);
+    expect(layout.edges).toHaveLength(3);
+    // A self-loop and a longer cycle behind a real hop keep their depth too.
+    const longer = layoutNodeGraph({
+      nodes: [box("a"), box("b"), box("c"), box("d")],
+      edges: [link("a", "b"), link("b", "b"), link("b", "c"), link("c", "d"), link("d", "b")],
+    });
+    expect(longer.nodes.map((node) => [node.id, node.rank])).toEqual([["a", 0], ["b", 1], ["c", 2], ["d", 3]]);
+  });
+
   it("lays the production shape out as three ranks that fit a wide console at full scale", () => {
     const hubs = ["DMIT-1", "DMIT-2", "DMIT-3", "DMIT-4", "hk-turin", "jp-pulse"].map(box);
     const exits = ["qqpw-cd2", "qqpw-cd3", "att-vds", "frontier-vds", "frontier-nat", "softbank-nat", "vircs"].map(box);

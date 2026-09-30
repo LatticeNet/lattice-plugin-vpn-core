@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  usageAfterFailedRead,
   attributionLabel,
   attributionTone,
   collectorLabel,
@@ -279,5 +280,18 @@ describe("lineNameIndex names a row from the fleet listing", () => {
     expect(index.get("lh_1")).toBe("VLESS-REALITY-443");
     expect(index.size).toBe(1);
     expect(lineNameIndex(undefined).size).toBe(0);
+  });
+});
+
+describe("a failed usage read", () => {
+  it("keeps the figures only when they were read for the period being asked about", () => {
+    const empty = { lines: [] as number[] };
+    const read7d = { lines: [1, 2, 3] };
+    // Refresh of the same period failed: the last good figures stay, labelled with their time.
+    expect(usageAfterFailedRead(read7d, "7d", "7d", empty)).toBe(read7d);
+    // Switched to 30 days and that read failed: the 7-day figures must not appear as 30 days.
+    expect(usageAfterFailedRead(read7d, "7d", "30d", empty)).toBe(empty);
+    // Nothing was ever read.
+    expect(usageAfterFailedRead(empty, undefined, "7d", empty)).toBe(empty);
   });
 });

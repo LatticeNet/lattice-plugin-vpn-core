@@ -371,6 +371,11 @@ export interface NodeEdge {
   unverified: number;
   /** Source line uuids, so a selection can narrow the canonical table. */
   sourceLineUUIDs: string[];
+  /**
+   * Source line hashes. Usage is reported per line hash, and a line that has
+   * no uuid yet still carries traffic, so the route map weighs edges by these.
+   */
+  sourceLineHashes?: string[];
 }
 
 export interface NodeGraph {
@@ -398,6 +403,16 @@ const KIND_STRENGTH: Record<TopologyEdgeKind, number> = {
  * Nodes that touch no edge are not drawn; the fleet table already lists them.
  */
 export function aggregateNodeGraph(groups: readonly LineGroup[], topology: ChainTopology): NodeGraph {
+  return clusterHubs(nodePairGraph(groups, topology));
+}
+
+/**
+ * The node graph before hubs are folded: one edge per node pair. The route
+ * map on the Lines overview draws this one, because each hub's traffic onto
+ * each exit is what its stroke width reports, and a folded box would sum it
+ * away.
+ */
+export function nodePairGraph(groups: readonly LineGroup[], topology: ChainTopology): NodeGraph {
   const nodeOfUUID = new Map<string, string>();
   const nodeOfHash = new Map<string, string>();
   const lineOfUUID = new Map<string, Line>();
@@ -446,7 +461,7 @@ export function aggregateNodeGraph(groups: readonly LineGroup[], topology: Chain
     const key = `${from} ${to}`;
     let pair = edgesByPair.get(key);
     if (!pair) {
-      pair = { id: `${from}->${to}`, from, to, count: 0, kind: value.kind, kinds: {}, unresolved: 0, unverified: 0, sourceLineUUIDs: [] };
+      pair = { id: `${from}->${to}`, from, to, count: 0, kind: value.kind, kinds: {}, unresolved: 0, unverified: 0, sourceLineUUIDs: [], sourceLineHashes: [] };
       edgesByPair.set(key, pair);
     }
     pair.count += 1;
@@ -454,6 +469,8 @@ export function aggregateNodeGraph(groups: readonly LineGroup[], topology: Chain
     if (KIND_STRENGTH[value.kind] > KIND_STRENGTH[pair.kind]) pair.kind = value.kind;
     if (!value.targetResolved) pair.unresolved += 1;
     if (!pair.sourceLineUUIDs.includes(value.from)) pair.sourceLineUUIDs.push(value.from);
+    const sourceHash = lineOfUUID.get(value.from)?.line_hash_id?.trim();
+    if (sourceHash && !pair.sourceLineHashes!.includes(sourceHash)) pair.sourceLineHashes!.push(sourceHash);
   }
 
   // Relays the server could not resolve by endpoint still relay somewhere.
@@ -484,7 +501,7 @@ export function aggregateNodeGraph(groups: readonly LineGroup[], topology: Chain
       const key = `${group.node_id} ${to}`;
       let pair = edgesByPair.get(key);
       if (!pair) {
-        pair = { id: `${group.node_id}->${to}`, from: group.node_id, to, count: 0, kind: "discovered_inferred", kinds: {}, unresolved: 0, unverified: 0, sourceLineUUIDs: [] };
+        pair = { id: `${group.node_id}->${to}`, from: group.node_id, to, count: 0, kind: "discovered_inferred", kinds: {}, unresolved: 0, unverified: 0, sourceLineUUIDs: [], sourceLineHashes: [] };
         edgesByPair.set(key, pair);
       }
       pair.count += 1;
@@ -493,11 +510,13 @@ export function aggregateNodeGraph(groups: readonly LineGroup[], topology: Chain
       else pair.unresolved += 1;
       const uuid = line.line_uuid?.trim();
       if (uuid && !pair.sourceLineUUIDs.includes(uuid)) pair.sourceLineUUIDs.push(uuid);
+      const hash = line.line_hash_id?.trim();
+      if (hash && !pair.sourceLineHashes!.includes(hash)) pair.sourceLineHashes!.push(hash);
     }
   }
 
   const nodes = [...boxes.values(), ...offFleet.values()].filter((box) => touched.has(box.id));
-  return clusterHubs({ nodes, edges: [...edgesByPair.values()] });
+  return { nodes, edges: [...edgesByPair.values()] };
 }
 
 /**
@@ -544,7 +563,7 @@ export function clusterHubs(graph: NodeGraph): NodeGraph {
     const key = `${from} ${edge.to}`;
     let pair = merged.get(key);
     if (!pair) {
-      pair = { ...edge, id: `${from}->${edge.to}`, from, kinds: { ...edge.kinds }, sourceLineUUIDs: [...edge.sourceLineUUIDs] };
+      pair = { ...edge, id: `${from}->${edge.to}`, from, kinds: { ...edge.kinds }, sourceLineUUIDs: [...edge.sourceLineUUIDs], sourceLineHashes: [...(edge.sourceLineHashes ?? [])] };
       merged.set(key, pair);
       continue;
     }
@@ -554,6 +573,7 @@ export function clusterHubs(graph: NodeGraph): NodeGraph {
     for (const [kind, count] of Object.entries(edge.kinds)) pair.kinds[kind as TopologyEdgeKind] = (pair.kinds[kind as TopologyEdgeKind] ?? 0) + (count ?? 0);
     if (KIND_STRENGTH[edge.kind] > KIND_STRENGTH[pair.kind]) pair.kind = edge.kind;
     for (const uuid of edge.sourceLineUUIDs) if (!pair.sourceLineUUIDs.includes(uuid)) pair.sourceLineUUIDs.push(uuid);
+    for (const hash of edge.sourceLineHashes ?? []) if (!pair.sourceLineHashes!.includes(hash)) pair.sourceLineHashes!.push(hash);
   }
   return { nodes, edges: [...merged.values()] };
 }
@@ -603,8 +623,24 @@ export const NODE_LAYOUT_MAX_ROWS = 12;
  * nothing is refused; `fitNodeLayout` decides how the result meets the
  * panel's width.
  */
-export function layoutNodeGraph(graph: NodeGraph, maxRows = NODE_LAYOUT_MAX_ROWS): NodeLayout {
+export interface NodeLayoutOptions {
+  boxWidth?: number;
+  boxHeight?: number;
+  rowGap?: number;
+  rankGap?: number;
+  pad?: number;
+  /** Order inside a rank; by label when absent. */
+  order?: (a: NodeBox, b: NodeBox) => number;
+}
+
+export function layoutNodeGraph(graph: NodeGraph, maxRows = NODE_LAYOUT_MAX_ROWS, options: NodeLayoutOptions = {}): NodeLayout {
   const rows = Math.max(1, maxRows);
+  const boxWidth = options.boxWidth ?? NODE_BOX_WIDTH;
+  const boxHeight = options.boxHeight ?? NODE_BOX_HEIGHT;
+  const rowGap = options.rowGap ?? ROW_GAP;
+  const rankGap = options.rankGap ?? RANK_GAP;
+  const pad = options.pad ?? PAD;
+  const order = options.order ?? ((a: NodeBox, b: NodeBox) => a.label.localeCompare(b.label));
   const ids = new Set(graph.nodes.map((node) => node.id));
   const incoming = new Map<string, string[]>();
   const outgoing = new Map<string, string[]>();
@@ -616,11 +652,28 @@ export function layoutNodeGraph(graph: NodeGraph, maxRows = NODE_LAYOUT_MAX_ROWS
 
   const rank = new Map<string, number>();
   let frontier = graph.nodes.filter((node) => !incoming.has(node.id)).map((node) => node.id);
+  // An edge back to a node still on the walk from a source closes a cycle
+  // (A to B to C to B). Ranking along it would push the cycle one column
+  // right on every pass until the pass limit, so it is left out of the
+  // ranking. It is still drawn.
+  const closesCycle = new Set<string>();
+  const walk = new Map<string, "open" | "done">();
+  const visit = (id: string): void => {
+    walk.set(id, "open");
+    for (const target of outgoing.get(id) ?? []) {
+      const seen = walk.get(target);
+      if (seen === "open") closesCycle.add(`${id}\u0000${target}`);
+      else if (!seen) visit(target);
+    }
+    walk.set(id, "done");
+  };
+  for (const id of frontier) visit(id);
   for (const id of frontier) rank.set(id, 0);
   for (let depth = 0; depth < graph.nodes.length && frontier.length; depth += 1) {
     const next: string[] = [];
     for (const id of frontier) {
       for (const target of outgoing.get(id) ?? []) {
+        if (closesCycle.has(`${id}\u0000${target}`)) continue;
         const candidate = (rank.get(id) ?? 0) + 1;
         if ((rank.get(target) ?? -1) < candidate) {
           rank.set(target, candidate);
@@ -640,10 +693,10 @@ export function layoutNodeGraph(graph: NodeGraph, maxRows = NODE_LAYOUT_MAX_ROWS
   }
   const ranks = [...perRank.keys()].sort((a, b) => a - b);
   const placed: NodeLayoutBox[] = [];
-  let x = PAD;
+  let x = pad;
   let tallest = 1;
   for (const value of ranks) {
-    const members = [...(perRank.get(value) ?? [])].sort((a, b) => a.label.localeCompare(b.label));
+    const members = [...(perRank.get(value) ?? [])].sort(order);
     const columns = Math.max(1, Math.ceil(members.length / rows));
     tallest = Math.max(tallest, Math.min(rows, members.length));
     members.forEach((node, index) => {
@@ -652,14 +705,14 @@ export function layoutNodeGraph(graph: NodeGraph, maxRows = NODE_LAYOUT_MAX_ROWS
       placed.push({
         ...node,
         rank: value,
-        x: x + column * (NODE_BOX_WIDTH + SUBCOLUMN_GAP),
-        y: PAD + row * (NODE_BOX_HEIGHT + ROW_GAP),
+        x: x + column * (boxWidth + SUBCOLUMN_GAP),
+        y: pad + row * (boxHeight + rowGap),
       });
     });
-    x += columns * NODE_BOX_WIDTH + (columns - 1) * SUBCOLUMN_GAP + RANK_GAP;
+    x += columns * boxWidth + (columns - 1) * SUBCOLUMN_GAP + rankGap;
   }
-  const width = ranks.length ? x - RANK_GAP + PAD : PAD * 2;
-  const height = PAD * 2 + tallest * NODE_BOX_HEIGHT + (tallest - 1) * ROW_GAP;
+  const width = ranks.length ? x - rankGap + pad : pad * 2;
+  const height = pad * 2 + tallest * boxHeight + (tallest - 1) * rowGap;
 
   const byID = new Map(placed.map((node) => [node.id, node]));
   const edges: NodeLayoutEdge[] = [];
@@ -667,10 +720,10 @@ export function layoutNodeGraph(graph: NodeGraph, maxRows = NODE_LAYOUT_MAX_ROWS
     const from = byID.get(value.from);
     const to = byID.get(value.to);
     if (!from || !to) continue;
-    const half = NODE_BOX_HEIGHT / 2;
+    const half = boxHeight / 2;
     edges.push({
       ...value,
-      x1: from.x + NODE_BOX_WIDTH,
+      x1: from.x + boxWidth,
       y1: from.y + half,
       x2: to.x,
       y2: to.y + half,

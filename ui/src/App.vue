@@ -21,44 +21,60 @@ import {
 } from "@lucide/vue";
 
 import { BridgeClient, canCall, type HostInit } from "./bridge";
-import { attentionItems, buildNodeRows, lineRole, livenessSummary, normalizeServiceNote, summarizeFleet, type AttentionItem, type Bank, type NodeRow, type ServiceVerdict } from "./fleetRows";
+import { attentionItems, livenessSummary, summarizeFleet, type AttentionItem } from "./fleetRows";
 import LineChainWorkspace from "./LineChainWorkspace.vue";
+import { lineBytes, lineStateOf, type GroupBy, type LineTrafficIndex } from "./lineGroups";
+import { chainPath, hopRoleLabel } from "./linePath";
+import LinesOverview from "./LinesOverview.vue";
+import LinesTable from "./LinesTable.vue";
+import {
+  createStateSender,
+  decodePageState,
+  documentPageState,
+  encodePageState,
+  writeDocumentState,
+  type LinesView,
+  type PageState,
+  type StateSender,
+  type VpnPageState,
+} from "./pageState";
+import { bytesByLine, egressByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
 import UsageScreen from "./UsageScreen.vue";
 import {
+  attributionLabel,
   collectorLabel,
   collectorReports,
   collectorTone,
   coverageNote,
+  measurementLabel,
   quotaResetDayFromInput,
   quotaState,
+  roleLabel,
   summarizeAllocation,
-  type UsageCollectorRow,
+  usageAfterFailedRead,
+  USAGE_PERIODS,
+  periodLabel,
   type UsageLineRow,
+  type StackBy,
   type UsagePeriod,
+  type UsageView,
 } from "./usageModel";
 import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
 import {
-  filterLineGroups,
   formatBytes,
   formatLineDomain,
   formatLineEndpoint,
   formatLineListen,
   lineErrorText,
   lineOwnership,
-  lineStatus,
-  lineServiceTone,
-  overlayCoverage,
   overlayTone,
-  pageRows,
   rolloutSummaryLine,
   safeErrorMessage,
   unresolvedOverlayDefs,
   quotaBytesFromInput,
   type Line,
-  type LineSortKey,
-  type SortDirection,
   type LineChain,
   type LineGroup,
   type ManagedLineDef,
@@ -174,6 +190,10 @@ interface UsageResult {
   period?: string;
   from?: string;
   to?: string;
+  /** Daily bytes per node and role. Omitted by a server older than design-22. */
+  series?: UsageSeries;
+  /** The equal-length window before this one, for today, 7d and 30d; omitted otherwise. */
+  previous?: UsagePrevious;
 }
 
 const init = ref<HostInit>();
@@ -182,16 +202,22 @@ const error = ref("");
 const notice = ref("");
 const loading = ref(true);
 const refreshing = ref(false);
-const search = ref("");
 const lines = ref<LineGroup[]>([]);
 const chains = ref<LineChain[]>([]);
 const users = ref<VpnUser[]>([]);
 const profiles = ref<Profile[]>([]);
-const usage = ref<UsageResult>({ by_user: [], by_node: [], rows: [], collectors: [], per_line: false, lines: [] });
+const emptyUsage = (): UsageResult => ({ by_user: [], by_node: [], rows: [], collectors: [], per_line: false, lines: [] });
+const usage = ref<UsageResult>(emptyUsage());
+/** The period `usage` was read for; undefined until a read succeeds. */
+const usageReadPeriod = ref<UsagePeriod>();
 /* The period is the operator's choice and it drives the server call, so it
  * lives here rather than inside the screen: a refresh must reload the period
  * being looked at, not the default one. */
-const usagePeriod = ref<UsagePeriod>("30d");
+/* Before the host says where the operator was, the page starts from its own
+ * document query: empty under any real console, set only when a host that
+ * keeps no page state let the frame keep it (see pageState.ts). */
+const startState = decodePageState(documentPageState());
+const usagePeriod = ref<UsagePeriod>(startState.period);
 const managedDefs = ref<ManagedLineDef[]>([]);
 
 let bridge: BridgeClient | undefined;
@@ -199,6 +225,7 @@ try {
   bridge = new BridgeClient(window);
   bridge.init.then(async (value) => {
     init.value = value;
+    adoptPageState(value);
     await loadCurrent();
   }).catch((cause) => {
     bootError.value = safeErrorMessage(cause, "Plugin host unavailable");
@@ -211,126 +238,136 @@ try {
 
 const route = computed(() => init.value?.pluginRoute ?? "lines");
 const routeMeta = computed(() => ({
-  lines: { title: "Lines", description: "Managed and discovered proxy endpoints across the fleet.", icon: Radar },
+  lines: { title: "Lines", description: "Where traffic enters, which node it leaves from, and every line on the way.", icon: Radar },
   users: { title: "Users", description: "Protocol credentials and line-level access bindings.", icon: Users },
   profiles: { title: "Node Profiles", description: "Runtime ownership, discovery and collector readiness.", icon: ServerCog },
-  usage: { title: "Usage", description: "Traffic accounting by user and reporting node.", icon: Gauge },
+  usage: { title: "Usage", description: "Traffic over time, per exit, and who it belongs to where that is known.", icon: Gauge },
 }[route.value] ?? { title: "VPN Core", description: "sing-box management", icon: Radar }));
-const visibleLineGroups = computed(() => filterLineGroups(lines.value, search.value));
-// ── lenses over one dataset ──────────────────────────────────────────────
-// Fleet is nodes with their lines folded underneath; Topology is the node
-// graph with the canonical chain table; Attention is every claim the page can
-// prove that needs a hand. All three read the same `lines` and `chains`.
-type Lens = "fleet" | "topology" | "attention";
-/* The plugin document's own query string can open a lens or a node, so a
- * host, a reviewer or an agent can deep-link a state (`?lens=topology`,
- * `?expand=<node_id>`). Production loads the document without a query today;
- * nothing here depends on one being present. */
-const documentQuery = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
-const LENSES: readonly Lens[] = ["fleet", "topology", "attention"];
-const requestedLens = documentQuery.get("lens");
-const lens = ref<Lens>(LENSES.includes(requestedLens as Lens) ? (requestedLens as Lens) : "fleet");
+// ── layers ───────────────────────────────────────────────────────────────
+// Lines has four layers over one dataset and Usage four over its own. The
+// layer (`view`), the open line (`open`), the table's grouping (`group`) and
+// search (`q`), and Usage's period and chart stacking are the page's state,
+// and the console keeps it in its own address (pageState.ts), so a reload
+// lands where the operator was and a link names a state.
+const linesView = ref<LinesView>(startState.linesView);
+const usageView = ref<UsageView>(startState.usageView);
+const groupBy = ref<GroupBy>(startState.group);
+const search = ref(startState.q);
+const usageStack = ref<StackBy>(startState.stack);
+/** A line named by the address, opened once the listing that holds it arrives. */
+const pendingOpen = ref(startState.open);
+
+function applyPageState(state: VpnPageState): void {
+  linesView.value = state.linesView;
+  usageView.value = state.usageView;
+  groupBy.value = state.group;
+  search.value = state.q;
+  pendingOpen.value = state.open;
+  usagePeriod.value = state.period;
+  usageStack.value = state.stack;
+  expandedUsers.value = new Set(state.expand);
+}
+
+const pageState = computed<PageState>(() => encodePageState(route.value, {
+  linesView: linesView.value,
+  usageView: usageView.value,
+  group: groupBy.value,
+  q: search.value,
+  // Until the listing arrives, a line the address asked for stays asked for.
+  open: lineDetailOpen.value ? (lineDetail.value?.line_hash_id ?? "") : pendingOpen.value,
+  period: usagePeriod.value,
+  stack: usageStack.value,
+  expand: [...expandedUsers.value],
+}));
+
+/* The state goes out only after init, and only once the operator changes
+ * something: before init the page has not seen the address, and right after
+ * it the page's reading of that address (defaults filled in, unknown values
+ * dropped) is not a reason to rewrite a pasted link. */
+let stateSender: StateSender | undefined;
+let hostKeepsState = false;
+
+function adoptPageState(value: HostInit): void {
+  hostKeepsState = value.pageState !== undefined;
+  if (value.pageState) applyPageState(decodePageState(value.pageState));
+  const client = bridge;
+  stateSender?.dispose();
+  stateSender = createStateSender((state) => client?.sendState(state), { baseline: pageState.value });
+  publishPageState(pageState.value);
+}
+
+function publishPageState(state: PageState): void {
+  if (!stateSender) return;
+  // A host that keeps no page state ignores the message; the frame's own
+  // query is then the only place the state can survive a frame reload.
+  if (!hostKeepsState) writeDocumentState(state);
+  stateSender.push(state);
+}
+
 const fleetSummary = computed(() => summarizeFleet(lines.value));
-const nodeRows = computed(() => buildNodeRows(visibleLineGroups.value));
 const attention = computed(() => attentionItems(lines.value));
 const attentionErrors = computed(() => attention.value.filter((item) => item.severity === "error").length);
 const attentionWarnings = computed(() => attention.value.filter((item) => item.severity === "warning").length);
 const attentionTone = computed(() => attentionErrors.value ? "error" : attentionWarnings.value ? "warning" : "neutral");
-/* One statement of what the probes said, so the tile, the proof line and
- * the attention row cannot disagree about it. */
+/* What needs a hand: errors and warnings. Information items (no line is
+ * managed, a liveness note) are legitimate states; they stay in the Attention
+ * list but do not count toward its badge or take a place on the overview. */
+const actionable = computed(() => attention.value.filter((item) => item.severity !== "info"));
+/* One statement of what the probes said, so the proof line and the attention
+ * row cannot disagree about it. */
 const liveness = computed(() => livenessSummary(lines.value));
-const searching = computed(() => search.value.trim().length > 0);
 
-/* 25 node rows is one screen and, today, the whole fleet. Lines open under a
- * node on demand, so the painted area stays a page rather than a scroll. */
-const NODE_PAGE_SIZE = 25;
-const nodePage = ref(1);
-const nodePageData = computed(() => pageRows(nodeRows.value, nodePage.value, NODE_PAGE_SIZE));
-watch(search, () => { nodePage.value = 1; });
-
-const expandedNodes = ref(new Set<string>(documentQuery.getAll("expand").filter(Boolean)));
-const expandedBanks = ref(new Set<string>(documentQuery.getAll("bank").filter(Boolean)));
 function toggled(current: Set<string>, key: string): Set<string> {
   const next = new Set(current);
   if (next.has(key)) next.delete(key);
   else next.add(key);
   return next;
 }
-function toggleNode(nodeID: string): void {
-  expandedNodes.value = toggled(expandedNodes.value, nodeID);
-}
-function toggleBank(key: string): void {
-  expandedBanks.value = toggled(expandedBanks.value, key);
-}
-/* A search opens every matching node, because the operator asked for lines,
- * not for nodes; without a search a node opens only when asked. */
-function nodeOpen(row: NodeRow): boolean {
-  return searching.value || expandedNodes.value.has(row.group.node_id);
-}
-function bankOpen(bank: Bank): boolean {
-  return expandedBanks.value.has(bank.key);
-}
 
-type FleetEntry = { kind: "bank"; bank: Bank } | { kind: "line"; line: Line; bank?: Bank };
-function fleetEntries(row: NodeRow): FleetEntry[] {
-  const entries: FleetEntry[] = [];
-  for (const bank of row.banks) {
-    entries.push({ kind: "bank", bank });
-    if (bankOpen(bank)) for (const line of bank.lines) entries.push({ kind: "line", line, bank });
-  }
-  for (const line of row.singles) entries.push({ kind: "line", line });
-  return entries;
-}
-
-const nodeNames = computed(() => new Map(lines.value.map((group) => [group.node_id, group.node_name || group.node_id])));
 function nodeNameOf(id: string): string {
-  return nodeNames.value.get(id) ?? id;
+  const group = lines.value.find((value) => value.node_id === id);
+  return group?.node_name || id;
 }
-function bankTargets(bank: Bank): string {
-  const names = bank.targetNodeIDs.map(nodeNameOf);
-  const shown = names.slice(0, 3).join(", ");
-  const rest = names.length > 3 ? ` and ${names.length - 3} more` : "";
-  const off = bank.offFleet ? `${names.length ? "; " : ""}${bank.offFleet} off-fleet` : "";
-  return `${shown}${rest}${off}` || "no resolved target";
+/* The overview's node rows and map boxes open that node's lines: the Lines
+ * layer, searched to the node, which lists them flat. */
+function showLinesOf(nodeID: string): void {
+  search.value = nodeNameOf(nodeID);
+  linesView.value = "lines";
 }
-function roleLabel(line: Line): string {
-  const role = lineRole(line);
-  if (role === "orphan") return "no outbound";
-  return role;
+function showAllLines(): void {
+  search.value = "";
+  linesView.value = "lines";
 }
-function serviceLabel(verdict: ServiceVerdict): string {
-  return ({
-    running: "running",
-    down: "down",
-    restarting: "restarting",
-    partial: "partly reported",
-    unknown: "not reported",
-  } as const)[verdict];
-}
-function serviceTone(verdict: ServiceVerdict): "healthy" | "warning" | "error" | "neutral" {
-  return ({ running: "healthy", down: "error", restarting: "warning", partial: "warning", unknown: "neutral" } as const)[verdict];
-}
-function lineServiceLabel(line: Line): string {
-  const state = (line.service_state ?? "").trim();
-  if (state && state !== "unknown") return state;
-  // "not reported" is a probe that never ran; "unproven" is a probe that ran
-  // and refused to guess. The tile and the proof line say unproven, so the
-  // cell has to say it too, and the note is the evidence on hover.
-  return line.service_note ? "unproven" : "not reported";
-}
-function lineServiceTitle(line: Line): string | undefined {
-  if (line.service_note) return normalizeServiceNote(line.service_note).text;
-  return line.service_checked_at ? `checked ${line.service_checked_at}` : undefined;
-}
-/** The node row's verdict word, with the same unproven rule as its lines. */
-function nodeServiceLabel(row: NodeRow): string {
-  if (row.service === "unknown" && row.group.lines.some((line) => line.service_note)) return "unproven";
-  return serviceLabel(row.service);
-}
-function nodeServiceTitle(row: NodeRow): string | undefined {
-  const noted = row.group.lines.find((line) => line.service_note);
-  return noted?.service_note ? normalizeServiceNote(noted.service_note).text : undefined;
-}
+
+// ── seven days of traffic for Lines ──────────────────────────────────────
+const LINES_PERIOD: UsagePeriod = "7d";
+const LINES_PERIOD_LABEL = "7 days";
+const lineUsage = ref<UsageResult>();
+const lineUsageError = ref("");
+/* Known means read and measured: a fleet where no collector reports has
+ * unknown traffic, and a zero there would be a claim nobody measured. */
+const lineCollectorsReporting = computed(() => (lineUsage.value?.collectors ?? []).filter((row) => row.status === "ok").length);
+const lineUsageKnown = computed(() => !!lineUsage.value && !lineUsageError.value
+  && (lineCollectorsReporting.value > 0 || (lineUsage.value.lines ?? []).length > 0));
+const lineTraffic = computed<LineTrafficIndex>(() => ({
+  known: lineUsageKnown.value,
+  byLine: bytesByLine(lineUsage.value?.lines),
+  egressByLine: egressByLine(lineUsage.value?.lines),
+  reportingNodes: new Set((lineUsage.value?.collectors ?? []).filter((row) => row.status === "ok").map((row) => row.node_id)),
+}));
+const lineNodeTraffic = computed(() => trafficByNode(lineUsage.value?.lines));
+const lineEgress = computed(() => (lineUsageKnown.value ? roleTotals(lineUsage.value?.lines).egress : undefined));
+const lineUsageNote = computed(() => {
+  if (lineUsageError.value) return `Traffic is unknown, not zero: the usage read failed (${lineUsageError.value}).`;
+  if (lineUsage.value) return "Traffic is unknown, not zero: no node reports usage. Set a usage source under Node Profiles.";
+  return "Traffic is unknown, not zero: this session cannot read usage.";
+});
+const collectorsLine = computed(() => {
+  if (lineUsageError.value || !lineUsage.value) return "traffic unknown";
+  const all = lineUsage.value?.collectors ?? [];
+  const ok = all.filter((row) => row.status === "ok").length;
+  return ok === all.length ? `${all.length} collectors ok` : `${ok} of ${all.length} collectors ok`;
+});
 
 /* The proof line: when the page last heard from the control plane. The
  * plugin holds no timer (refreshPolicy.test.ts guards that), so the time is
@@ -357,10 +394,10 @@ const livenessLine = computed(() => {
   return `liveness: ${parts.join(", ")}`;
 });
 
-function attentionRow(item: AttentionItem): { group: LineGroup; line: Line } | undefined {
-  if (!item.lineHashID) return undefined;
+function findLine(hash: string | undefined): { group: LineGroup; line: Line } | undefined {
+  if (!hash) return undefined;
   for (const group of lines.value) {
-    const line = group.lines.find((value) => value.line_hash_id === item.lineHashID);
+    const line = group.lines.find((value) => value.line_hash_id === hash);
     if (line) return { group, line };
   }
   return undefined;
@@ -379,6 +416,10 @@ function openProfiles(): void {
   if (!hostOrigin) return;
   postNavigate(window, "/plugins/latticenet.vpn-core/profiles", hostOrigin);
 }
+function openUsers(): void {
+  if (!hostOrigin) return;
+  postNavigate(window, "/plugins/latticenet.vpn-core/users", hostOrigin);
+}
 function openAttention(item: AttentionItem): void {
   if (item.action === "rollout") {
     openRollout();
@@ -388,12 +429,21 @@ function openAttention(item: AttentionItem): void {
     openProfiles();
     return;
   }
-  const found = attentionRow(item);
+  const found = findLine(item.lineHashID);
   if (found) void openLineDetails(found.group, found.line);
 }
+/* Which attention actions this session can take, and what the button says.
+ * A line's panel opens for any session; the actions inside it keep their gates. */
+function canActOn(item: AttentionItem): boolean {
+  if (item.action === "details") return !!findLine(item.lineHashID);
+  if (item.action === "rollout") return canRollout.value;
+  if (item.action === "profiles") return canOpenEvidence;
+  return false;
+}
+function actionLabelOf(item: AttentionItem): string {
+  return ({ details: "Open line", rollout: "Roll out", profiles: "Node Profiles", none: "" } as const)[item.action];
+}
 const allLines = computed(() => lines.value.flatMap((group) => group.lines));
-const healthyLines = computed(() => allLines.value.filter((line) => lineStatus(line) === "healthy").length);
-const managedLines = computed(() => allLines.value.filter((line) => line.managed).length);
 const lineOptions = computed(() => lines.value.flatMap((group) => group.lines.map((line) => ({
   id: line.line_hash_id,
   label: `${group.node_name || group.node_id} / ${line.name}`,
@@ -433,10 +483,10 @@ function usedLabel(user: VpnUser): string {
   return `${prefix}${formatBytes(user.used_period_bytes)}`;
 }
 
-/* Same deep-link contract as the fleet lens above: `?expand=<user_id>` opens
- * an identity's allocated nodes, so a host, a reviewer or an agent can link
+/* Page state like the layers above: `expand=<user_id>,<user_id>` opens those
+ * identities' allocated nodes, so a host, a reviewer or an agent can link
  * straight to the state being discussed. */
-const expandedUsers = ref(new Set<string>(documentQuery.getAll("expand").filter(Boolean)));
+const expandedUsers = ref(new Set<string>(startState.expand));
 function toggleUser(id: string): void {
   expandedUsers.value = toggled(expandedUsers.value, id);
 }
@@ -468,7 +518,6 @@ const canSyncMetadata = computed(() => canCall(init.value, SERVICES.lines, "sync
 const canReattachLine = computed(() => canCall(init.value, SERVICES.lines, "reattach"));
 const canReadManaged = computed(() => canCall(init.value, SERVICES.lines, "managed"));
 const canRollout = computed(() => canCall(init.value, SERVICES.lines, "rollout"));
-const overlayStats = computed(() => overlayCoverage(lines.value));
 const unresolvedDefs = computed(() => unresolvedOverlayDefs(managedDefs.value, lines.value));
 const rolloutableUsers = computed(() => users.value.filter((user) =>
   user.enabled && user.credentials.some((cred) => cred.protocol === "vless" && cred.has_secret)));
@@ -556,7 +605,23 @@ async function loadCurrent(background = false): Promise<void> {
           calls.push(pluginCall<{ users: VpnUser[] }>(SERVICES.users, "list")
             .then((result) => { users.value = result.users ?? []; }));
         }
+        // Seven days of usage for the traffic cells, the map's widths and the
+        // egress figure. Losing it costs those and nothing else, so it never
+        // fails the page, and every figure it feeds says "unknown" instead.
+        if (canCall(init.value, SERVICES.usage, "query")) {
+          calls.push(pluginCall<UsageResult>(SERVICES.usage, "query", { period: LINES_PERIOD })
+            .then((result) => { lineUsage.value = result; lineUsageError.value = ""; })
+            .catch((cause) => { lineUsage.value = undefined; lineUsageError.value = safeErrorMessage(cause, "the usage read failed"); }));
+        } else {
+          lineUsage.value = undefined;
+          lineUsageError.value = "";
+        }
         await Promise.all(calls);
+        if (pendingOpen.value) {
+          const found = findLine(pendingOpen.value);
+          pendingOpen.value = "";
+          if (found) void openLineDetails(found.group, found.line);
+        }
         break;
       }
       case "users": {
@@ -578,11 +643,21 @@ async function loadCurrent(background = false): Promise<void> {
         // the user listing carries each quota. Both are the same cached read
         // models the other views use, so this costs cache reads on the server
         // rather than a second fleet walk.
-        const [usageResult, lineResult] = await Promise.all([
-          pluginCall<UsageResult>(SERVICES.usage, "query", { period: usagePeriod.value }),
-          pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list"),
-        ]);
-        usage.value = { ...usageResult, rows: usageResult.rows ?? [], lines: usageResult.lines ?? [] };
+        const period = usagePeriod.value;
+        let usageResult: UsageResult;
+        let lineResult: { groups: LineGroup[] };
+        try {
+          [usageResult, lineResult] = await Promise.all([
+            pluginCall<UsageResult>(SERVICES.usage, "query", { period }),
+            pluginCall<{ groups: LineGroup[] }>(SERVICES.lines, "list"),
+          ]);
+        } catch (cause) {
+          usage.value = usageAfterFailedRead(usage.value, usageReadPeriod.value, period, emptyUsage());
+          if (usageReadPeriod.value !== period) usageReadPeriod.value = undefined;
+          throw cause;
+        }
+        usageReadPeriod.value = period;
+        usage.value = { ...usageResult, rows: usageResult.rows ?? [], lines: usageResult.lines ?? [], collectors: usageResult.collectors ?? [] };
         lines.value = lineResult.groups ?? [];
         // Quotas belong to the identity, not to the usage rows, so the screen
         // needs the user listing to say "91% of 500 GiB". Losing it costs the
@@ -804,6 +879,15 @@ async function deleteUser(): Promise<void> {
   }
 }
 
+/* ── the line panel's read-only parts ───────────────────────────────────── */
+const lineDetailPath = computed(() => (lineDetail.value ? chainPath(lines.value, lineDetail.value) : []));
+const lineDetailState = computed(() => (lineDetail.value ? lineStateOf(lineDetail.value) : undefined));
+const lineDetailRows = computed<UsageLineRow[]>(() =>
+  (lineUsage.value?.lines ?? []).filter((row) => !!lineDetail.value && row.line_hash_id === lineDetail.value.line_hash_id));
+const lineDetailBytes = computed(() => (lineDetail.value ? lineBytes(lineTraffic.value, lineDetail.value) : undefined));
+const lineDetailUp = computed(() => lineDetailRows.value.reduce((sum, row) => sum + (row.uplink || 0), 0));
+const lineDetailDown = computed(() => lineDetailRows.value.reduce((sum, row) => sum + (row.downlink || 0), 0));
+
 function currentBindingUser(): VpnUser | undefined {
   return users.value.find((user) => user.id === bindingUser.value?.id);
 }
@@ -841,8 +925,13 @@ const lineDetailError = ref("");
 const lineDetail = ref<Line>();
 const lineDetailNodeName = ref("");
 
+/* The panel opens from the listing for any session; the detail read, which
+ * adds metadata and the declared identity, runs where the session may call it. */
 async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
-  if (!canViewLineDetails.value) return;
+  // Remember what opened the panel, so closing it puts keyboard focus back on
+  // that row instead of the top of a 136-row table.
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  lineDetailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
   lineDetail.value = line;
   lineDetailNodeName.value = group.node_name || group.node_id;
   lineDetailError.value = "";
@@ -850,14 +939,16 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   lineUsersError.value = "";
   lineUserAdd.value = "";
   lineDetailOpen.value = true;
-  lineDetailBusy.value = true;
-  try {
-    const result = await pluginCall<{ line: Line }>(SERVICES.lines, "get", { line_hash_id: line.line_hash_id });
-    if (result.line) lineDetail.value = result.line;
-  } catch (cause) {
-    lineDetailError.value = safeErrorMessage(cause, "Line details are unavailable");
-  } finally {
-    lineDetailBusy.value = false;
+  if (canViewLineDetails.value) {
+    lineDetailBusy.value = true;
+    try {
+      const result = await pluginCall<{ line: Line }>(SERVICES.lines, "get", { line_hash_id: line.line_hash_id });
+      if (result.line && lineDetail.value?.line_hash_id === line.line_hash_id) lineDetail.value = result.line;
+    } catch (cause) {
+      lineDetailError.value = safeErrorMessage(cause, "Line details are unavailable");
+    } finally {
+      lineDetailBusy.value = false;
+    }
   }
   // Best effort: the on-node user section lists bound identities.
   try {
@@ -871,7 +962,24 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   }
 }
 
+let lineDetailOpener: HTMLElement | null = null;
+
+/* Focus returns to the opener, or, when that element was re-rendered while
+ * the panel was open, to the same line's row button. */
+function restoreLineFocus(hash: string | undefined): void {
+  const opener = lineDetailOpener;
+  lineDetailOpener = null;
+  if (opener?.isConnected) {
+    opener.focus();
+    return;
+  }
+  if (!hash || typeof document === "undefined") return;
+  document.querySelector<HTMLElement>(`[data-line-open="${CSS.escape(hash)}"]`)?.focus();
+}
+
 function closeLineDetails(): void {
+  const hash = lineDetail.value?.line_hash_id;
+  void nextTick(() => restoreLineFocus(hash));
   lineDetailOpen.value = false;
   lineDetailBusy.value = false;
   lineDetailError.value = "";
@@ -1164,6 +1272,11 @@ watch(openOverlayKey, async (key) => {
 // the host sizes itself, so a page that reported its own height was running a
 // full synchronous layout of an 8800px document on every body resize and
 // throwing the answer away.
+
+/* Here rather than beside pageState: the watcher reads its getter at once,
+ * and that getter touches refs declared further down the setup. */
+watch(pageState, publishPageState);
+
 onMounted(() => {
   document.addEventListener("pointerdown", recordAnchor, true);
   window.addEventListener("keydown", onKeydown);
@@ -1172,6 +1285,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", recordAnchor, true);
   window.removeEventListener("keydown", onKeydown);
+  stateSender?.dispose();
   bridge?.dispose();
 });
 </script>
@@ -1184,11 +1298,25 @@ onBeforeUnmount(() => {
         <div class="title-line"><h1>{{ routeMeta.title }}</h1><span class="plugin-label">VPN Core plugin</span></div>
         <p>{{ routeMeta.description }}</p>
       </div>
-      <button class="button button-secondary" type="button" :disabled="loading || refreshing" @click="loadCurrent(true)">
-        <LoaderCircle v-if="refreshing" class="spin" :size="15" aria-hidden="true" />
-        <RefreshCw v-else :size="15" aria-hidden="true" />
-        Refresh
-      </button>
+      <div class="header-actions">
+        <div v-if="route === 'usage'" class="period-picker" role="group" aria-label="Usage period">
+          <button
+            v-for="value in USAGE_PERIODS"
+            :key="value"
+            class="period-option"
+            type="button"
+            :aria-pressed="usagePeriod === value"
+            :disabled="refreshing"
+            @click="setUsagePeriod(value)"
+          >{{ periodLabel(value) }}</button>
+        </div>
+        <button class="button button-secondary" type="button" :disabled="loading || refreshing" @click="loadCurrent(true)">
+          <LoaderCircle v-if="refreshing" class="spin" :size="15" aria-hidden="true" />
+          <RefreshCw v-else :size="15" aria-hidden="true" />
+          Refresh
+        </button>
+        <button v-if="route === 'lines' && canRollout && allLines.length" class="button button-primary" type="button" @click="openRollout"><Plus :size="15" aria-hidden="true" /> Roll out managed lines</button>
+      </div>
     </header>
 
     <div v-if="bootError || error" class="alert" role="alert">
@@ -1230,37 +1358,19 @@ onBeforeUnmount(() => {
         <span v-if="refreshedAt">observed at {{ observedAtLabel }}</span>
         <span v-else>not observed yet</span>
         <span>· {{ fleetSummary.nodes }} {{ fleetSummary.nodes === 1 ? 'node reports' : 'nodes report' }}</span>
+        <span>· {{ fleetSummary.lines }} lines</span>
+        <span>· {{ collectorsLine }}</span>
         <span>· {{ livenessLine }}</span>
         <span v-if="refreshing">· refreshing</span>
       </p>
-      <section class="summary-strip" aria-label="Line summary" style="--stat-count: 5">
-        <div><span>Lines</span><strong>{{ fleetSummary.lines }}</strong><small>{{ fleetSummary.configErrors ? `${fleetSummary.configErrors} reporting a config error` : 'none reporting a config error' }}</small></div>
-        <div :data-tone="fleetSummary.lines && !fleetSummary.managed ? 'warning' : undefined"><span>Lattice-managed</span><strong>{{ fleetSummary.managed }}</strong><small>{{ fleetSummary.lines - fleetSummary.managed }} discovered only</small></div>
-        <div><span>Roles</span><strong>{{ fleetSummary.relays }} relay · {{ fleetSummary.exits }} exit</strong><small>{{ fleetSummary.orphans ? `${fleetSummary.orphans} with no outbound` : 'every line has an outbound' }}</small></div>
-        <div><span>Nodes</span><strong>{{ fleetSummary.nodes }}</strong><small v-if="canReadManaged">{{ overlayStats.covered }} of {{ overlayStats.total }} carry a managed line</small></div>
-        <div :data-tone="fleetSummary.service.down ? 'error' : fleetSummary.service.reported ? undefined : liveness.unprovenNodes ? 'warning' : 'neutral'">
-          <span>Service</span>
-          <strong v-if="fleetSummary.service.reported">{{ fleetSummary.service.running }} running<template v-if="fleetSummary.service.down"> · {{ fleetSummary.service.down }} down</template></strong>
-          <strong v-else-if="liveness.unprovenNodes">unproven</strong>
-          <strong v-else>not reported</strong>
-          <small v-if="fleetSummary.service.reported">{{ fleetSummary.service.unknown ? `${fleetSummary.service.unknown} lines not reported` : 'every line reported' }}</small>
-          <small v-else-if="liveness.unprovenNodes">{{ liveness.refusedPath ? `the probe refused ${liveness.refusedPath} on ${liveness.unprovenNodes} nodes` : `the probe could not prove it on ${liveness.unprovenNodes} nodes` }}</small>
-          <small v-else>config verdict only; the probe ships with agent 0.3.9</small>
-        </div>
-      </section>
-      <section class="toolbar">
-        <div class="lens-switch" role="tablist" aria-label="Lines lens">
-          <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'fleet'" @click="lens = 'fleet'">Fleet</button>
-          <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'topology'" @click="lens = 'topology'">Topology</button>
-          <button class="lens-tab" role="tab" type="button" :aria-selected="lens === 'attention'" @click="lens = 'attention'">
-            Attention<span v-if="attention.length" class="lens-count" :data-tone="attentionTone">{{ attention.length }}</span>
-          </button>
-        </div>
-        <input v-model="search" class="search-input" type="search" aria-label="Search lines" placeholder="Search node, line, endpoint, outbound or error" />
-        <span v-if="searching" class="permission-note">{{ nodeRows.length }} of {{ lines.length }} nodes match</span>
-        <span class="toolbar-spacer" />
-        <button v-if="canRollout" class="button button-primary" type="button" @click="openRollout"><Plus :size="15" /> Roll out managed lines</button>
-      </section>
+      <nav class="layer-tabs" role="tablist" aria-label="Lines layers">
+        <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'overview'" @click="linesView = 'overview'">Overview</button>
+        <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'lines'" @click="linesView = 'lines'">Lines<span class="lens-count">{{ fleetSummary.lines }}</span></button>
+        <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'topology'" @click="linesView = 'topology'">Topology</button>
+        <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'attention'" @click="linesView = 'attention'">
+          Attention<span v-if="actionable.length" class="lens-count" :data-tone="attentionTone">{{ actionable.length }}</span>
+        </button>
+      </nav>
       <section v-if="unresolvedDefs.length" class="data-panel overlay-strip" aria-label="Managed line rollout status">
         <div v-for="def in unresolvedDefs" :key="def.line_uuid" class="overlay-def">
           <span class="badge" :data-tone="overlayTone(def.status)">{{ def.status }}</span>
@@ -1271,139 +1381,58 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-if="lens === 'fleet'" class="data-panel fleet-panel" role="tabpanel">
-        <header class="panel-header">
-          <div><h2>Fleet</h2><p>Every node that reports an inbound, with its lines folded underneath. A bank is a set of relay lines of one protocol that all dial out.</p></div>
-          <span class="count">{{ nodeRows.length }} {{ nodeRows.length === 1 ? 'node' : 'nodes' }} · {{ fleetSummary.lines }} lines</span>
-        </header>
-        <div v-if="nodeRows.length" class="table-wrap"><table class="fleet-table">
-          <thead><tr>
-            <th class="fleet-name">Node / line</th>
-            <th>Role</th>
-            <th>Endpoint</th>
-            <th>Reality SNI</th>
-            <th class="num">Users</th>
-            <th>Outbound</th>
-            <th>Config</th>
-            <th>Service</th>
-            <th v-if="canViewLineDetails" class="actions-cell">Actions</th>
-          </tr></thead>
-          <tbody v-for="row in nodePageData.rows" :key="row.group.node_id" :data-open="nodeOpen(row) ? 'true' : 'false'">
-            <tr class="node-row">
-              <td class="fleet-name">
-                <button class="node-toggle" type="button" :aria-expanded="nodeOpen(row)" :aria-controls="`node-${row.group.node_id}`" @click="toggleNode(row.group.node_id)">
-                  <ChevronRight class="node-chevron" :size="14" aria-hidden="true" />
-                  <strong :title="row.group.node_name || row.group.node_id">{{ row.group.node_name || row.group.node_id }}</strong>
-                </button>
-                <small :title="row.group.node_id">{{ row.group.node_id }}</small>
-                <!-- On a phone the verdict columns sit off to the right; the
-                     red state has to be readable without a sideways scroll. -->
-                <span class="narrow-status">
-                  <span class="status-dot" :data-tone="row.config">{{ row.config === 'healthy' ? 'ok' : row.config }}</span>
-                  <span class="badge" :data-tone="serviceTone(row.service)" :title="nodeServiceTitle(row)">{{ nodeServiceLabel(row) }}</span>
-                </span>
-              </td>
-              <td colspan="5" class="node-summary">
-                <span>{{ row.lines.length }} {{ row.lines.length === 1 ? 'line' : 'lines' }}</span>
-                <span v-if="row.counts.relays">· {{ row.counts.relays }} relay</span>
-                <span v-if="row.counts.exits">· {{ row.counts.exits }} exit</span>
-                <span v-if="row.counts.orphans" class="error-text">· {{ row.counts.orphans }} with no outbound</span>
-                <span v-if="row.counts.managed">· {{ row.counts.managed }} managed</span>
-                <span v-for="bank in row.banks" :key="bank.key" class="muted">· bank of {{ bank.lines.length }} {{ bank.type }} → {{ bank.targetNodeIDs.length }} {{ bank.targetNodeIDs.length === 1 ? 'node' : 'nodes' }}</span>
-              </td>
-              <td><span class="status-dot" :data-tone="row.config">{{ row.config === 'healthy' ? 'ok' : row.config }}</span></td>
-              <td><span class="badge" :data-tone="serviceTone(row.service)" :title="nodeServiceTitle(row)">{{ nodeServiceLabel(row) }}</span></td>
-              <td v-if="canViewLineDetails" class="actions-cell">
-                <button v-if="canOpenEvidence" class="button button-secondary button-compact" type="button" :title="`Connections observed on ${row.group.node_name || row.group.node_id}`" @click="openEvidence(row.group.node_id, 'connections')"><Waypoints :size="13" aria-hidden="true" /> Evidence</button>
-              </td>
-            </tr>
-            <template v-if="nodeOpen(row)">
-              <template v-for="entry in fleetEntries(row)" :key="entry.kind === 'bank' ? entry.bank.key : entry.line.line_hash_id">
-                <tr v-if="entry.kind === 'bank'" class="bank-row" :id="`node-${row.group.node_id}`">
-                  <td class="fleet-name">
-                    <button class="node-toggle bank-toggle" type="button" :aria-expanded="bankOpen(entry.bank)" @click="toggleBank(entry.bank.key)">
-                      <ChevronRight class="node-chevron" :size="14" aria-hidden="true" />
-                      <strong>{{ entry.bank.lines.length }} {{ entry.bank.type }} relays</strong>
-                    </button>
-                    <small class="mono">ports {{ entry.bank.portRange.min }} to {{ entry.bank.portRange.max }}</small>
-                  </td>
-                  <td><span class="badge" data-tone="info">bank</span></td>
-                  <td class="mono endpoint-cell">{{ formatLineEndpoint(entry.bank.lines[0]).split(':')[0] }}<small>{{ entry.bank.lines.length }} listeners, ports {{ entry.bank.portRange.min }} to {{ entry.bank.portRange.max }}</small></td>
-                  <td class="mono">{{ formatLineDomain(entry.bank.lines[0]) }}</td>
-                  <td class="num">{{ entry.bank.lines.reduce((sum, line) => sum + (line.user_known ? line.user_count : 0), 0) }}</td>
-                  <td :title="bankTargets(entry.bank)">→ {{ entry.bank.targetNodeIDs.length }} {{ entry.bank.targetNodeIDs.length === 1 ? 'node' : 'nodes' }}<small>{{ bankTargets(entry.bank) }}</small></td>
-                  <td><span class="status-dot" :data-tone="entry.bank.config">{{ entry.bank.config === 'healthy' ? 'ok' : entry.bank.config }}</span></td>
-                  <td><span class="badge" :data-tone="serviceTone(entry.bank.service)">{{ serviceLabel(entry.bank.service) }}</span></td>
-                  <td v-if="canViewLineDetails" class="actions-cell" />
-                </tr>
-                <tr v-else class="line-row" :class="{ 'line-in-bank': !!entry.bank }">
-                  <td class="fleet-name">
-                    <strong :title="entry.line.name">{{ entry.line.name }}</strong>
-                    <small :title="`${entry.line.type || 'unknown'} / ${entry.line.line_hash_id}`">{{ entry.line.type || 'unknown' }} / {{ entry.line.line_hash_id }}</small>
-                    <span class="narrow-status">
-                      <span class="mono">:{{ entry.line.listen_port || '?' }}</span>
-                      <span class="status-dot" :data-tone="lineStatus(entry.line)">{{ entry.line.status || (entry.line.last_error ? 'error' : 'not reported') }}</span>
-                      <span class="badge" :data-tone="lineServiceTone(entry.line)" :title="lineServiceTitle(entry.line)">{{ lineServiceLabel(entry.line) }}</span>
-                    </span>
-                  </td>
-                  <td><span class="badge" :data-tone="lineRole(entry.line) === 'orphan' ? 'error' : 'neutral'">{{ roleLabel(entry.line) }}</span><span v-if="entry.line.managed" class="badge" data-tone="info" :title="entry.line.overlay_user ? `Bound account: ${entry.line.overlay_user}` : lineOwnership(entry.line)">{{ entry.line.overlay ? 'lattice-managed' : lineOwnership(entry.line) }}</span></td>
-                  <!-- The port is the distinguishing value on a node that
-                       carries twelve lines of one host; it leads. -->
-                  <td class="mono endpoint-cell" :title="`public ${formatLineEndpoint(entry.line)}, listen ${formatLineListen(entry.line)}`"><span class="endpoint-port">:{{ entry.line.listen_port || '?' }}</span> {{ formatLineEndpoint(entry.line).split(':')[0] }}<small>listen {{ formatLineListen(entry.line) }}</small></td>
-                  <td class="mono" :title="formatLineDomain(entry.line)">{{ formatLineDomain(entry.line) }}</td>
-                  <td class="num" :title="entry.line.user_known ? undefined : 'The node did not report a user count for this line'">{{ entry.line.user_known ? entry.line.user_count : 'unknown' }}</td>
-                  <td class="mono outbound-cell" :title="entry.line.outbound_ref || undefined">{{ entry.line.outbound_ref || '-' }}<small v-if="entry.line.outbound_server">{{ entry.line.outbound_server }}<span v-if="entry.line.outbound_port">:{{ entry.line.outbound_port }}</span></small></td>
-                  <td><span class="status-dot" :data-tone="lineStatus(entry.line)" :title="entry.line.status || (entry.line.last_error ? 'error' : 'not reported')">{{ entry.line.status || (entry.line.last_error ? 'error' : 'not reported') }}</span><small v-if="entry.line.last_error" class="error-text" :title="lineErrorText(entry.line)">{{ lineErrorText(entry.line) }}</small></td>
-                  <td><span class="badge" :data-tone="lineServiceTone(entry.line)" :title="lineServiceTitle(entry.line)">{{ lineServiceLabel(entry.line) }}</span></td>
-                  <td v-if="canViewLineDetails" class="actions-cell">
-                    <div class="row-actions">
-                      <button class="button button-secondary button-compact" type="button" @click="openLineDetails(row.group, entry.line)">Details</button>
-                      <button v-if="canOpenEvidence" class="icon-button bordered" type="button" :aria-label="`Connections through ${entry.line.name}`" :title="`Connections through ${entry.line.name}`" @click="openEvidence(row.group.node_id, 'connections', entry.line)"><Waypoints :size="14" aria-hidden="true" /></button>
-                    </div>
-                  </td>
-                </tr>
-              </template>
-            </template>
-          </tbody>
-        </table></div>
-        <div v-else-if="searching" class="empty-state">
-          <Radar :size="26" aria-hidden="true" />
-          <strong>No line matches that search</strong>
-          <p>Nothing in {{ fleetSummary.lines }} lines across {{ lines.length }} nodes matches <span class="mono">{{ search.trim() }}</span>. The search covers node, line name, protocol, host, status, outbound reference and error text.</p>
-          <div class="empty-actions"><button class="button button-secondary" type="button" @click="search = ''">Clear the search</button></div>
-        </div>
-        <div v-else class="empty-state">
-          <Radar :size="26" aria-hidden="true" />
-          <strong>No lines are visible yet</strong>
-          <p>A line appears once a node agent reports its inbounds. If nodes are online and this stays empty, the usual causes are in this order:</p>
-          <ol>
-            <li>The node profile has sing-box discovery switched off. Turn it on under Node Profiles.</li>
-            <li>The agent cannot run the manager binary, so it has nothing to read. Check task execution on the profile.</li>
-            <li>The node has no inbound configured at all.</li>
-          </ol>
-        </div>
-        <footer v-if="nodePageData.pages > 1" class="table-pagination" aria-label="Fleet pagination">
-          <span>Nodes {{ nodePageData.from }} to {{ nodePageData.to }} of {{ nodePageData.total }}, searched across every one of them</span>
-          <button class="button button-secondary button-compact" type="button" :disabled="nodePageData.page === 1" @click="nodePage = nodePageData.page - 1">Previous</button>
-          <span>Page {{ nodePageData.page }} of {{ nodePageData.pages }}</span>
-          <button class="button button-secondary button-compact" type="button" :disabled="nodePageData.page === nodePageData.pages" @click="nodePage = nodePageData.page + 1">Next</button>
-        </footer>
-      </section>
+      <div v-if="linesView === 'overview'" class="layer-body" role="tabpanel" aria-label="Overview">
+        <LinesOverview
+          :groups="lines"
+          :chains="chains"
+          :attention="actionable"
+          :usage-known="lineUsageKnown"
+          :usage-note="lineUsageNote"
+          :egress="lineEgress"
+          :by-line="lineTraffic.byLine"
+          :by-node="lineNodeTraffic"
+          :reporting-nodes="lineTraffic.reportingNodes"
+          :series="lineUsage?.series"
+          :previous="lineUsage?.previous"
+          :period-label="LINES_PERIOD_LABEL"
+          :can-act="canActOn"
+          :action-label="actionLabelOf"
+          @attention="openAttention"
+          @show-attention="linesView = 'attention'"
+          @node="showLinesOf"
+          @lines="showAllLines"
+        />
+      </div>
 
-      <template v-else-if="lens === 'topology'">
+      <div v-else-if="linesView === 'lines'" class="layer-body" role="tabpanel" aria-label="Lines">
+        <p v-if="!lineUsageKnown && allLines.length" class="panel-inline-note standalone-note"><CircleAlert :size="14" aria-hidden="true" /> {{ lineUsageNote }}</p>
+        <LinesTable
+          v-model:group-by="groupBy"
+          v-model:search="search"
+          :groups="lines"
+          :traffic="lineTraffic"
+          :period-label="LINES_PERIOD_LABEL"
+          :can-open-evidence="canOpenEvidence"
+          :open-line="lineDetailOpen ? lineDetail?.line_hash_id : undefined"
+          @open="openLineDetails"
+          @evidence="openEvidence"
+        />
+      </div>
+
+      <div v-else-if="linesView === 'topology'" class="layer-body" role="tabpanel" aria-label="Topology">
         <LineChainWorkspace v-if="canReadChains" :groups="lines" :chains="chains" :can-plan="canPlanChain" :can-remove="canPlanRemoveChain" :busy-sources="busyChainSources" @plan="planLineChain" @remove="planLineChainRemoval" />
-        <section v-else class="data-panel" role="tabpanel">
+        <section v-else class="data-panel">
           <div class="empty-state">
             <Radar :size="26" aria-hidden="true" />
             <strong>This session cannot read chains</strong>
-            <p>The topology lens needs <span class="mono">lines.chains</span>, which this session's token does not carry. The fleet lens still shows every line and its outbound.</p>
+            <p>The topology layer needs <span class="mono">lines.chains</span>, which this session's token does not carry. The Lines layer still shows every line and the node it dials.</p>
           </div>
         </section>
-      </template>
+      </div>
 
-      <section v-else class="data-panel attention-panel" role="tabpanel">
+      <section v-else class="data-panel attention-panel" role="tabpanel" aria-labelledby="attention-title">
         <header class="panel-header">
-          <div><h2>Attention</h2><p>Every claim this page can prove that needs a hand, with the row that proves it and the action that clears it.</p></div>
+          <div><h2 id="attention-title">Attention</h2><p>Every claim this page can prove that needs a hand, with the row that proves it and the action that clears it.</p></div>
           <span class="count">{{ attention.length }} {{ attention.length === 1 ? 'item' : 'items' }}</span>
         </header>
         <ol v-if="attention.length" class="attention-list">
@@ -1414,9 +1443,7 @@ onBeforeUnmount(() => {
               <p>{{ item.evidence }}</p>
             </div>
             <div class="attention-actions">
-              <button v-if="item.action === 'details' && canViewLineDetails" class="button button-secondary button-compact" type="button" @click="openAttention(item)">Details</button>
-              <button v-else-if="item.action === 'rollout' && canRollout" class="button button-secondary button-compact" type="button" @click="openAttention(item)">Roll out</button>
-              <button v-else-if="item.action === 'profiles' && canOpenEvidence" class="button button-secondary button-compact" type="button" title="Open Node Profiles, where each node's sing-box integration is configured" @click="openAttention(item)">Node Profiles</button>
+              <button v-if="canActOn(item)" class="button button-secondary button-compact" type="button" @click="openAttention(item)">{{ actionLabelOf(item) }}</button>
               <span v-else-if="item.action === 'profiles'" class="muted">Node Profiles, in this plugin's navigation</span>
             </div>
           </li>
@@ -1424,7 +1451,8 @@ onBeforeUnmount(() => {
         <div v-else class="empty-state">
           <Radar :size="26" aria-hidden="true" />
           <strong>Nothing needs attention</strong>
-          <p>Every line reports a clean config, every relay resolves to a fleet endpoint, and the lines that report liveness are running.</p>
+          <p v-if="allLines.length">Every line reports a clean config, every relay resolves to a fleet endpoint, and the lines that report liveness are running.</p>
+          <p v-else>No node has reported a line, so there is nothing here to check yet.</p>
         </div>
       </section>
     </template>
@@ -1589,28 +1617,17 @@ onBeforeUnmount(() => {
         :can-drill-down="canUsageQuery"
         :busy="refreshing"
         :failed="!!error && !(usage.lines ?? []).length"
+        :series="usage.series"
+        :previous="usage.previous"
+        :view="usageView"
+        :stack="usageStack"
+        :observed-at="usageReadPeriod === usagePeriod ? observedAtLabel : ''"
+        :can-open-users="canOpenEvidence"
         @period="setUsagePeriod"
+        @view="(value) => (usageView = value)"
+        @stack="(value) => (usageStack = value)"
+        @open-users="openUsers"
       />
-      <!-- The collector panel is the fleet-wide view of the same question the
-           per-node column answers per row: which sources are actually
-           reporting. It stays because "no collector is configured" is the
-           first thing to fix when the screen above is empty. -->
-      <section class="data-panel collectors">
-        <header class="panel-header"><div><h2>Collectors</h2><p>Source health and last checks</p></div></header>
-        <div v-if="usage.collectors.length" class="collector-grid">
-          <div v-for="collector in usage.collectors" :key="collector.node_id">
-            <span class="status-dot" :data-tone="collectorTone(collector.status === 'ok' ? 'ok' : collector.status || '')">{{ collectorLabel(collector.status || '') }}</span>
-            <strong :title="collector.node_name || collector.node_id">{{ collector.node_name || collector.node_id }}</strong>
-            <small :title="`${collector.source || 'unspecified'} / ${formatDate(collector.checked_at)}`">{{ collector.source || 'unspecified' }} / {{ formatDate(collector.checked_at) }}</small>
-            <p v-if="collector.error" class="error-text">{{ collector.error }}</p>
-          </div>
-        </div>
-        <div v-else class="empty-state">
-          <Gauge :size="24" aria-hidden="true" />
-          <strong>No collector is configured</strong>
-          <p>No node profile points at a usage source, so traffic on those nodes is unmeasured rather than zero. Open Node Profiles, edit a node, and set a usage file, collector URL, Xray API or sing-box stats API.</p>
-        </div>
-      </section>
     </template>
 
     <div v-if="userDialogOpen" class="overlay-scrim" :style="overlayStyle" @mousedown.self="userDialogOpen = false"><section tabindex="-1" class="modal" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><header><div><h2 id="user-dialog-title">{{ editingUser ? 'Edit identity' : 'New identity' }}</h2><p>{{ editingUser ? 'Existing secrets stay unchanged.' : 'Create one initial protocol credential.' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="userDialogOpen = false"><X :size="17" /></button></header><div class="form-grid">
@@ -1667,49 +1684,103 @@ onBeforeUnmount(() => {
       <label class="field field-wide"><span>Secret (copy now)</span><textarea class="command-output mono" :value="rotateRevealed.secret" readonly rows="2" @focus="($event.target as HTMLTextAreaElement).select()" /></label>
       <footer><button class="button button-primary" type="button" @click="rotateRevealed = undefined">I have saved it</button></footer></section></div>
 
-    <div v-if="lineDetailOpen && lineDetail" class="overlay-scrim" :style="overlayStyle" @mousedown.self="closeLineDetails()"><section tabindex="-1" class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="line-detail-title"><header><div><h2 id="line-detail-title">Line details</h2><p>{{ lineDetailNodeName }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeLineDetails()"><X :size="17" /></button></header><div class="detail-body">
-      <div v-if="lineDetailError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineDetailError }}</span></div>
-      <div class="detail-grid">
-        <div><span>Line</span><strong>{{ lineDetail.name }}</strong><small>{{ lineDetail.line_hash_id }}</small></div>
-        <div><span>Protocol</span><strong>{{ lineDetail.type || 'unknown' }}</strong><small>{{ lineDetail.core }}</small></div>
-        <div><span>Endpoint</span><strong class="mono">{{ formatLineEndpoint(lineDetail) }}</strong><small>Public address</small></div>
-        <div><span>Listen</span><strong class="mono">{{ formatLineListen(lineDetail) }}</strong><small>Bind address</small></div>
-        <div><span>Reality SNI</span><strong class="mono">{{ formatLineDomain(lineDetail) }}</strong><small>Server name</small></div>
-        <div><span>Outbound ref</span><strong class="mono">{{ lineDetail.outbound_ref || '-' }}</strong><small v-if="lineDetail.outbound_server">{{ lineDetail.outbound_server }}<span v-if="lineDetail.outbound_port">:{{ lineDetail.outbound_port }}</span></small></div>
-        <div><span>Ownership</span><strong>{{ lineOwnership(lineDetail) }}</strong><small>{{ lineDetail.source }}</small></div>
-        <div><span>Status</span><strong>{{ lineDetail.status || (lineDetail.last_error ? 'error' : 'not reported') }}</strong><small>{{ lineDetail.user_known ? `${lineDetail.user_count} users` : 'user count unavailable' }}</small></div>
-      </div>
-      <div v-if="lineDetailBusy" class="loading-state loading-inline"><LoaderCircle class="spin" :size="18" /> Refreshing line details</div>
-      <section class="detail-section"><h3>Line identity</h3><dl class="detail-pairs"><dt>Chain identity</dt><dd class="mono">{{ lineDetail.line_uuid || 'not allocated yet, so this line cannot be either end of a chain' }}</dd><template v-if="lineDetail.downstream_line_uuid"><dt>Downstream identity</dt><dd class="mono">{{ lineDetail.downstream_line_uuid }}</dd></template></dl>
-        <div v-if="canSyncMetadata && !lineDetail.managed" class="icon-actions"><button class="button button-secondary button-compact" type="button" :disabled="syncBusy" title="File an approval that writes this line's identity file on its node" @click="syncSidecar"><LoaderCircle v-if="syncBusy" class="spin" :size="13" /> Write identity to the node</button></div>
-        <div v-if="canReattachLine" class="binding-add"><input v-model="reattachUUID" class="mono" type="text" autocomplete="off" spellcheck="false" placeholder="Existing UUIDv4 to reattach" /><button class="button button-secondary button-compact" type="button" :disabled="reattachBusy || !reattachUUID.trim()" @click="reattachLineUUID"><LoaderCircle v-if="reattachBusy" class="spin" :size="13" /> Reattach identity</button></div>
-      </section>
-      <section v-if="canPlanLineUsers" class="detail-section"><h3>On-node users</h3>
-        <p class="field-help">Each action here files an approval and changes nothing yet. Once you approve it, applying {{ lineDetail.managed ? 'rewrites the whole core config on that node and reloads it' : 'changes this one user record on that node in place' }}.</p>
-        <div v-if="lineUsersError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineUsersError }}</span></div>
-        <div class="binding-list">
-          <div v-for="user in lineDetailBoundUsers" :key="user.id">
-            <span>{{ user.email }}<small v-if="user.name"> ({{ user.name }})</small></span>
-            <span class="icon-actions">
-              <button class="button button-secondary button-compact" type="button" :disabled="lineUsersBusy" title="File an approval to update this identity on this line" @click="planLineUser('plan_update', user.id)">Update</button>
-              <button class="button button-secondary button-compact destructive" type="button" :disabled="lineUsersBusy" title="File an approval to remove this identity from this line" @click="planLineUser('plan_remove', user.id)">Remove</button>
-            </span>
+    <!-- The line panel (L2), addressed by ?open=<line_hash_id>. A sheet from
+         the right on a wide window, the full height of the frame on a phone. -->
+    <div v-if="lineDetailOpen && lineDetail" class="overlay-scrim sheet-scrim" @mousedown.self="closeLineDetails()"><section tabindex="-1" class="modal sheet" role="dialog" aria-modal="true" aria-labelledby="line-detail-title">
+      <header>
+        <div>
+          <h2 id="line-detail-title">{{ lineDetail.name }}</h2>
+          <p>{{ lineDetailNodeName }}</p>
+          <p class="proof-line sheet-proof">
+            <span>{{ lineDetail.line_hash_id }}</span>
+            <span>· {{ lineDetail.managed ? 'managed' : 'discovered' }}</span>
+            <span v-if="lineDetail.service_checked_at" :title="lineDetail.service_checked_at">· probed {{ formatDate(lineDetail.service_checked_at) }}</span>
+            <span v-if="lineDetailBusy">· reading</span>
+          </p>
+        </div>
+        <button class="icon-button" type="button" aria-label="Close" @click="closeLineDetails()"><X :size="17" /></button>
+      </header>
+      <div class="detail-body">
+        <div v-if="lineDetailError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineDetailError }}</span></div>
+        <div class="detail-grid">
+          <div><span>State</span><strong><span class="status-dot" :data-tone="lineDetailState?.tone">{{ lineDetailState?.label }}</span></strong><small>{{ lineDetail.status ? `config ${lineDetail.status}` : 'config not reported' }}</small></div>
+          <div><span>Protocol</span><strong>{{ lineDetail.type || 'unknown' }}</strong><small>{{ lineDetail.core }}<template v-if="lineDetail.security"> · {{ lineDetail.security }}</template></small></div>
+          <div><span>Endpoint</span><strong class="mono">{{ formatLineEndpoint(lineDetail) }}</strong><small>listen {{ formatLineListen(lineDetail) }}</small></div>
+          <div><span>Reality SNI</span><strong class="mono">{{ formatLineDomain(lineDetail) }}</strong><small>server name</small></div>
+          <div><span>Users</span><strong>{{ lineDetail.user_known ? lineDetail.user_count : 'unknown' }}</strong><small>{{ lineDetail.user_known ? 'reported by the node' : 'the node did not report a count' }}</small></div>
+          <div><span>Outbound</span><strong class="mono">{{ lineDetail.outbound_ref || 'none' }}</strong><small v-if="lineDetail.outbound_server">{{ lineDetail.outbound_server }}<span v-if="lineDetail.outbound_port">:{{ lineDetail.outbound_port }}</span></small><small v-else>{{ !lineDetail.outbound_ref ? 'traffic here has nowhere to go' : lineDetail.outbound_ref === 'direct' ? 'traffic leaves the fleet here' : 'no server named' }}</small></div>
+        </div>
+
+        <section class="detail-section"><h3>Chain</h3>
+          <ol class="chain-path" aria-label="The chain this line belongs to, from entry to exit">
+            <li v-for="hop in lineDetailPath" :key="hop.key" class="chain-hop" :data-role="hop.role" :data-current="hop.current || undefined">
+              <span class="chain-role">{{ hopRoleLabel(hop.role) }}<template v-if="hop.current"> · this line</template></span>
+              <strong :title="hop.nodeName">{{ hop.nodeName }}</strong>
+              <small v-if="hop.lineName" :title="hop.lineName">{{ hop.lineName }}</small>
+              <span v-if="hop.state" class="status-dot" :data-tone="hop.state.tone">{{ hop.fanIn ? (hop.state.tone === "healthy" ? `all ${hop.state.label}` : `worst: ${hop.state.label}`) : hop.state.label }}</span>
+              <span v-else class="status-dot" data-tone="neutral">not on this fleet</span>
+            </li>
+          </ol>
+          <p v-if="lineDetailPath.length === 1" class="field-help">No line relays into this one and it relays nowhere: traffic enters and leaves the fleet here.</p>
+        </section>
+
+        <section class="detail-section"><h3>Traffic, last {{ LINES_PERIOD_LABEL }}</h3>
+          <p v-if="!lineUsageKnown" class="field-help">{{ lineUsageNote }}</p>
+          <p v-else-if="lineDetailBytes === undefined" class="field-help">Unknown, not zero: this node's usage collector is not reporting.</p>
+          <template v-else>
+            <p class="traffic-figure"><strong class="mono">{{ formatBytes(lineDetailBytes) }}</strong><span v-if="lineDetailRows.length" class="mono">up {{ formatBytes(lineDetailUp) }} · down {{ formatBytes(lineDetailDown) }}</span></p>
+            <ul v-if="lineDetailRows.length" class="traffic-rows">
+              <li v-for="(row, index) in lineDetailRows" :key="index">
+                <span class="badge">{{ roleLabel(row.role) }}</span>
+                <span class="mono">{{ formatBytes(row.used_bytes) }}</span>
+                <span class="cell-note" :data-tone="row.estimate ? 'warning' : undefined">{{ measurementLabel(row) }}</span>
+                <span>{{ row.user_id ? `${attributionLabel(row)}: ${row.email || row.user_id}` : row.counted_at ? 'counted at the entry line' : attributionLabel(row) }}</span>
+              </li>
+            </ul>
+            <p v-else class="field-help">The collector on this node reported and this line moved nothing in the period.</p>
+          </template>
+        </section>
+
+        <section class="detail-section"><h3>Evidence</h3>
+          <div v-if="canOpenEvidence" class="icon-actions evidence-links">
+            <button class="button button-secondary button-compact" type="button" @click="openEvidence(lineDetail.node_id, 'connections', lineDetail)"><Waypoints :size="13" aria-hidden="true" /> Connections through this line</button>
+            <button class="button button-secondary button-compact" type="button" @click="openEvidence(lineDetail.node_id, 'log', lineDetail)">Raw log for this line</button>
           </div>
-          <p v-if="usersUnavailable" class="empty-inline" role="status">The identity list could not be loaded, so bindings for this line are not shown.</p>
-          <p v-else-if="!lineDetailBoundUsers.length" class="empty-inline">No identities bound to this line yet.</p>
-        </div>
-        <div v-if="lineDetailBindableUsers.length" class="binding-add">
-          <select v-model="lineUserAdd"><option value="">Select an identity to add</option><option v-for="user in lineDetailBindableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select>
-          <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Queue add</button>
-        </div>
-        <ul v-if="lineApprovals.length" class="detail-list">
-          <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span>: {{ item.summary }} <em>(pending approval)</em></li>
-        </ul>
-      </section>
-      <section class="detail-section"><h3>Error</h3><p :class="{ 'error-text': lineDetail.last_error }">{{ lineErrorText(lineDetail) }}</p></section>
-      <section v-if="lineDetail.jump_edges?.length" class="detail-section"><h3>Relay targets</h3><ul class="detail-list"><li v-for="target in lineDetail.jump_edges" :key="target" class="mono">{{ target }} <span v-if="lineDetail.declared_jump_edges?.includes(target)" class="badge" data-tone="info">declared</span></li></ul></section>
-      <section v-if="lineDetail.metadata && Object.keys(lineDetail.metadata).length" class="detail-section"><h3>Metadata</h3><dl class="detail-pairs"><template v-for="(value, key) in lineDetail.metadata" :key="key"><dt class="mono">{{ key }}</dt><dd>{{ value || '-' }}</dd></template></dl></section>
-    </div></section></div>
+          <p v-else class="field-help">Evidence opens in the console; this frame has no host to ask.</p>
+          <p v-if="!lineDetail.line_uuid" class="field-help">This line has no chain identity yet, so Evidence filters to its node only.</p>
+        </section>
+
+        <section class="detail-section"><h3>Users</h3>
+          <p v-if="canPlanLineUsers" class="field-help">Each action here files an approval and changes nothing yet. Once you approve it, applying {{ lineDetail.managed ? 'rewrites the whole core config on that node and reloads it' : 'changes this one user record on that node in place' }}.</p>
+          <div v-if="lineUsersError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span>{{ lineUsersError }}</span></div>
+          <div class="binding-list">
+            <div v-for="user in lineDetailBoundUsers" :key="user.id">
+              <span>{{ user.email }}<small v-if="user.name"> ({{ user.name }})</small></span>
+              <span v-if="canPlanLineUsers" class="icon-actions">
+                <button class="button button-secondary button-compact" type="button" :disabled="lineUsersBusy" title="File an approval to update this identity on this line" @click="planLineUser('plan_update', user.id)">Update</button>
+                <button class="button button-secondary button-compact destructive" type="button" :disabled="lineUsersBusy" title="File an approval to remove this identity from this line" @click="planLineUser('plan_remove', user.id)">Remove</button>
+              </span>
+            </div>
+            <p v-if="usersUnavailable" class="empty-inline" role="status">The identity list could not be loaded, so bindings for this line are not shown.</p>
+            <p v-else-if="!lineDetailBoundUsers.length" class="empty-inline">No identity is bound to this line in Lattice.</p>
+          </div>
+          <div v-if="canPlanLineUsers && lineDetailBindableUsers.length" class="binding-add">
+            <select v-model="lineUserAdd"><option value="">Select an identity to add</option><option v-for="user in lineDetailBindableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select>
+            <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Queue add</button>
+          </div>
+          <ul v-if="lineApprovals.length" class="detail-list">
+            <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span>: {{ item.summary }} <em>(pending approval)</em></li>
+          </ul>
+        </section>
+
+        <section class="detail-section"><h3>Line identity</h3><dl class="detail-pairs"><dt>Chain identity</dt><dd class="mono">{{ lineDetail.line_uuid || 'not allocated yet, so this line cannot be either end of a chain' }}</dd><template v-if="lineDetail.downstream_line_uuid"><dt>Downstream identity</dt><dd class="mono">{{ lineDetail.downstream_line_uuid }}</dd></template><dt>Ownership</dt><dd>{{ lineOwnership(lineDetail) }} · {{ lineDetail.source }}</dd></dl>
+          <div v-if="canSyncMetadata && !lineDetail.managed" class="icon-actions"><button class="button button-secondary button-compact" type="button" :disabled="syncBusy" title="File an approval that writes this line's identity file on its node" @click="syncSidecar"><LoaderCircle v-if="syncBusy" class="spin" :size="13" /> Write identity to the node</button></div>
+          <div v-if="canReattachLine" class="binding-add"><input v-model="reattachUUID" class="mono" type="text" autocomplete="off" spellcheck="false" placeholder="Existing UUIDv4 to reattach" /><button class="button button-secondary button-compact" type="button" :disabled="reattachBusy || !reattachUUID.trim()" @click="reattachLineUUID"><LoaderCircle v-if="reattachBusy" class="spin" :size="13" /> Reattach identity</button></div>
+        </section>
+        <section class="detail-section"><h3>Error</h3><p :class="{ 'error-text': lineDetail.last_error }">{{ lineErrorText(lineDetail) }}</p></section>
+        <section v-if="lineDetail.metadata && Object.keys(lineDetail.metadata).length" class="detail-section"><h3>Metadata</h3><dl class="detail-pairs"><template v-for="(value, key) in lineDetail.metadata" :key="key"><dt class="mono">{{ key }}</dt><dd>{{ value || '-' }}</dd></template></dl></section>
+      </div>
+    </section></div>
 
     <div v-if="profileSettingsOpen" class="overlay-scrim" :style="overlayStyle" @mousedown.self="closeProfileSettings()"><section tabindex="-1" class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="profile-settings-title"><header><div><h2 id="profile-settings-title">sing-box integration</h2><p>{{ profileSettings?.node_name || profileSettings?.node_id || 'Node profile' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="closeProfileSettings()"><X :size="17" /></button></header>
       <div class="detail-body">
