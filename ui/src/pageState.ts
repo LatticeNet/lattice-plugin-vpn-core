@@ -1,6 +1,6 @@
 /**
- * pageState.ts, where a page's layer, open line, grouping, search, period,
- * chart stacking and expanded users live between reloads.
+ * pageState.ts, where a page's layer, open object, grouping, search, sort,
+ * period and chart stacking live between reloads.
  *
  * The console's own address carries them (bridge v1, "Plugin page state in
  * the console address"). The host hands the query of its plugin route to the
@@ -19,6 +19,16 @@
 
 import { isGroupBy, type GroupBy } from "./lineGroups";
 import { STACK_BY, USAGE_PERIODS, USAGE_VIEWS, type StackBy, type UsagePeriod, type UsageView } from "./usageModel";
+import {
+  DEFAULT_USER_SORT,
+  encodeUserSort,
+  isUsersGroupBy,
+  isUsersView,
+  parseUserSort,
+  type UserSort,
+  type UsersGroupBy,
+  type UsersView,
+} from "./usersModel";
 
 export type PageState = Record<string, string>;
 
@@ -88,19 +98,26 @@ export const LINES_VIEWS: readonly LinesView[] = ["overview", "lines", "topology
 /* `lens` is the older spelling from the lens switch; a saved link keeps working. */
 const LEGACY_LENS: Record<string, LinesView> = { fleet: "lines", topology: "topology", attention: "attention" };
 
-/** Everything the Lines and Usage layers keep. Each route encodes its own part. */
+/**
+ * Everything the four pages keep. Each route encodes its own part, and one
+ * frame only ever shows one route, so `q` and `open` are shared: the search
+ * and the open object of whichever page this is (a line, an identity, a
+ * node profile).
+ */
 export interface VpnPageState {
   linesView: LinesView;
   usageView: UsageView;
   group: GroupBy;
-  /** The Lines search as typed. */
+  /** The page's search as typed. */
   q: string;
-  /** The line whose panel is open, or asked for by a link and not yet found. */
+  /** The object whose panel is open, or asked for by a link and not yet found. */
   open: string;
   period: UsagePeriod;
   stack: StackBy;
-  /** Users whose allocated nodes are shown on the Users page. */
-  expand: string[];
+  /** Users: the subset the attention list points at. */
+  usersView: UsersView;
+  usersGroup: UsersGroupBy;
+  usersSort: UserSort;
 }
 
 export const DEFAULT_PAGE_STATE: Readonly<VpnPageState> = {
@@ -111,7 +128,9 @@ export const DEFAULT_PAGE_STATE: Readonly<VpnPageState> = {
   open: "",
   period: "7d",
   stack: "exit",
-  expand: [],
+  usersView: "all",
+  usersGroup: "none",
+  usersSort: { ...DEFAULT_USER_SORT },
 };
 
 function pick<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {
@@ -140,17 +159,27 @@ export function encodePageState(route: string, state: VpnPageState): PageState {
     put("period", state.period, DEFAULT_PAGE_STATE.period);
     put("stack", state.stack, DEFAULT_PAGE_STATE.stack);
   } else if (route === "users") {
-    // One key holds the list: the contract allows one string per key.
-    put("expand", [...new Set(state.expand.filter(Boolean))].join(","));
+    put("view", state.usersView, DEFAULT_PAGE_STATE.usersView);
+    put("group", state.usersGroup, DEFAULT_PAGE_STATE.usersGroup);
+    put("q", state.q.trim());
+    put("sort", encodeUserSort(state.usersSort));
+    put("open", state.open);
+  } else if (route === "profiles") {
+    put("open", state.open);
   }
   return out;
 }
 
 /**
  * Address entries read back into state. It does not need the route: `view`
- * is read as both a Lines and a Usage layer, and whichever the route shows is
- * the one that counts. Anything unknown or out of range falls back to the
- * default, so a stale or hand-edited link still opens a page.
+ * is read as a Lines layer, a Usage layer and a Users subset, and whichever
+ * the route shows is the one that counts; `group` likewise. Anything unknown
+ * or out of range falls back to the default, so a stale or hand-edited link
+ * still opens a page.
+ *
+ * `expand=<id>,<id>` is the Users page's older key, from when a row opened
+ * its allocated nodes in place. That is the identity panel now, so the first
+ * id opens it. The key is read, never written back.
  */
 export function decodePageState(state: PageState): VpnPageState {
   const view = state.view ?? LEGACY_LENS[state.lens ?? ""];
@@ -159,11 +188,17 @@ export function decodePageState(state: PageState): VpnPageState {
     usageView: pick(state.view, USAGE_VIEWS, DEFAULT_PAGE_STATE.usageView),
     group: isGroupBy(state.group) ? state.group : DEFAULT_PAGE_STATE.group,
     q: state.q ?? "",
-    open: state.open ?? "",
+    open: state.open ?? legacyExpand(state.expand),
     period: pick(state.period, USAGE_PERIODS, DEFAULT_PAGE_STATE.period),
     stack: pick(state.stack, STACK_BY, DEFAULT_PAGE_STATE.stack),
-    expand: [...new Set((state.expand ?? "").split(",").map((id) => id.trim()).filter(Boolean))],
+    usersView: isUsersView(state.view) ? state.view : DEFAULT_PAGE_STATE.usersView,
+    usersGroup: isUsersGroupBy(state.group) ? state.group : DEFAULT_PAGE_STATE.usersGroup,
+    usersSort: parseUserSort(state.sort),
   };
+}
+
+function legacyExpand(value: string | undefined): string {
+  return (value ?? "").split(",").map((id) => id.trim()).find(Boolean) ?? "";
 }
 
 // ── the fallback: the frame's own document query ─────────────────────────
