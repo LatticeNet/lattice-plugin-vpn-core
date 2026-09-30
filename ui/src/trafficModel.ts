@@ -220,7 +220,7 @@ export const OTHERS_KEY = "\u0000others";
  * window get a segment each and the rest share one. The sum of the segments
  * on a day is that day's egress, so the stack and the headline agree.
  */
-export function stackByExit(series: UsageSeries, top = 6): DailyStack {
+export function stackByExit(series: UsageSeries, top = 5): DailyStack {
   const days = series.days.length;
   const byNode = new Map<string, StackSegment>();
   for (const row of series.rows) {

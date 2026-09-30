@@ -48,12 +48,12 @@ function axisBytes(value: number): string {
   return value === 0 ? "0" : formatBytes(value).replace(/\.0 /, " ");
 }
 
-/** Accent steps for named segments, a neutral for "others" and the repeated roles. */
+/** Categorical colours for named segments, a neutral for "others" and the repeated roles. */
 function fill(segment: StackSegment, index: number): string {
   if (segment.key === OTHERS_KEY || segment.key === "other") return "var(--series-muted-2)";
   if (segment.key === "entry") return "var(--series-muted-1)";
   if (segment.key === "relay") return "var(--series-muted-3)";
-  return `var(--series-${Math.min(index, 5) + 1})`;
+  return `var(--series-${Math.min(index, 4) + 1})`;
 }
 
 interface BarRect { key: string; x: number; y: number; height: number; fill: string }
@@ -154,16 +154,20 @@ function dayName(index: number): string {
         </li>
       </ol>
     </div>
-    <table class="sr-only">
-      <caption>{{ label }}</caption>
-      <thead><tr><th>Day</th><th v-for="segment in stack.segments" :key="segment.key">{{ segment.label }}</th><th>Total</th></tr></thead>
-      <tbody>
-        <tr v-for="(day, index) in stack.days" :key="day">
-          <td>{{ shortDay(day) }}</td>
-          <td v-for="segment in stack.segments" :key="segment.key">{{ formatBytes(segment.values[index] ?? 0) }}</td>
-          <td>{{ formatBytes(stack.totals[index] ?? 0) }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <!-- The screen-reader copy of every figure. sr-only sits on a wrapper:
+         a table ignores a 1px width and would widen the page. -->
+    <div class="sr-only">
+      <table>
+        <caption>{{ label }}</caption>
+        <thead><tr><th>Day</th><th v-for="segment in stack.segments" :key="segment.key">{{ segment.label }}</th><th>Total</th></tr></thead>
+        <tbody>
+          <tr v-for="(day, index) in stack.days" :key="day">
+            <td>{{ shortDay(day) }}</td>
+            <td v-for="segment in stack.segments" :key="segment.key">{{ formatBytes(segment.values[index] ?? 0) }}</td>
+            <td>{{ formatBytes(stack.totals[index] ?? 0) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>

@@ -233,6 +233,15 @@ describe("group rows carry aggregates in every member column", () => {
     expect(none[0].agg.lines).toBe(9);
     expect(flatLines([fleet[2]], known).map((entry) => entry.line.line_hash_id)).toEqual(["r1", "r2", "r3", "x1"]);
   });
+
+  it("names the node a relay dials when a search leaves its exit out of the results", () => {
+    // Searching "DMIT-1" keeps only the hub; its relays still dial fleet nodes.
+    const found = flatLines([fleet[2]], known, fleet);
+    const r1 = found.find((entry) => entry.line.line_hash_id === "r1")!;
+    expect(r1.target).toMatchObject({ kind: "node", nodeID: "e1", label: "[Metix]-VIRCS-ATT-VDS" });
+    const grouped = groupLines([fleet[2]], "node", known, fleet);
+    expect(grouped[0].entries.find((entry) => entry.line.line_hash_id === "r3")!.target.kind).toBe("node");
+  });
 });
 
 describe("a status shared by every line moves to the header", () => {

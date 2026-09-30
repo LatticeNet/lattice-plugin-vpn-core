@@ -236,6 +236,8 @@ th[aria-sort="ascending"] .sort-button, th[aria-sort="descending"] .sort-button 
 .status-dot[data-tone="warning"] { color: var(--tone-warn); }
 .status-dot[data-tone="error"] { color: var(--tone-danger); }
 .error-text { color: var(--tone-danger) !important; white-space: normal !important; }
+/* A line with nowhere to send traffic is a warning, the tone Attention gives it. */
+.warn-text { color: var(--tone-warn) !important; white-space: normal !important; }
 
 .split-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--sp-4); }
 .collector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0; }
@@ -548,27 +550,27 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 .segmented-option[aria-pressed="true"] { color: var(--foreground, #17191c); background: var(--tone-info-surface); box-shadow: inset 0 -2px 0 var(--primary, #1769aa); }
 
 /* ── charts ────────────────────────────────────────────────────────────────
-   Categories are steps of the one accent, bottom of the stack darkest, and a
-   neutral for "others" and for bytes counted a second time. A step is found
-   by its place in the stack and its legend line, not by its shade alone. */
+   Named categories take the console's categorical palette (--chart-1 to
+   --chart-5, sent through the bridge), and a neutral carries "others" and
+   bytes counted a second time. The stack order puts the one weak pair
+   (teal --chart-1 and cyan --chart-2, close in light) at opposite ends, so
+   every pair of neighbours differs in hue and lightness; the legend lists
+   the same order, so a segment is found by place and label, not shade
+   alone. The fallbacks are the console's own values for a host that does
+   not send the palette yet. */
 :root {
-  --series-1: var(--primary, #1769aa);
-  --series-2: color-mix(in srgb, var(--primary, #1769aa) 78%, var(--card, #fff));
-  --series-3: color-mix(in srgb, var(--primary, #1769aa) 60%, var(--card, #fff));
-  --series-4: color-mix(in srgb, var(--primary, #1769aa) 45%, var(--card, #fff));
-  --series-5: color-mix(in srgb, var(--primary, #1769aa) 32%, var(--card, #fff));
-  --series-6: color-mix(in srgb, var(--primary, #1769aa) 22%, var(--card, #fff));
+  --series-1: var(--chart-1, oklch(0.53 0.105 185));
+  --series-2: var(--chart-4, oklch(0.74 0.17 60));
+  --series-3: var(--chart-3, oklch(0.66 0.18 142));
+  --series-4: var(--chart-5, oklch(0.64 0.22 12));
+  --series-5: var(--chart-2, oklch(0.62 0.16 195));
   --series-muted-1: color-mix(in srgb, var(--muted-foreground, #65707b) 55%, var(--card, #fff));
   --series-muted-2: color-mix(in srgb, var(--muted-foreground, #65707b) 38%, var(--card, #fff));
   --series-muted-3: color-mix(in srgb, var(--muted-foreground, #65707b) 24%, var(--card, #fff));
 }
-/* On a dark card a step toward the card vanishes; step toward the text instead. */
+/* On a dark card a neutral that steps toward the card vanishes; step less. */
 [data-theme="dark"] {
-  --series-2: color-mix(in srgb, var(--primary, #4f9de0) 76%, var(--foreground, #e9eef5));
-  --series-3: color-mix(in srgb, var(--primary, #4f9de0) 58%, var(--foreground, #e9eef5));
-  --series-4: color-mix(in srgb, var(--primary, #4f9de0) 42%, var(--foreground, #e9eef5));
-  --series-5: color-mix(in srgb, var(--primary, #4f9de0) 28%, var(--foreground, #e9eef5));
-  --series-6: color-mix(in srgb, var(--primary, #4f9de0) 16%, var(--foreground, #e9eef5));
+  --series-1: var(--chart-1, oklch(0.81 0.13 180));
   --series-muted-1: color-mix(in srgb, var(--muted-foreground, #8b96a5) 70%, var(--card, #161c26));
   --series-muted-2: color-mix(in srgb, var(--muted-foreground, #8b96a5) 50%, var(--card, #161c26));
   --series-muted-3: color-mix(in srgb, var(--muted-foreground, #8b96a5) 32%, var(--card, #161c26));
@@ -751,3 +753,9 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
   .chain-hop + .chain-hop::before { top: -19px; left: var(--sp-3); content: "\2193"; transform: none; }
   .modal.sheet { border-width: 0; }
 }
+
+/* An endpoint or server name in a detail card wraps inside the card rather
+   than losing its tail: the port is the part an operator copies. */
+.detail-grid strong.mono { overflow-wrap: anywhere; text-overflow: clip; }
+/* A search result count is information, not a warning. */
+.panel-inline-note[data-tone="neutral"] { color: var(--muted-foreground, #65707b); background: transparent; }

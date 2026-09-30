@@ -52,6 +52,8 @@ import {
   roleLabel,
   summarizeAllocation,
   usageAfterFailedRead,
+  USAGE_PERIODS,
+  periodLabel,
   type UsageLineRow,
   type StackBy,
   type UsagePeriod,
@@ -307,6 +309,10 @@ const attention = computed(() => attentionItems(lines.value));
 const attentionErrors = computed(() => attention.value.filter((item) => item.severity === "error").length);
 const attentionWarnings = computed(() => attention.value.filter((item) => item.severity === "warning").length);
 const attentionTone = computed(() => attentionErrors.value ? "error" : attentionWarnings.value ? "warning" : "neutral");
+/* What needs a hand: errors and warnings. Information items (no line is
+ * managed, a liveness note) are legitimate states; they stay in the Attention
+ * list but do not count toward its badge or take a place on the overview. */
+const actionable = computed(() => attention.value.filter((item) => item.severity !== "info"));
 /* One statement of what the probes said, so the proof line and the attention
  * row cannot disagree about it. */
 const liveness = computed(() => livenessSummary(lines.value));
@@ -922,6 +928,10 @@ const lineDetailNodeName = ref("");
 /* The panel opens from the listing for any session; the detail read, which
  * adds metadata and the declared identity, runs where the session may call it. */
 async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
+  // Remember what opened the panel, so closing it puts keyboard focus back on
+  // that row instead of the top of a 136-row table.
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  lineDetailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
   lineDetail.value = line;
   lineDetailNodeName.value = group.node_name || group.node_id;
   lineDetailError.value = "";
@@ -952,7 +962,24 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   }
 }
 
+let lineDetailOpener: HTMLElement | null = null;
+
+/* Focus returns to the opener, or, when that element was re-rendered while
+ * the panel was open, to the same line's row button. */
+function restoreLineFocus(hash: string | undefined): void {
+  const opener = lineDetailOpener;
+  lineDetailOpener = null;
+  if (opener?.isConnected) {
+    opener.focus();
+    return;
+  }
+  if (!hash || typeof document === "undefined") return;
+  document.querySelector<HTMLElement>(`[data-line-open="${CSS.escape(hash)}"]`)?.focus();
+}
+
 function closeLineDetails(): void {
+  const hash = lineDetail.value?.line_hash_id;
+  void nextTick(() => restoreLineFocus(hash));
   lineDetailOpen.value = false;
   lineDetailBusy.value = false;
   lineDetailError.value = "";
@@ -1272,6 +1299,17 @@ onBeforeUnmount(() => {
         <p>{{ routeMeta.description }}</p>
       </div>
       <div class="header-actions">
+        <div v-if="route === 'usage'" class="period-picker" role="group" aria-label="Usage period">
+          <button
+            v-for="value in USAGE_PERIODS"
+            :key="value"
+            class="period-option"
+            type="button"
+            :aria-pressed="usagePeriod === value"
+            :disabled="refreshing"
+            @click="setUsagePeriod(value)"
+          >{{ periodLabel(value) }}</button>
+        </div>
         <button class="button button-secondary" type="button" :disabled="loading || refreshing" @click="loadCurrent(true)">
           <LoaderCircle v-if="refreshing" class="spin" :size="15" aria-hidden="true" />
           <RefreshCw v-else :size="15" aria-hidden="true" />
@@ -1330,7 +1368,7 @@ onBeforeUnmount(() => {
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'lines'" @click="linesView = 'lines'">Lines<span class="lens-count">{{ fleetSummary.lines }}</span></button>
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'topology'" @click="linesView = 'topology'">Topology</button>
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'attention'" @click="linesView = 'attention'">
-          Attention<span v-if="attention.length" class="lens-count" :data-tone="attentionTone">{{ attention.length }}</span>
+          Attention<span v-if="actionable.length" class="lens-count" :data-tone="attentionTone">{{ actionable.length }}</span>
         </button>
       </nav>
       <section v-if="unresolvedDefs.length" class="data-panel overlay-strip" aria-label="Managed line rollout status">
@@ -1347,7 +1385,7 @@ onBeforeUnmount(() => {
         <LinesOverview
           :groups="lines"
           :chains="chains"
-          :attention="attention"
+          :attention="actionable"
           :usage-known="lineUsageKnown"
           :usage-note="lineUsageNote"
           :egress="lineEgress"
@@ -1656,7 +1694,7 @@ onBeforeUnmount(() => {
           <p class="proof-line sheet-proof">
             <span>{{ lineDetail.line_hash_id }}</span>
             <span>· {{ lineDetail.managed ? 'managed' : 'discovered' }}</span>
-            <span v-if="lineDetail.service_checked_at">· probed {{ lineDetail.service_checked_at }}</span>
+            <span v-if="lineDetail.service_checked_at" :title="lineDetail.service_checked_at">· probed {{ formatDate(lineDetail.service_checked_at) }}</span>
             <span v-if="lineDetailBusy">· reading</span>
           </p>
         </div>
@@ -1679,7 +1717,7 @@ onBeforeUnmount(() => {
               <span class="chain-role">{{ hopRoleLabel(hop.role) }}<template v-if="hop.current"> · this line</template></span>
               <strong :title="hop.nodeName">{{ hop.nodeName }}</strong>
               <small v-if="hop.lineName" :title="hop.lineName">{{ hop.lineName }}</small>
-              <span v-if="hop.state" class="status-dot" :data-tone="hop.state.tone">{{ hop.fanIn ? `worst: ${hop.state.label}` : hop.state.label }}</span>
+              <span v-if="hop.state" class="status-dot" :data-tone="hop.state.tone">{{ hop.fanIn ? (hop.state.tone === "healthy" ? `all ${hop.state.label}` : `worst: ${hop.state.label}`) : hop.state.label }}</span>
               <span v-else class="status-dot" data-tone="neutral">not on this fleet</span>
             </li>
           </ol>

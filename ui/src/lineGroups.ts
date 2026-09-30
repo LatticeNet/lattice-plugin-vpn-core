@@ -341,10 +341,12 @@ function bankSub(bank: Bank): string {
 /**
  * The collection, grouped. `none` returns one group holding every line, which
  * the table renders without a group row. Groups are ordered by traffic (the
- * order the overview uses), lines inside a group by port.
+ * order the overview uses), lines inside a group by port. Targets resolve
+ * against `fleet` (every line), so a filtered view still names the node a
+ * relay dials instead of calling it an address outside the fleet.
  */
-export function groupLines(groups: readonly LineGroup[], by: GroupBy, traffic?: LineTrafficIndex): LineGroupRow[] {
-  const index = fleetIndex(groups);
+export function groupLines(groups: readonly LineGroup[], by: GroupBy, traffic?: LineTrafficIndex, fleet: readonly LineGroup[] = groups): LineGroupRow[] {
+  const index = fleetIndex(fleet);
   const names = new Map(groups.map((group) => [group.node_id, group.node_name || group.node_id]));
   const nodeName = (id: string) => names.get(id) ?? id;
   const all: LineEntry[] = groups.flatMap((group) => group.lines.map((line) => entryOf(index, traffic, group, line)));
@@ -356,7 +358,7 @@ export function groupLines(groups: readonly LineGroup[], by: GroupBy, traffic?: 
     const rows = buildNodeRows(groups).map((nodeRow) => {
       const entries = all.filter((entry) => entry.group.node_id === nodeRow.group.node_id);
       const banks = nodeRow.banks.map((bank) => `bank of ${bank.lines.length} ${bank.type} to ${bank.targetNodeIDs.length} ${bank.targetNodeIDs.length === 1 ? "node" : "nodes"}`);
-      return row(nodeRow.group.node_id, nodeName(nodeRow.group.node_id), banks.join(" · ") || nodeRow.group.node_id, entries, nodeRow.group.node_id);
+      return row(nodeRow.group.node_id, nodeName(nodeRow.group.node_id), banks.join(" · "), entries, nodeRow.group.node_id);
     });
     return rows.sort(byTraffic);
   }
@@ -399,9 +401,9 @@ export function groupLines(groups: readonly LineGroup[], by: GroupBy, traffic?: 
   }).sort(byEgress);
 }
 
-/** Search results: every matching line, flat, heaviest first. */
-export function flatLines(groups: readonly LineGroup[], traffic?: LineTrafficIndex): LineEntry[] {
-  const index = fleetIndex(groups);
+/** Search results: every matching line, flat, heaviest first, with targets resolved against the whole `fleet`. */
+export function flatLines(groups: readonly LineGroup[], traffic?: LineTrafficIndex, fleet: readonly LineGroup[] = groups): LineEntry[] {
+  const index = fleetIndex(fleet);
   return groups
     .flatMap((group) => group.lines.map((line) => entryOf(index, traffic, group, line)))
     .sort((a, b) => (b.bytes ?? -1) - (a.bytes ?? -1) || (a.group.node_name || a.group.node_id).localeCompare(b.group.node_name || b.group.node_id) || byPort(a, b));

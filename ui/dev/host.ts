@@ -44,17 +44,30 @@ const INTERFACES = [
   { service: "latticenet.vpn-core/usage", methods: ["query"] },
 ];
 
+/* The console's production theme (teal on slate, lattice-dashboard
+ * src/style/app.css and src/theme/palettes.ts), so colours are judged on
+ * what the plugin will actually receive. */
+const CHART_ACCENTS = {
+  "--chart-2": "oklch(0.62 0.16 195)", "--chart-3": "oklch(0.66 0.18 142)",
+  "--chart-4": "oklch(0.74 0.17 60)", "--chart-5": "oklch(0.64 0.22 12)",
+};
 const DARK: Record<string, string> = {
-  "--background": "#0d1117", "--foreground": "#e9eef5", "--card": "#161c26",
-  "--border": "#242d3a", "--muted": "#1a212c", "--muted-foreground": "#8b96a5",
-  "--primary": "#4f9de0", "--primary-foreground": "#06121f",
-  "--destructive": "#f2777a", "--ring": "#4f9de0",
+  "--background": "oklch(0.155 0.012 240)", "--foreground": "oklch(0.97 0.004 240)", "--card": "oklch(0.195 0.014 240)",
+  "--border": "oklch(1 0 0 / 9%)", "--muted": "oklch(0.255 0.014 240)", "--muted-foreground": "oklch(0.705 0.012 240)",
+  "--primary": "oklch(0.81 0.13 180)", "--primary-foreground": "oklch(0.17 0.012 240)",
+  "--destructive": "oklch(0.704 0.191 22.2)", "--ring": "oklch(0.7 0.12 182)",
+  "--success": "oklch(0.706 0.15 156)", "--warning": "oklch(0.8 0.16 80)", "--info": "oklch(0.7 0.12 210)",
+  "--success-text": "oklch(0.706 0.15 156)", "--warning-text": "oklch(0.8 0.16 80)", "--info-text": "oklch(0.7 0.12 210)",
+  "--chart-1": "oklch(0.81 0.13 180)", ...CHART_ACCENTS,
 };
 const LIGHT: Record<string, string> = {
-  "--background": "#f7f8f9", "--foreground": "#17191c", "--card": "#ffffff",
-  "--border": "#d9dde2", "--muted": "#f1f3f5", "--muted-foreground": "#656d76",
-  "--primary": "#1769aa", "--primary-foreground": "#ffffff",
-  "--destructive": "#c43838", "--ring": "#1769aa",
+  "--background": "oklch(0.99 0.0015 280)", "--foreground": "oklch(0.21 0.02 281)", "--card": "oklch(1 0 0)",
+  "--border": "oklch(0.91 0.006 281)", "--muted": "oklch(0.965 0.006 280)", "--muted-foreground": "oklch(0.524 0.022 281)",
+  "--primary": "oklch(0.53 0.105 185)", "--primary-foreground": "oklch(0.985 0.01 180)",
+  "--destructive": "oklch(0.583 0.231 27.5)", "--ring": "oklch(0.53 0.105 185)",
+  "--success": "oklch(0.62 0.16 150)", "--warning": "oklch(0.72 0.16 73)", "--info": "oklch(0.6 0.14 240)",
+  "--success-text": "oklch(0.5 0.14 150)", "--warning-text": "oklch(0.52 0.13 73)", "--info-text": "oklch(0.5 0.13 240)",
+  "--chart-1": "oklch(0.53 0.105 185)", ...CHART_ACCENTS,
 };
 
 /* Render timing, so "the table is slow" is a number rather than an impression.

@@ -54,8 +54,8 @@ const summary = computed(() => stateSummary(props.groups));
 /* The state column exists only when states differ; otherwise the header says it. */
 const showState = computed(() => !summary.value.uniform);
 const flat = computed(() => searching.value || props.groupBy === "none");
-const rows = computed<LineGroupRow[]>(() => (flat.value ? [] : groupLines(visible.value, props.groupBy, props.traffic)));
-const flatRows = computed<LineEntry[]>(() => (flat.value ? flatLines(visible.value, props.traffic) : []));
+const rows = computed<LineGroupRow[]>(() => (flat.value ? [] : groupLines(visible.value, props.groupBy, props.traffic, props.groups)));
+const flatRows = computed<LineEntry[]>(() => (flat.value ? flatLines(visible.value, props.traffic, props.groups) : []));
 const totalLines = computed(() => props.groups.reduce((sum, group) => sum + group.lines.length, 0));
 const matching = computed(() => visible.value.reduce((sum, group) => sum + group.lines.length, 0));
 
@@ -208,7 +208,7 @@ onBeforeUnmount(() => closeMenu());
         <input class="search-input" type="search" :value="search" aria-label="Search lines" placeholder="Search node, line, port or error" @input="emit('update:search', ($event.target as HTMLInputElement).value)" />
       </div>
     </header>
-    <p v-if="searching" class="panel-inline-note">{{ matching }} of {{ totalLines }} lines match, listed flat. Clear the search to group them again.</p>
+    <p v-if="searching" class="panel-inline-note" data-tone="neutral">{{ matching }} of {{ totalLines }} lines match, listed flat. Clear the search to group them again.</p>
 
     <div v-if="flat ? flatRows.length : rows.length" class="table-wrap">
       <table class="lines-table" :data-flat="flat ? 'true' : undefined">
@@ -231,13 +231,13 @@ onBeforeUnmount(() => closeMenu());
           <tbody>
             <tr v-for="entry in flatPage.rows" :key="entry.line.line_hash_id" class="line-row clickable-row" :data-selected="openLine === entry.line.line_hash_id || undefined" @click="emit('open', entry.group, entry.line)">
               <td class="sticky-first line-col">
-                <button class="row-open" type="button" @click.stop="emit('open', entry.group, entry.line)"><strong :title="entry.line.name">{{ entry.line.name }}</strong></button>
+                <button class="row-open" type="button" :data-line-open="entry.line.line_hash_id" @click.stop="emit('open', entry.group, entry.line)"><strong :title="entry.line.name">{{ entry.line.name }}</strong></button>
                 <small class="mono" :title="entry.line.line_hash_id">{{ entry.line.line_hash_id }}</small>
               </td>
               <td><span class="cell-text" :title="nodeLabel(entry.group)">{{ nodeLabel(entry.group) }}</span></td>
               <td><span class="badge" :data-tone="entry.role === 'orphan' ? 'error' : undefined">{{ roleText(entry) }}</span><span v-if="entry.line.managed" class="badge" data-tone="info">managed</span></td>
               <td class="mono">{{ entry.line.type || 'unknown' }} :{{ entry.line.listen_port || '?' }}</td>
-              <td :class="{ 'error-text': entry.target.kind === 'none' }"><span class="cell-text" :title="targetText(entry)">{{ targetText(entry) }}</span><small v-if="entry.target.kind === 'off-fleet'">outside the fleet</small></td>
+              <td :class="{ 'warn-text': entry.target.kind === 'none' }"><span class="cell-text" :title="targetText(entry)">{{ targetText(entry) }}</span><small v-if="entry.target.kind === 'off-fleet'">outside the fleet</small></td>
               <td class="num mono" :title="entry.line.user_known ? undefined : 'The node did not report a user count for this line'">{{ entry.line.user_known ? entry.line.user_count : 'unknown' }}</td>
               <td class="num mono" :data-unknown="entry.bytes === undefined || undefined">{{ bytesCell(entry.bytes) }}</td>
               <td v-if="showState"><span class="status-dot" :data-tone="entry.state.tone" :data-common="entry.state.rank <= 1 || undefined">{{ entry.state.label }}</span></td>
@@ -256,7 +256,7 @@ onBeforeUnmount(() => closeMenu());
                   <ChevronRight class="node-chevron" :size="14" aria-hidden="true" />
                   <strong :title="group.label">{{ group.label }}</strong>
                 </button>
-                <small :title="group.sub">{{ group.sub }}</small>
+                <small v-if="group.sub" :title="group.sub">{{ group.sub }}</small>
               </td>
               <td>{{ roleSummary(group.agg) }}</td>
               <td class="mono"><span class="cell-text">{{ protocolSummary(group.agg) }}</span><small>{{ ports(group.agg) }}</small></td>
@@ -271,12 +271,12 @@ onBeforeUnmount(() => closeMenu());
             <template v-if="!folded.has(group.key)">
               <tr v-for="entry in group.entries" :key="entry.line.line_hash_id" class="line-row clickable-row" :data-selected="openLine === entry.line.line_hash_id || undefined" @click="emit('open', entry.group, entry.line)">
                 <td class="sticky-first line-col">
-                  <button class="row-open" type="button" @click.stop="emit('open', entry.group, entry.line)"><strong :title="entry.line.name">{{ entry.line.name }}</strong></button>
+                  <button class="row-open" type="button" :data-line-open="entry.line.line_hash_id" @click.stop="emit('open', entry.group, entry.line)"><strong :title="entry.line.name">{{ entry.line.name }}</strong></button>
                   <small class="mono" :title="groupBy === 'node' ? entry.line.line_hash_id : nodeLabel(entry.group)">{{ groupBy === 'node' ? entry.line.line_hash_id : nodeLabel(entry.group) }}</small>
                 </td>
                 <td><span class="badge" :data-tone="entry.role === 'orphan' ? 'error' : undefined">{{ roleText(entry) }}</span><span v-if="entry.line.managed" class="badge" data-tone="info">managed</span></td>
                 <td class="mono">{{ entry.line.type || 'unknown' }} :{{ entry.line.listen_port || '?' }}</td>
-                <td :class="{ 'error-text': entry.target.kind === 'none' }"><span class="cell-text" :title="targetText(entry)">{{ targetText(entry) }}</span><small v-if="entry.target.kind === 'off-fleet'">outside the fleet</small></td>
+                <td :class="{ 'warn-text': entry.target.kind === 'none' }"><span class="cell-text" :title="targetText(entry)">{{ targetText(entry) }}</span><small v-if="entry.target.kind === 'off-fleet'">outside the fleet</small></td>
                 <td class="num mono" :title="entry.line.user_known ? undefined : 'The node did not report a user count for this line'">{{ entry.line.user_known ? entry.line.user_count : 'unknown' }}</td>
                 <td class="num mono" :data-unknown="entry.bytes === undefined || undefined">{{ bytesCell(entry.bytes) }}</td>
                 <td v-if="showState"><span class="status-dot" :data-tone="entry.state.tone" :data-common="entry.state.rank <= 1 || undefined">{{ entry.state.label }}</span></td>

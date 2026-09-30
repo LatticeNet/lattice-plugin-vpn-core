@@ -20,8 +20,8 @@
  * so in one sentence and never adds it, and node totals, which do count every
  * hop, say so on the By node layer.
  */
-import { computed, ref } from "vue";
-import { Activity, ChevronRight, Gauge, LoaderCircle, Users, Waypoints } from "@lucide/vue";
+import { computed, ref, watch } from "vue";
+import { Activity, ChevronRight, Gauge, Users, Waypoints } from "@lucide/vue";
 
 import DailyBars from "./DailyBars.vue";
 import Sparkline from "./Sparkline.vue";
@@ -54,7 +54,6 @@ import {
   quotaState,
   roleLabel,
   upstreamLines,
-  USAGE_PERIODS,
   type UsageCollectorRow,
   type UsageLineRow,
   type StackBy,
@@ -134,9 +133,9 @@ const beforeLabel = computed(() => BEFORE[props.period] ?? "the previous period"
 const previousRange = computed(() => formatDayRange(props.previous?.from, props.previous?.to));
 
 const stackBy = computed(() => props.stack);
-const stack = computed(() => (series.value ? (stackBy.value === "exit" ? stackByExit(series.value, 6) : stackByRole(series.value)) : undefined));
+const stack = computed(() => (series.value ? (stackBy.value === "exit" ? stackByExit(series.value, 5) : stackByRole(series.value)) : undefined));
 const chartLabel = computed(() => stackBy.value === "exit"
-  ? `Daily egress ${periodSentence.value}, stacked by exit: the six largest and the rest together`
+  ? `Daily egress ${periodSentence.value}, stacked by exit: the five largest and the rest together`
   : `Every byte reported ${periodSentence.value}, stacked by line role`);
 
 const exits = computed(() => rankExits(props.lines, series.value));
@@ -225,9 +224,14 @@ function expiryLabel(userID: string): string {
   return Number.isNaN(date.getTime()) ? "no expiry" : date.toISOString().slice(0, 10);
 }
 
-function setPeriod(value: string): void {
+/* The period picker sits in the page header (one control row under the
+ * title, not a second tab row), so paging resets when the period changes,
+ * whoever changed it. */
+watch(() => props.period, () => {
   page.value = 1;
   openRows.value = new Set();
+});
+function setPeriod(value: string): void {
   emit("period", value as UsagePeriod);
 }
 function setView(value: UsageView): void {
@@ -236,24 +240,10 @@ function setView(value: UsageView): void {
 </script>
 
 <template>
-  <section class="toolbar usage-toolbar">
-    <div class="period-picker" role="group" aria-label="Usage period">
-      <button
-        v-for="value in USAGE_PERIODS"
-        :key="value"
-        class="period-option"
-        type="button"
-        :aria-pressed="period === value"
-        :disabled="busy"
-        @click="setPeriod(value)"
-      >{{ periodLabel(value) }}</button>
-    </div>
-    <p v-if="busy" class="permission-note"><LoaderCircle class="spin" :size="13" aria-hidden="true" /> reading {{ periodLabel(period).toLowerCase() }}</p>
-  </section>
-
   <p class="proof-line usage-proof" aria-live="polite">
     <span v-if="observedAt">observed at {{ observedAt }}</span>
     <span v-else>not observed yet</span>
+    <span v-if="busy">· reading {{ periodLabel(period).toLowerCase() }}</span>
     <span v-if="failed">· the usage read failed</span>
     <template v-else>
       <span>· {{ reportingCollectors }} of {{ collectors.length }} collectors ok</span>
@@ -306,7 +296,7 @@ function setView(value: UsageView): void {
           <h2 id="usage-chart-title">{{ series ? (stackBy === 'exit' ? 'Daily egress by exit' : 'Daily bytes by role') : failed || !hasTraffic ? 'Daily egress' : 'Egress by exit' }}</h2>
           <template v-if="!failed && hasTraffic">
             <p v-if="series && stackBy === 'role'">Exit, shared and direct at the bottom are egress. Entry and middle hop above them are that traffic counted again on its way.</p>
-            <p v-else-if="series">Each bar is one day; the six largest exits have their own segment and the rest share one.</p>
+            <p v-else-if="series">Each bar is one day; the five largest exits have their own segment and the rest share one.</p>
             <p v-else>The daily view needs a newer server, which reports usage per day. These are the period totals per exit it would have stacked.</p>
           </template>
         </div>
