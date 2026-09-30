@@ -29,6 +29,8 @@ const props = defineProps<{
   user?: VpnUser;
   /** The id the address asked for, when no identity has it. */
   missingId?: string;
+  /** Below 768px the panel is a modal sheet; from 768px it sits beside the table. */
+  modal: boolean;
   now: number;
   options: readonly LineOption[];
   /** Why the line list is missing, when it is: then lines cannot be named or chosen. */
@@ -116,7 +118,7 @@ watch(() => props.focusBindings, async (value) => {
 
 <template>
   <div class="overlay-scrim sheet-scrim" data-overlay="user-detail" @mousedown.self="emit('close')">
-    <section ref="panel" tabindex="-1" class="modal sheet" role="dialog" aria-modal="true" aria-labelledby="user-detail-title">
+    <section ref="panel" tabindex="-1" class="modal sheet" role="dialog" :aria-modal="modal ? 'true' : undefined" aria-labelledby="user-detail-title">
       <header>
         <div>
           <h2 id="user-detail-title">{{ user ? user.email : 'Identity not found' }}</h2>

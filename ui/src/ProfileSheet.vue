@@ -28,6 +28,8 @@ import {
 const props = defineProps<{
   profile?: Profile;
   missingId?: string;
+  /** Below 768px the panel is a modal sheet; from 768px it sits beside the table. */
+  modal: boolean;
   settings?: ProfileSettings;
   settingsBusy: boolean;
   settingsError: string;
@@ -74,7 +76,7 @@ const execAllowed = computed(() => !!props.settings && props.settings.prerequisi
 
 <template>
   <div class="overlay-scrim sheet-scrim" data-overlay="profile-detail" @mousedown.self="emit('close')">
-    <section tabindex="-1" class="modal sheet" role="dialog" aria-modal="true" aria-labelledby="profile-detail-title">
+    <section tabindex="-1" class="modal sheet" role="dialog" :aria-modal="modal ? 'true' : undefined" aria-labelledby="profile-detail-title">
       <header>
         <div>
           <h2 id="profile-detail-title">{{ profile ? profileName(profile) : 'Node profile not found' }}</h2>

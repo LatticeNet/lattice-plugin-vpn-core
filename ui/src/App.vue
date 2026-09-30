@@ -1314,14 +1314,28 @@ watch(openOverlayKey, async (key, previous) => {
  * and that getter touches refs declared further down the setup. */
 watch(pageState, publishPageState);
 
+/* From 768px a side panel sits beside the collection and is not modal
+ * (design 23, 3.5): the stylesheet drops its scrim and lets clicks reach the
+ * rows, so another row swaps the panel, and the panel stops claiming to be
+ * modal. Below 768px it is a full-height modal sheet. */
+const sheetModal = ref(false);
+let narrowQuery: MediaQueryList | undefined;
+function syncSheetModal(): void {
+  sheetModal.value = !!narrowQuery?.matches;
+}
+
 onMounted(() => {
   document.addEventListener("pointerdown", recordAnchor, true);
   window.addEventListener("keydown", onKeydown);
+  narrowQuery = window.matchMedia?.("(max-width: 767.98px)");
+  syncSheetModal();
+  narrowQuery?.addEventListener("change", syncSheetModal);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", recordAnchor, true);
   window.removeEventListener("keydown", onKeydown);
+  narrowQuery?.removeEventListener("change", syncSheetModal);
   stateSender?.dispose();
   bridge?.dispose();
 });
@@ -1673,7 +1687,7 @@ onBeforeUnmount(() => {
 
     <!-- The line panel (L2), addressed by ?open=<line_hash_id>. A sheet from
          the right on a wide window, the full height of the frame on a phone. -->
-    <div v-if="lineDetailOpen && lineDetail" class="overlay-scrim sheet-scrim" data-overlay="line-detail" @mousedown.self="closeLineDetails()"><section tabindex="-1" class="modal sheet" role="dialog" aria-modal="true" aria-labelledby="line-detail-title">
+    <div v-if="lineDetailOpen && lineDetail" class="overlay-scrim sheet-scrim" data-overlay="line-detail" @mousedown.self="closeLineDetails()"><section tabindex="-1" class="modal sheet" role="dialog" :aria-modal="sheetModal ? 'true' : undefined" aria-labelledby="line-detail-title">
       <header>
         <div>
           <h2 id="line-detail-title">{{ lineDetail.name }}</h2>
@@ -1773,6 +1787,7 @@ onBeforeUnmount(() => {
       v-if="route === 'users' && userOpenId"
       :user="openUser"
       :missing-id="userOpenId"
+      :modal="sheetModal"
       :now="usersNow"
       :options="lineChoices"
       :lines-error="usersLinesError"
@@ -1794,6 +1809,7 @@ onBeforeUnmount(() => {
       v-if="route === 'profiles' && profileOpenId"
       :profile="openProfile"
       :missing-id="profileOpenId"
+      :modal="sheetModal"
       :settings="profileSettings"
       :settings-busy="profileSettingsBusy"
       :settings-error="profileSettingsError"

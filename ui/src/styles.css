@@ -705,6 +705,14 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
    its scrim is one step below theirs whatever order they render in. */
 .sheet-scrim { z-index: 900; align-items: stretch; justify-content: flex-end; padding: 0; }
 .modal.sheet { width: min(600px, 100%); height: 100%; max-height: none; border-width: 0 0 0 1px; border-radius: 0; }
+/* From 768px a side panel sits beside the collection (design 23, 3.5): no
+   scrim, and the rows around it stay live, so a click on another row swaps
+   the panel. It narrows so at least 400px of the table stays reachable at
+   768px, and is 600px from 1000px up. Below 768px it is a modal sheet. */
+@media (min-width: 768px) {
+  .sheet-scrim { background: transparent; pointer-events: none; }
+  .sheet-scrim > .modal.sheet { width: clamp(360px, 100vw - 400px, 600px); pointer-events: auto; box-shadow: -12px 0 32px rgba(10, 14, 18, 0.22); }
+}
 .modal.sheet > header { position: sticky; top: 0; z-index: 2; background: var(--card, #fff); }
 .modal.sheet > header h2 { overflow-wrap: anywhere; }
 .modal.sheet > footer { position: sticky; bottom: 0; z-index: 2; background: var(--card, #fff); }
