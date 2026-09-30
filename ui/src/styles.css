@@ -849,3 +849,7 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
   .profiles-table td.line-col small.narrow-only { white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; }
 }
 .issue-list .status-dot { flex: 0 0 auto; }
+@media (max-width: 720px) {
+  /* Three lines of evidence per claim on a phone; Show lists every identity it names. */
+  .users-body .attention-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
+}

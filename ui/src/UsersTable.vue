@@ -184,7 +184,7 @@ function aggLines(agg: UserAggregate): string {
   return `${agg.bindings} ${agg.bindings === 1 ? "line" : "lines"}`;
 }
 function aggUsed(agg: UserAggregate): string {
-  return agg.attributed ? formatBytes(agg.usedBytes) : "none counted";
+  return agg.attributed ? formatBytes(agg.usedBytes) : "none";
 }
 
 // ── the row menu ─────────────────────────────────────────────────────────
