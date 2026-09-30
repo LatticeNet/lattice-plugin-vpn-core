@@ -510,10 +510,13 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 .proof-line { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); margin: calc(-1 * var(--sp-3)) 0 0; color: var(--muted-foreground, #65707b); font-family: var(--font-mono); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
 .usage-proof { margin: 0 0 var(--sp-3); }
 .header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); }
-.layer-tabs { display: flex; gap: var(--sp-1); margin: var(--sp-4) 0; overflow-x: auto; border-bottom: 1px solid var(--border, #d9dde2); scrollbar-width: thin; }
-.layer-tab { display: inline-flex; flex: 0 0 auto; min-height: 36px; align-items: center; gap: 6px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: var(--sp-2) var(--sp-3); color: var(--muted-foreground, #65707b); background: transparent; font-size: var(--text-md); font-weight: 600; white-space: nowrap; transition: color var(--duration-fast, 100ms) ease-out, border-color var(--duration-fast, 100ms) ease-out; }
+/* The hairline and the selected underline are inset shadows, not borders: a
+   tab pulled down over the row's border with a negative margin hangs 1px out
+   of this sideways scroller and makes it scroll up and down by that pixel. */
+.layer-tabs { display: flex; gap: var(--sp-1); margin: var(--sp-4) 0; overflow-x: auto; box-shadow: inset 0 -1px 0 var(--border, #d9dde2); scrollbar-width: thin; }
+.layer-tab { display: inline-flex; flex: 0 0 auto; min-height: 36px; align-items: center; gap: 6px; border: 0; margin: 0; padding: var(--sp-2) var(--sp-3); color: var(--muted-foreground, #65707b); background: transparent; font-size: var(--text-md); font-weight: 600; white-space: nowrap; transition: color var(--duration-fast, 100ms) ease-out, box-shadow var(--duration-fast, 100ms) ease-out; }
 .layer-tab:hover { color: var(--foreground, #17191c); }
-.layer-tab[aria-selected="true"] { color: var(--foreground, #17191c); border-bottom-color: var(--primary, #1769aa); }
+.layer-tab[aria-selected="true"] { color: var(--foreground, #17191c); box-shadow: inset 0 -2px 0 var(--primary, #1769aa); }
 .layer-tab:focus-visible { outline: 2px solid var(--ring, #2c77b8); outline-offset: -2px; border-radius: var(--radius-sm); }
 .layer-body { display: flex; flex-direction: column; gap: var(--sp-4); margin-bottom: var(--sp-4); }
 .layer-body > .summary-strip { margin: 0; }
@@ -752,7 +755,7 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
   .header-actions { grid-column: 1 / -1; justify-content: stretch; }
   .header-actions .button { flex: 1 1 auto; }
   /* The layer tabs become a segmented control that scrolls sideways. */
-  .layer-tabs { gap: 0; padding: 2px; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); background: var(--card, #fff); }
+  .layer-tabs { gap: 0; padding: 2px; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); background: var(--card, #fff); box-shadow: none; }
   .layer-tab { min-height: 30px; margin: 0; border: 0; border-radius: calc(var(--radius) - 2px); padding: 4px var(--sp-3); }
   .layer-tab[aria-selected="true"] { background: var(--muted, #eef0f2); box-shadow: inset 0 0 0 1px var(--border, #d9dde2); }
   .headline strong { font-size: 26px; }
