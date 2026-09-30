@@ -390,26 +390,6 @@ export function pageRows<T>(rows: readonly T[], requestedPage: number, pageSize:
 }
 
 /**
- * A quota box read as "how many GiB", or `undefined` for "do not change it".
- *
- * Blank is not zero. The field is prefilled from the stored record and then the
- * whole form is submitted, so an operator who opens an account to rename it and
- * never looks at the quota must not have their limit removed. Unparseable is
- * also "do not change it": storing a number nobody typed, while the box still
- * shows what they did type, is worse than ignoring it.
- *
- * A zero the operator actually types is kept, because clearing a quota on
- * purpose has to stay possible.
- */
-export function quotaBytesFromInput(raw: string): number | undefined {
-  const text = raw.trim();
-  if (text === "") return undefined;
-  const gib = Number(text);
-  if (!Number.isFinite(gib) || gib < 0) return undefined;
-  return Math.round(gib * 1024 * 1024 * 1024);
-}
-
-/**
  * One row of the server's usage read-model: bytes for a (node, user) pair, and
  * for a (node, user, line) triple once a line-aware collector is reporting.
  *

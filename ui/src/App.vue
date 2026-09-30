@@ -38,6 +38,7 @@ import {
 import { bytesByLine, egressByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
 import UsageScreen from "./UsageScreen.vue";
 import UserSheet from "./UserSheet.vue";
+import { blankIdentityForm, quotaInput, saveIdentity, type IdentityForm, type IdentityInitial } from "./identityForm";
 import UsersTable from "./UsersTable.vue";
 import ProfileSheet from "./ProfileSheet.vue";
 import ProfilesTable from "./ProfilesTable.vue";
@@ -45,7 +46,6 @@ import { profileHead, type Profile, type ProfilePluginConfig, type ProfileSettin
 import {
   expiryDate,
   expiryInput,
-  expiryPayload,
   formatDay,
   lineOptions,
   usersAttention,
@@ -59,7 +59,6 @@ import {
 import {
   attributionLabel,
   measurementLabel,
-  quotaResetDayFromInput,
   roleLabel,
   usageAfterFailedRead,
   USAGE_PERIODS,
@@ -83,7 +82,6 @@ import {
   rolloutSummaryLine,
   safeErrorMessage,
   unresolvedOverlayDefs,
-  quotaBytesFromInput,
   type Line,
   type LineChain,
   type LineGroup,
@@ -755,49 +753,40 @@ const userDialogOpen = ref(false);
 const editingUser = ref<VpnUser>();
 const savingUser = ref(false);
 const userDialogError = ref("");
-/** The expiry the form was opened with, so an untouched field sends nothing. */
-let initialExpiry = "";
+/** What the dialog opened with: the quota and the expiry send only on change. */
+let initial: IdentityInitial = { quotaGiB: "", expiresAt: "" };
 const expiryHelp = computed(() => {
   if (!editingUser.value) return "Optional. Empty means it never expires.";
-  if (!initialExpiry) return "It has no expiry. Set one here, or leave the field empty.";
+  if (!initial.expiresAt) return "It has no expiry. Set one here, or leave the field empty.";
   return userForm.expiresAt.trim() ? "Empty the field, or use No expiry, to remove the expiry." : "Saving removes the expiry: the identity will not expire.";
 });
-const userForm = reactive({
-  email: "",
-  name: "",
-  enabled: true,
-  quotaGiB: "",
-  /** "none" or "monthly"; the server stores "none" as an empty period. */
-  quotaPeriod: "none",
-  quotaResetDay: "",
-  expiresAt: "",
-  group: "",
-  comment: "",
-  protocol: "vless",
-  secret: "",
-  flow: "",
+const quotaHelp = computed(() => {
+  if (!editingUser.value) return "Blank or 0 is unlimited.";
+  if (!initial.quotaGiB) return "It has no quota. Enter GiB to set one.";
+  return userForm.quotaGiB.trim() ? "Empty the field, or enter 0, to remove the quota." : "Saving removes the quota: the identity will be unlimited.";
 });
+const userForm = reactive<IdentityForm>(blankIdentityForm());
 
 function openCreateUser(): void {
   editingUser.value = undefined;
   userDialogError.value = "";
-  initialExpiry = "";
-  Object.assign(userForm, { email: "", name: "", enabled: true, quotaGiB: "", quotaPeriod: "none", quotaResetDay: "", expiresAt: "", group: "", comment: "", protocol: "vless", secret: "", flow: "" });
+  initial = { quotaGiB: "", expiresAt: "" };
+  Object.assign(userForm, blankIdentityForm());
   userDialogOpen.value = true;
 }
 
 function openEditUser(user: VpnUser): void {
   editingUser.value = user;
   userDialogError.value = "";
-  initialExpiry = expiryInput(user.expires_at);
+  initial = { quotaGiB: quotaInput(user.quota_bytes), expiresAt: expiryInput(user.expires_at) };
   Object.assign(userForm, {
     email: user.email,
     name: user.name ?? "",
     enabled: user.enabled,
-    quotaGiB: user.quota_bytes ? String(user.quota_bytes / 1024 / 1024 / 1024) : "",
+    quotaGiB: initial.quotaGiB,
     quotaPeriod: user.quota_period === "monthly" ? "monthly" : "none",
     quotaResetDay: user.quota_reset_day ? String(user.quota_reset_day) : "",
-    expiresAt: initialExpiry,
+    expiresAt: initial.expiresAt,
     group: user.group ?? "",
     comment: user.comment ?? "",
     protocol: user.credentials[0]?.protocol ?? "vless",
@@ -813,41 +802,21 @@ async function saveUser(): Promise<void> {
   savingUser.value = true;
   userDialogError.value = "";
   try {
-    const payload: Record<string, unknown> = {
-      email: userForm.email.trim(), name: userForm.name.trim(), enabled: userForm.enabled,
-      group: userForm.group.trim(), comment: userForm.comment.trim(),
-    };
-    // Blank means "leave it alone". Sending 0 for a box the operator never
-    // touched is how renaming a quota'd account made it unlimited.
-    const quota = quotaBytesFromInput(userForm.quotaGiB);
-    if (quota !== undefined) payload.quota_bytes = quota;
-    // The period is a select, so it always states a value and is always sent.
-    // "none" is the server's word for no reset, and it clears the reset day
-    // server-side, so a quota can never keep a stale day it no longer uses.
-    payload.quota_period = userForm.quotaPeriod === "monthly" ? "monthly" : "none";
-    if (userForm.quotaPeriod === "monthly") {
-      const day = quotaResetDayFromInput(userForm.quotaResetDay);
-      if (day !== undefined) payload.quota_reset_day = day;
-    }
-    // Only a changed expiry is sent: emptied is "no expiry", untouched is nothing.
-    const expiresAt = expiryPayload(initialExpiry, userForm.expiresAt);
-    if (expiresAt !== undefined) payload.expires_at = expiresAt;
+    // identityForm.ts builds the payload and owns the field rules; this only
+    // sends it and says what happened.
+    const user = editingUser.value;
+    const { write, createdId } = await saveIdentity(
+      (method, payload) => pluginCall(SERVICES.admin, method, payload),
+      userForm,
+      initial,
+      user,
+    );
     const email = userForm.email.trim();
-    if (editingUser.value) {
-      const user = editingUser.value;
-      payload.id = user.id;
-      await pluginCall(SERVICES.admin, "update", payload);
-      const cleared = expiresAt !== undefined && !userForm.expiresAt.trim();
-      tellOutcome(user, `${email} saved.${cleared ? " It no longer expires." : ""}`);
-    } else {
-      const credential: Record<string, string> = { protocol: userForm.protocol };
-      if (["vless", "vmess", "tuic"].includes(userForm.protocol)) credential.uuid = userForm.secret.trim();
-      else credential.password = userForm.secret;
-      if (userForm.flow.trim()) credential.flow = userForm.flow.trim();
-      payload.credentials = [credential];
-      const result = await pluginCall<{ user?: { id?: string } }>(SERVICES.admin, "create", payload);
-      const id = result?.user?.id;
-      if (id) tellOutcome({ id }, `${email} created. It is bound to no line yet: open it to bind one.`);
+    if (user) {
+      const notes = [write.removed.quota ? " It no longer has a quota." : "", write.removed.expiry ? " It no longer expires." : ""].join("");
+      tellOutcome(user, `${email} saved.${notes}`);
+    } else if (createdId) {
+      tellOutcome({ id: createdId }, `${email} created. It is bound to no line yet: open it to bind one.`);
     }
     userDialogOpen.value = false;
     await loadCurrent(true);
@@ -1641,7 +1610,7 @@ onBeforeUnmount(() => {
     </template>
 
     <div v-if="userDialogOpen" class="overlay-scrim" data-overlay="user" :style="overlayStyle" @mousedown.self="userDialogOpen = false"><section tabindex="-1" class="modal" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><header><div><h2 id="user-dialog-title">{{ editingUser ? `Edit ${editingUser.email}` : 'New identity' }}</h2><p>{{ editingUser ? 'Existing secrets stay unchanged. Only the fields you change are saved.' : 'Create one initial protocol credential.' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="userDialogOpen = false"><X :size="17" /></button></header><div class="form-grid">
-      <label class="field field-wide"><span>Email identity</span><input v-model="userForm.email" type="email" autocomplete="off" data-autofocus /></label><label class="field"><span>Display name</span><input v-model="userForm.name" type="text" /></label><label class="field"><span>Group</span><input v-model="userForm.group" type="text" /></label><label class="field"><span>Quota (GiB)</span><input v-model="userForm.quotaGiB" type="number" min="0" step="1" placeholder="Unlimited" /><small class="field-help">{{ editingUser ? 'Blank leaves the current quota unchanged; 0 makes it unlimited.' : 'Blank or 0 is unlimited.' }}</small></label><label class="field"><span>Quota period</span><select v-model="userForm.quotaPeriod"><option value="none">No reset, counts for the lifetime</option><option value="monthly">Monthly</option></select></label><label class="field"><span>Reset day</span><input v-model="userForm.quotaResetDay" type="number" min="1" max="28" placeholder="1" :disabled="userForm.quotaPeriod !== 'monthly'" /><small class="field-help">{{ userForm.quotaPeriod === 'monthly' ? 'Day of the month the count resets, 1 to 28 so every month has it.' : 'Only a monthly quota resets.' }}</small></label>
+      <label class="field field-wide"><span>Email identity</span><input v-model="userForm.email" type="email" autocomplete="off" data-autofocus /></label><label class="field"><span>Display name</span><input v-model="userForm.name" type="text" /></label><label class="field"><span>Group</span><input v-model="userForm.group" type="text" /></label><label class="field"><span>Quota (GiB)</span><input v-model="userForm.quotaGiB" type="number" min="0" step="1" placeholder="Unlimited" /><small class="field-help">{{ quotaHelp }}</small></label><label class="field"><span>Quota period</span><select v-model="userForm.quotaPeriod"><option value="none">No reset, counts for the lifetime</option><option value="monthly">Monthly</option></select></label><label class="field"><span>Reset day</span><input v-model="userForm.quotaResetDay" type="number" min="1" max="28" placeholder="1" :disabled="userForm.quotaPeriod !== 'monthly'" /><small class="field-help">{{ userForm.quotaPeriod === 'monthly' ? 'Day of the month the count resets, 1 to 28 so every month has it.' : 'Only a monthly quota resets.' }}</small></label>
       <div class="field expiry-field"><label for="user-expiry">Expires at</label><div class="expiry-input"><input id="user-expiry" v-model="userForm.expiresAt" type="datetime-local" /><button v-if="userForm.expiresAt" class="button button-secondary button-compact" type="button" @click="userForm.expiresAt = ''">No expiry</button></div><small class="field-help">{{ expiryHelp }}</small></div><label class="toggle-field field-wide"><input v-model="userForm.enabled" type="checkbox" /><span>Identity enabled</span></label>
       <template v-if="!editingUser"><label class="field"><span>Protocol</span><select v-model="userForm.protocol"><option v-for="protocol in ['vless','vmess','trojan','shadowsocks','hysteria2','tuic','anytls']" :key="protocol" :value="protocol">{{ protocol }}</option></select></label><label class="field"><span>{{ ['vless','vmess','tuic'].includes(userForm.protocol) ? 'UUID' : 'Password' }}</span><input v-model="userForm.secret" type="password" autocomplete="new-password" /></label><label class="field field-wide"><span>Flow override</span><input v-model="userForm.flow" type="text" placeholder="Optional" /></label></template>
       <label class="field field-wide"><span>Comment</span><textarea v-model="userForm.comment" rows="3" /></label></div><div v-if="userDialogError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span><strong>Not saved</strong>{{ userDialogError }}</span></div><footer><button class="button button-secondary" type="button" @click="userDialogOpen = false">Cancel</button><button class="button button-primary" type="button" :disabled="savingUser || !userForm.email.trim()" @click="saveUser"><LoaderCircle v-if="savingUser" class="spin" :size="15" />{{ editingUser ? 'Save changes' : 'Create identity' }}</button></footer></section></div>
