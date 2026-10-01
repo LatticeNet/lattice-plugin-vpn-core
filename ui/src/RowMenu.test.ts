@@ -85,10 +85,28 @@ describe("the row menu, driven by the keyboard", () => {
     expect(escaped).toEqual([]);
   });
 
-  it("closes on Tab and leaves focus to move on", async () => {
-    const { root, press } = await openMenu([item("Edit identity"), item("Line bindings")]);
+  it("closes on Tab and gives focus back to the trigger", async () => {
+    const { trigger, root, press } = await openMenu([item("Edit identity"), item("Line bindings")]);
     await press("Tab");
     expect(root()).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("jumps to the first and last item with Home and End, and keeps the keys from scrolling", async () => {
+    const { press, root } = await openMenu([
+      item("Edit identity"),
+      item("Line bindings"),
+      item("Rotate a credential", { disabled: true, reason: "no credential" }),
+      item("Delete identity", { danger: true }),
+    ]);
+    const end = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
+    (document.activeElement as HTMLElement).dispatchEvent(end);
+    await nextTick();
+    expect(end.defaultPrevented).toBe(true);
+    expect(text(document.activeElement)).toBe("Delete identity");
+    await press("Home");
+    expect(text(document.activeElement)).toBe("Edit identity");
+    expect(root()).not.toBeNull();
   });
 
   it("with nothing it can run, holds focus itself so Escape still closes it", async () => {

@@ -107,8 +107,16 @@ function onKey(event: KeyboardEvent): void {
   } else if (event.key === "ArrowUp") {
     event.preventDefault();
     buttons[(index - 1 + buttons.length) % buttons.length]?.focus();
+  } else if (event.key === "Home" || event.key === "End") {
+    // The first and last item. Left to the browser, the key scrolled the
+    // frame, the scroll closed the menu, and focus fell to <body>.
+    event.preventDefault();
+    (event.key === "Home" ? buttons[0] : buttons[buttons.length - 1])?.focus();
   } else if (event.key === "Tab") {
-    close();
+    // Tab leaves the menu the way Escape does: closed, with focus on the
+    // trigger. Closing alone dropped focus to <body> with the item it was on.
+    event.preventDefault();
+    close(true);
   }
 }
 
