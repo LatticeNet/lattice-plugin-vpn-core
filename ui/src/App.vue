@@ -72,6 +72,7 @@ import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } fr
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
 import { useObservedAge } from "./observedAge";
+import { trapTab } from "./dialogFocus";
 import { vRevealSelected } from "./layerTabs";
 import {
   formatBytes,
@@ -1297,8 +1298,18 @@ function closeTopOverlay(): void {
   else if (lineDetailOpen.value) closeLineDetails();
 }
 
+/*
+ * Escape is answered here, on the window, so it works wherever focus is in
+ * the frame. Tab is kept inside the top overlay while that overlay is modal
+ * (every dialog, and a side panel below 768px): Tab past a dialog's last
+ * control used to leave the frame, and Escape then reached nothing.
+ */
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape" && overlayOpen.value) closeTopOverlay();
+  else if (event.key === "Tab" && overlayOpen.value) {
+    const top = document.querySelector<HTMLElement>(`[data-overlay="${openOverlayKey.value}"] .modal[aria-modal="true"]`);
+    if (top) trapTab(event, top);
+  }
 }
 
 /* A dialog remembers what had focus when it opened (a row menu's trigger, a
