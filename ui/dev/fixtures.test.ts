@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { lineRole } from "../src/fleetRows";
 import { attributionSummary, roleTotals, seriesEgressGap, type UsageSeries } from "../src/trafficModel";
 import type { UsageLineRow } from "../src/usageModel";
-import type { LineGroup } from "../src/vpnModel";
-import { handlers } from "./fixtures";
+import { NO_EXPIRY, expiryOf, isAttributed, isBound, usersSummary } from "../src/usersModel";
+import type { LineGroup, VpnUser } from "../src/vpnModel";
+import { handlers, resetUserStores } from "./fixtures";
 
 const GiB = 1024 ** 3;
 const gib = (value: number) => Math.round((value / GiB) * 10) / 10;
@@ -90,5 +91,49 @@ describe("dense and legacy", () => {
     expect(usage.series).toBeUndefined();
     expect(usage.previous).toBeUndefined();
     expect(gib(roleTotals(usage.lines).egress)).toBe(313);
+  });
+});
+
+describe("identities", () => {
+  beforeEach(resetUserStores);
+  const list = (scenario: "production" | "dense" | "empty") => (handlers(scenario)["users/list"]({}) as { users: VpnUser[] }).users;
+
+  it("production is the 2026-09-30 read: 134 identities, 122 enabled, usage attributed to 1, 2 expiring within 30 days", () => {
+    const users = list("production");
+    const summary = usersSummary(users, Date.now());
+    expect(summary.total).toBe(134);
+    expect(summary.enabled).toBe(122);
+    expect(users.filter(isAttributed).map((user) => user.email)).toEqual(["probe@lattice.invalid"]);
+    expect(summary.expiring).toHaveLength(2);
+    expect(users.filter(isBound)).toHaveLength(1);
+    expect(summary.unbound).toHaveLength(121);
+    // As the server writes them: zero time for no expiry, zero usage for nothing counted.
+    expect(users.filter((user) => user.expires_at === NO_EXPIRY).length).toBeGreaterThan(120);
+    expect(users.every((user) => user.used_period_bytes !== undefined && Array.isArray(user.allocated_nodes))).toBe(true);
+    expect([...users].map((user) => user.email)).toEqual([...users].map((user) => user.email).sort());
+  });
+
+  it("dense holds every identity state", () => {
+    const summary = usersSummary(list("dense"), Date.now());
+    expect(summary.states.map((state) => state.key).sort()).toEqual(["active", "disabled", "expired", "expiring", "over_quota", "unbound"].sort());
+    expect(summary.attributed).toBeGreaterThan(3);
+  });
+
+  it("empty has none", () => {
+    expect(list("empty")).toEqual([]);
+  });
+
+  it("keeps an edit until the harness reloads, with the server's rules", () => {
+    const table = handlers("production");
+    const probe = list("production").find((user) => user.id === "u_probe")!;
+    expect(expiryOf(probe, Date.now()).kind).toBe("soon");
+    table["users-admin/update"]({ id: "u_probe", email: "", name: "Liveness probe", group: "probe", comment: "", expires_at: NO_EXPIRY });
+    expect(expiryOf(list("production").find((user) => user.id === "u_probe")!, Date.now()).kind).toBe("none");
+    expect(() => table["users-admin/bind"]({ user_id: "u_cdcd", line_hash_id: "lh_nope" })).toThrow(/not a known line/);
+    const hash = (table["lines/list"]({}) as { groups: LineGroup[] }).groups[0].lines[0].line_hash_id;
+    table["users-admin/bind"]({ user_id: "u_cdcd", line_hash_id: hash });
+    expect(list("production").find((user) => user.id === "u_cdcd")!.bindings).toEqual([{ line_hash_id: hash, enabled: true }]);
+    table["users-admin/delete"]({ id: "u_migrated_5" });
+    expect(list("production")).toHaveLength(133);
   });
 });

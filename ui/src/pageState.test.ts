@@ -13,7 +13,7 @@ import {
   type VpnPageState,
 } from "./pageState";
 
-const state = (patch: Partial<VpnPageState> = {}): VpnPageState => ({ ...DEFAULT_PAGE_STATE, expand: [], ...patch });
+const state = (patch: Partial<VpnPageState> = {}): VpnPageState => ({ ...DEFAULT_PAGE_STATE, usersSort: { ...DEFAULT_PAGE_STATE.usersSort }, ...patch });
 
 describe("page state rules", () => {
   it("accepts a state inside the contract and drops the whole state on any bad entry", () => {
@@ -58,9 +58,12 @@ describe("encoding this plugin's state", () => {
     ["usage", state({ usageView: "node", period: "30d" }), { view: "node", period: "30d" }],
     ["usage", state({ usageView: "overview", stack: "role", period: "today" }), { period: "today", stack: "role" }],
     ["usage", state({ usageView: "user", period: "all" }), { view: "user", period: "all" }],
-    ["users", state({ expand: ["u_1", "u_7"] }), { expand: "u_1,u_7" }],
     ["users", state(), {}],
+    ["users", state({ usersView: "expiring", usersGroup: "status", q: "metix", usersSort: { key: "expires", reverse: true }, open: "u_1" }), { show: "expiring", group: "status", q: "metix", sort: "-expires", open: "u_1" }],
+    ["users", state({ usersView: "over_quota" }), { show: "over_quota" }],
+    ["users", state({ usersGroup: "group", usersSort: { key: "used", reverse: false } }), { group: "group", sort: "used" }],
     ["profiles", state(), {}],
+    ["profiles", state({ open: "node-hkg-edge-01" }), { open: "node-hkg-edge-01" }],
   ];
 
   it.each(cases)("round-trips the %s state %#", (route, value, encoded) => {
@@ -69,12 +72,23 @@ describe("encoding this plugin's state", () => {
     expect(decodePageState(encoded)).toEqual(value);
   });
 
+  it("keeps view for layers: the Users subset is show, and an older view=unbound link is read, never written", () => {
+    expect(decodePageState({ view: "unbound" }).usersView).toBe("unbound");
+    expect(decodePageState({ view: "expiring", show: "over_quota" }).usersView).toBe("over_quota");
+    expect(decodePageState({ view: "lines" }).usersView).toBe("all");
+    const legacy = decodePageState({ view: "unbound", open: "u_1" });
+    expect(encodePageState("users", legacy)).toEqual({ show: "unbound", open: "u_1" });
+  });
+
   it("writes only the route's own keys, so another page's state never rides along", () => {
-    const busy = state({ linesView: "lines", usageView: "user", group: "bank", q: "hr", open: "lh_9", period: "30d", stack: "role", expand: ["u_2"] });
+    const busy = state({
+      linesView: "lines", usageView: "user", group: "bank", q: "hr", open: "lh_9", period: "30d", stack: "role",
+      usersView: "unbound", usersGroup: "status", usersSort: { key: "quota", reverse: false },
+    });
     expect(Object.keys(encodePageState("lines", busy))).toEqual(["view", "group", "q", "open"]);
     expect(Object.keys(encodePageState("usage", busy))).toEqual(["view", "period", "stack"]);
-    expect(Object.keys(encodePageState("users", busy))).toEqual(["expand"]);
-    expect(encodePageState("profiles", busy)).toEqual({});
+    expect(encodePageState("users", busy)).toEqual({ show: "unbound", group: "status", q: "hr", sort: "quota", open: "lh_9" });
+    expect(encodePageState("profiles", busy)).toEqual({ open: "lh_9" });
   });
 
   it("trims the search and leaves out a value too long for the address instead of cutting it", () => {
@@ -82,8 +96,7 @@ describe("encoding this plugin's state", () => {
     expect(encodePageState("lines", state({ q: "   " }))).toEqual({});
     const long = "x".repeat(PAGE_STATE_MAX_VALUE_LENGTH + 1);
     expect(encodePageState("lines", state({ linesView: "lines", q: long }))).toEqual({ view: "lines" });
-    const manyUsers = Array.from({ length: 60 }, (_, index) => `user_${index}`);
-    expect(encodePageState("users", state({ expand: manyUsers }))).toEqual({});
+    expect(encodePageState("users", state({ q: long }))).toEqual({});
   });
 
   it("reads stale, hand-edited and legacy addresses as a page it can open", () => {
@@ -93,7 +106,17 @@ describe("encoding this plugin's state", () => {
     expect(decodePageState({ view: "attention", lens: "fleet" }).linesView).toBe("attention");
     // One `view` names a Lines layer or a Usage layer; the route decides which counts.
     expect(decodePageState({ view: "node" })).toMatchObject({ linesView: "overview", usageView: "node" });
-    expect(decodePageState({ expand: "u_1,,u_2, u_1" }).expand).toEqual(["u_1", "u_2"]);
+    // One `group` names a Lines grouping or a Users grouping, the same way.
+    expect(decodePageState({ group: "status" })).toMatchObject({ group: "node", usersGroup: "status" });
+    expect(decodePageState({ group: "bank" })).toMatchObject({ group: "bank", usersGroup: "none" });
+    expect(decodePageState({ view: "expiring", sort: "-nonsense" })).toMatchObject({ linesView: "overview", usersView: "expiring", usersSort: { key: "identity", reverse: false } });
+  });
+
+  it("reads the Users page's older expand key once, as the identity whose panel opens", () => {
+    expect(decodePageState({ expand: " ,u_1,u_2" }).open).toBe("u_1");
+    expect(decodePageState({ expand: "u_1", open: "u_9" }).open).toBe("u_9");
+    // Read, never written: the next state the page sends has no expand.
+    expect(encodePageState("users", decodePageState({ expand: "u_1,u_2" }))).toEqual({ open: "u_1" });
   });
 });
 
@@ -171,7 +194,7 @@ describe("the console's reserved keys", () => {
   });
 
   it("are never keys this plugin writes", () => {
-    const busy = state({ linesView: "lines", usageView: "user", group: "bank", q: "hr", open: "lh_9", period: "30d", stack: "role", expand: ["u_2"] });
+    const busy = state({ linesView: "lines", usageView: "user", group: "bank", q: "hr", open: "lh_9", period: "30d", stack: "role", usersView: "unbound", usersGroup: "status", usersSort: { key: "used", reverse: true } });
     for (const route of ["lines", "usage", "users", "profiles"]) {
       expect(validPageState(encodePageState(route, busy)), route).toEqual(encodePageState(route, busy));
     }

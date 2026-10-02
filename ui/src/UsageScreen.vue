@@ -20,6 +20,7 @@
  * so in one sentence and never adds it, and node totals, which do count every
  * hop, say so on the By node layer.
  */
+import { vRevealSelected } from "./layerTabs";
 import { computed, ref, watch } from "vue";
 import { Activity, ChevronRight, Gauge, Users, Waypoints } from "@lucide/vue";
 
@@ -86,10 +87,12 @@ const props = withDefaults(defineProps<{
   /** How the overview's daily chart stacks. The page keeps it with the layer. */
   stack?: StackBy;
   /** When the page last heard from the control plane, for the proof line. */
-  observedAt?: string;
+  /** "13s" when this period's read is the one on screen, "" otherwise. */
+  observedAge?: string;
+  observedTitle?: string;
   /** The console can be asked to open Users. */
   canOpenUsers?: boolean;
-}>(), { view: "overview", stack: "exit", observedAt: "", canOpenUsers: false, series: undefined, previous: undefined, from: undefined, to: undefined });
+}>(), { view: "overview", stack: "exit", observedAge: "", observedTitle: "", canOpenUsers: false, series: undefined, previous: undefined, from: undefined, to: undefined });
 const emit = defineEmits<{
   period: [value: UsagePeriod];
   view: [value: UsageView];
@@ -241,7 +244,7 @@ function setView(value: UsageView): void {
 
 <template>
   <p class="proof-line usage-proof" aria-live="polite">
-    <span v-if="observedAt">observed at {{ observedAt }}</span>
+    <span v-if="observedAge" :title="observedTitle">observed {{ observedAge }} ago</span>
     <span v-else>not observed yet</span>
     <span v-if="busy">· reading {{ periodLabel(period).toLowerCase() }}</span>
     <span v-if="failed">· the usage read failed</span>
@@ -252,7 +255,7 @@ function setView(value: UsageView): void {
     <span v-if="rangeLabel">· {{ rangeLabel }}</span>
   </p>
 
-  <nav class="layer-tabs" role="tablist" aria-label="Usage layers">
+  <nav v-reveal-selected="view" class="layer-tabs" role="tablist" aria-label="Usage layers">
     <button class="layer-tab" role="tab" type="button" :aria-selected="view === 'overview'" @click="setView('overview')">Overview</button>
     <button class="layer-tab" role="tab" type="button" :aria-selected="view === 'node'" @click="setView('node')">By node<span v-if="!failed" class="lens-count">{{ nodeFigures.length }}</span></button>
     <button class="layer-tab" role="tab" type="button" :aria-selected="view === 'line'" @click="setView('line')">By line<span v-if="!failed" class="lens-count">{{ lines.length }}</span></button>
