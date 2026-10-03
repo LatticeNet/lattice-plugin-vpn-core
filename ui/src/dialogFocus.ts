@@ -6,7 +6,8 @@
  * field to Cancel and then out of the frame into the console, where this
  * frame's Escape no longer reached. Past the last control Tab wraps to the
  * first, and Shift+Tab before the first wraps to the last. The same rule as
- * plugin-bridge's trapDialogTab, which this plugin does not depend on.
+ * plugin-bridge's trapDialogTab; this page's dialogs are its own, not the
+ * chassis's, so it keeps this copy until it moves onto the chassis.
  */
 const FOCUSABLE = [
   "a[href]",
