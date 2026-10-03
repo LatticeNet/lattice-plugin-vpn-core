@@ -183,7 +183,7 @@ watch(() => props.focusBindings, async (value) => {
 
         <section class="detail-section" aria-labelledby="user-credentials">
           <h3 id="user-credentials">Credentials</h3>
-          <p class="field-help">Secrets are write-only. Rotating shows the new one once; the old one keeps working on each line until that line is planned and applied again.</p>
+          <p class="field-help">Secrets are write-only here. Rotating issues a new one, which the Lattice console reveals after step-up; the old one keeps working on each line until that line is planned and applied again.</p>
           <div class="binding-list">
             <div v-for="credential in user.credentials" :key="credential.protocol">
               <span class="credential-line">

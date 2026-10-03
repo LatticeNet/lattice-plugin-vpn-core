@@ -16,6 +16,7 @@ import {
   pageUserTable,
   parseUserSort,
   encodeUserSort,
+  rotateOutcome,
   rowsHoldUser,
   searchUsers,
   sortUsers,
@@ -271,5 +272,26 @@ describe("the line picker", () => {
     expect(filterLineOptions(options, "7890", new Set()).shown[0]).toMatchObject({ node: "[cd]-qqpw-VDS-cd1", detail: "hysteria2 :7890" });
     const capped = filterLineOptions(options, "", new Set(), 2);
     expect([capped.shown.length, capped.matched]).toEqual([2, 3]);
+  });
+});
+
+describe("rotateOutcome", () => {
+  it("opens the one-time secret only when the server sent one", () => {
+    const shown = rotateOutcome("alice@example.com", { protocol: "vless", revealed_credential: "4f2a1c88-0d55-4a3e-9d31-6b71f0c2a9de" });
+    expect(shown.secret).toBe("4f2a1c88-0d55-4a3e-9d31-6b71f0c2a9de");
+    expect(shown.text).toContain("new vless secret issued");
+  });
+
+  it("says where to reveal a withheld secret instead of showing an empty one", () => {
+    for (const result of [
+      { protocol: "trojan", credential_withheld: true, reveal_code: "step_up_required" },
+      { protocol: "trojan", revealed_credential: "  " },
+      { protocol: "trojan" },
+    ]) {
+      const outcome = rotateOutcome("bob@example.com", result);
+      expect(outcome.secret).toBeUndefined();
+      expect(outcome.text).toContain("reveal it in the Lattice console after step-up");
+      expect(outcome.text).toContain("keeps working on each bound line");
+    }
   });
 });

@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.10.0-alpha.1",
+  "version": "0.11.0-alpha.1",
   "publisher": "latticenet",
-  "signature_ed25519": "sVXj5pea6fb1QQjKx45I4iufVlUX+S+XQ4wJr14ljqLn0gVqkZIeicL2rdFX/hYivjMqMwRtsRT1yvt9MqJ3Dw==",
+  "signature_ed25519": "",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "8f8c261d32e7c3fe60df3faf6d1c4710d58bee07dc72c9ea2d494c77854129d6"
+    "digest_sha256": "adabfa04f442897037e051bac9f5f6ef4a93ec83971216d77be7240a670811c3"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -301,6 +301,48 @@
           "scopes": [
             "vpncore:admin",
             "node:read"
+          ]
+        },
+        {
+          "name": "link_get",
+          "effect": "read",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_issue",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_set",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_revoke",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_rotate",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_reveal",
+          "effect": "read",
+          "scopes": [
+            "vpncore:admin"
           ]
         }
       ],
