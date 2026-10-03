@@ -869,6 +869,14 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
   .users-body .attention-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
 }
 
+/* Filed plans and their watch (planWatch.ts), in the line and identity panels. */
+.status-dot.wrap { max-width: none; white-space: normal; }
+.link-plans { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+.link-plans li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: 6px var(--sp-3); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); font-size: var(--text-xs); }
+.link-plans small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-weight: 400; }
+.link-plans li > span { display: grid; min-width: 0; flex: 1 1 200px; gap: 2px; }
+.link-plans small { display: inline-flex; align-items: center; gap: var(--sp-1); }
+
 /* On a touch screen every control is at least 44px on its short side. The
    design review measured the row menu trigger at 30px, Show at 28px and the
    sort headers at 16px. A mouse keeps the dense layout. */

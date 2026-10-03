@@ -38,6 +38,8 @@ import {
 import { bytesByLine, egressByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
 import UsageScreen from "./UsageScreen.vue";
 import UserSheet from "./UserSheet.vue";
+import { parseLinkStatus } from "./identityLinkModel";
+import { PlanWatcher, type WatchedOp, type WatchState } from "./planWatch";
 import { blankIdentityForm, quotaInput, saveIdentity, type IdentityForm, type IdentityInitial } from "./identityForm";
 import UsersTable from "./UsersTable.vue";
 import ProfileSheet from "./ProfileSheet.vue";
@@ -752,6 +754,12 @@ function closeUserPanel(): void {
   });
 }
 
+/* The console opens the approval read only; deciding stays the operator's click there. */
+function openApproval(id: string): void {
+  if (!hostOrigin || !id) return;
+  postNavigate(window, `/approvals?open=${encodeURIComponent(id)}`, hostOrigin);
+}
+
 /* ── create and edit ─────────────────────────────────────────────────── */
 const userDialogOpen = ref(false);
 const editingUser = ref<VpnUser>();
@@ -984,6 +992,7 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   lineDetailNodeName.value = group.node_name || group.node_id;
   lineDetailError.value = "";
   lineApprovals.value = [];
+  stopLineWatch();
   lineUsersError.value = "";
   lineUserAdd.value = "";
   lineDetailOpen.value = true;
@@ -1027,6 +1036,7 @@ function restoreLineFocus(hash: string | undefined): void {
 
 function closeLineDetails(): void {
   const hash = lineDetail.value?.line_hash_id;
+  stopLineWatch();
   void nextTick(() => restoreLineFocus(hash));
   lineDetailOpen.value = false;
   lineDetailBusy.value = false;
@@ -1040,7 +1050,38 @@ function closeLineDetails(): void {
 const lineUsersBusy = ref(false);
 const lineUsersError = ref("");
 const lineUserAdd = ref("");
-const lineApprovals = ref<{ id: string; summary: string }[]>([]);
+const lineApprovals = ref<{ id: string; summary: string; state?: WatchState; note?: string }[]>([]);
+/* A line-user plan is followed until the line shows it (planWatch.ts), and
+ * then the lines are read again, so the panel stops saying "pending" by
+ * itself. It needs users-admin link_get; without it the entry stays a plain
+ * "pending approval" with its link to Approvals. */
+let lineWatcher: PlanWatcher | undefined;
+function stopLineWatch(): void {
+  lineWatcher?.dispose();
+  lineWatcher = undefined;
+}
+function watchLinePlan(approvalId: string, userId: string, lineHash: string, op: WatchedOp, summary: string): void {
+  if (!canCall(init.value, SERVICES.admin, "link_get")) return;
+  lineWatcher ??= new PlanWatcher({
+    read: async (id) => {
+      const status = parseLinkStatus(await pluginCall<unknown>(SERVICES.admin, "link_get", { user_id: id }));
+      if (!status) throw new Error("the link status was not readable");
+      return status;
+    },
+    onChange: (plans, applied) => {
+      const byId = new Map(plans.map((plan) => [plan.approvalId, plan]));
+      lineApprovals.value = lineApprovals.value.map((item) => {
+        const plan = byId.get(item.id);
+        return plan ? { ...item, state: plan.state, note: plan.note } : item;
+      });
+      if (applied.length) {
+        notice.value = applied.length === 1 ? "The approved plan is applied; the line was read again." : `${applied.length} approved plans are applied; the lines were read again.`;
+        void loadCurrent(true);
+      }
+    },
+  });
+  lineWatcher.watch({ approvalId, userId, lineHash, op, summary });
+}
 
 const lineDetailBoundUsers = computed(() => {
   const line = lineDetail.value;
@@ -1063,7 +1104,7 @@ interface LinePlanResult {
   approval?: { id: string; plan?: string };
 }
 
-function recordLineApproval(result: LinePlanResult, fallback: string): void {
+function recordLineApproval(result: LinePlanResult, fallback: string): string | undefined {
   let summary = fallback;
   try {
     summary = JSON.parse(result.approval?.plan ?? "{}").summary ?? fallback;
@@ -1071,6 +1112,7 @@ function recordLineApproval(result: LinePlanResult, fallback: string): void {
     summary = fallback;
   }
   if (result.approval?.id) lineApprovals.value = [{ id: result.approval.id, summary }, ...lineApprovals.value];
+  return result.approval?.id ? summary : undefined;
 }
 
 async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", userId: string): Promise<void> {
@@ -1080,8 +1122,9 @@ async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", user
   lineUsersError.value = "";
   try {
     const result = await pluginCall<LinePlanResult>(SERVICES.admin, op, { user_id: userId, line_hash_id: line.line_hash_id });
-    recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
-    notice.value = "On-node action queued. Approve it in the Approvals console, then rediscover";
+    const summary = recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
+    if (summary && result.approval?.id) watchLinePlan(result.approval.id, userId, line.line_hash_id, op, summary);
+    notice.value = "On-node action queued. Approve it in Approvals; this panel reads the line again once it is applied";
     await loadCurrent(true);
   } catch (cause) {
     lineUsersError.value = safeErrorMessage(cause, "The on-node action could not be planned");
@@ -1375,6 +1418,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
   narrowQuery?.removeEventListener("change", syncSheetModal);
   stateSender?.dispose();
+  stopLineWatch();
   bridge?.dispose();
 });
 </script>
@@ -1807,8 +1851,15 @@ onBeforeUnmount(() => {
             <select v-model="lineUserAdd"><option value="">Select an identity to add</option><option v-for="user in lineDetailBindableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select>
             <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Queue add</button>
           </div>
-          <ul v-if="lineApprovals.length" class="detail-list">
-            <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span>: {{ item.summary }} <em>(pending approval)</em></li>
+          <ul v-if="lineApprovals.length" class="link-plans" data-testid="line-approvals">
+            <li v-for="item in lineApprovals" :key="item.id">
+              <span>
+                <span class="status-dot wrap" :data-tone="item.state === 'applied' ? 'healthy' : item.state === 'pending' || !item.state ? 'warning' : undefined">{{ item.summary }}</span>
+                <small>{{ item.note || (item.state === 'applied' ? 'applied; the line was read again' : item.state === 'pending' ? 'waiting for approval and apply; this panel reads the line again when it lands' : 'pending approval') }}<LoaderCircle v-if="item.state === 'pending'" class="spin" :size="11" aria-hidden="true" /></small>
+              </span>
+              <button v-if="hostOrigin" class="button button-secondary button-compact" type="button" @click="openApproval(item.id)">Review in Approvals</button>
+              <span v-else class="mono">{{ item.id }}</span>
+            </li>
           </ul>
         </section>
 
