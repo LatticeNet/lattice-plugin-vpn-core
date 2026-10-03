@@ -38,6 +38,9 @@ import {
 import { bytesByLine, egressByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
 import UsageScreen from "./UsageScreen.vue";
 import UserSheet from "./UserSheet.vue";
+import { useIdentityLink, type LinkMethod } from "./identityLink";
+import { parseLinkStatus, type FixAction } from "./identityLinkModel";
+import { PlanWatcher, type WatchedOp, type WatchState } from "./planWatch";
 import { blankIdentityForm, quotaInput, saveIdentity, type IdentityForm, type IdentityInitial } from "./identityForm";
 import UsersTable from "./UsersTable.vue";
 import ProfileSheet from "./ProfileSheet.vue";
@@ -48,8 +51,10 @@ import {
   expiryInput,
   formatDay,
   lineOptions,
+  rotateOutcome,
   usersAttention,
   usersSummary,
+  type RotateResult,
   type UserOutcome,
   type UserSort,
   type UsersAttentionItem,
@@ -260,6 +265,8 @@ const pageState = computed<PageState>(() => encodePageState(route.value, {
   usersView: usersView.value,
   usersGroup: usersGroup.value,
   usersSort: usersSort.value,
+  // The New identity form, while it is open, so a link can land on it.
+  create: route.value === "users" && userDialogOpen.value && !editingUser.value,
 }));
 
 /* The state goes out only after init, and only once the operator changes
@@ -271,7 +278,10 @@ let hostKeepsState = false;
 
 function adoptPageState(value: HostInit): void {
   hostKeepsState = value.pageState !== undefined;
-  if (value.pageState) applyPageState(decodePageState(value.pageState));
+  const asked = value.pageState ? decodePageState(value.pageState) : startState;
+  if (value.pageState) applyPageState(asked);
+  // `create=1`: the console palette's "Add a VPN user" lands on the form.
+  if (asked.create && value.pluginRoute === "users" && canCall(value, SERVICES.admin, "create")) openCreateUser();
   const client = bridge;
   stateSender?.dispose();
   stateSender = createStateSender((state) => client?.sendState(state), { baseline: pageState.value });
@@ -750,6 +760,47 @@ function closeUserPanel(): void {
   });
 }
 
+/* ── the open identity's subscription link ──────────────────────────── */
+const identityLink = useIdentityLink({
+  call: <T,>(method: LinkMethod | FixAction, payload: Record<string, unknown>, timeoutMs?: number) => {
+    if (!bridge || !canCall(init.value, SERVICES.admin, method)) {
+      return Promise.reject(new Error(`This session is not allowed to run ${method}, so nothing was sent.`));
+    }
+    return bridge.call<T>(SERVICES.admin, method, payload, timeoutMs).promise;
+  },
+  can: (method) => canCall(init.value, SERVICES.admin, method),
+  copy: (text) => (bridge ? bridge.copy(text) : Promise.resolve(false)),
+});
+/* The section follows the panel: it reads the link of the identity that is
+ * open, and forgets everything (a revealed link, watched plans) when the
+ * panel closes or moves to another identity. */
+watch(
+  () => (route.value === "users" && openUser.value ? openUser.value.id : ""),
+  (id) => void identityLink.open(id),
+);
+const showLinkSection = computed(() => canCall(init.value, SERVICES.admin, "link_get"));
+
+const linkConfirm = ref<{ user: VpnUser; action: "rotate" | "revoke" }>();
+const linkConfirmBusy = ref(false);
+async function confirmLinkAction(): Promise<void> {
+  const pending = linkConfirm.value;
+  if (!pending || linkConfirmBusy.value) return;
+  linkConfirmBusy.value = true;
+  try {
+    if (pending.action === "rotate") await identityLink.rotate();
+    else await identityLink.revoke();
+  } finally {
+    linkConfirmBusy.value = false;
+    linkConfirm.value = undefined;
+  }
+}
+
+/* The console opens the approval read only; deciding stays the operator's click there. */
+function openApproval(id: string): void {
+  if (!hostOrigin || !id) return;
+  postNavigate(window, `/approvals?open=${encodeURIComponent(id)}`, hostOrigin);
+}
+
 /* ── create and edit ─────────────────────────────────────────────────── */
 const userDialogOpen = ref(false);
 const editingUser = ref<VpnUser>();
@@ -982,6 +1033,7 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   lineDetailNodeName.value = group.node_name || group.node_id;
   lineDetailError.value = "";
   lineApprovals.value = [];
+  stopLineWatch();
   lineUsersError.value = "";
   lineUserAdd.value = "";
   lineDetailOpen.value = true;
@@ -1025,6 +1077,7 @@ function restoreLineFocus(hash: string | undefined): void {
 
 function closeLineDetails(): void {
   const hash = lineDetail.value?.line_hash_id;
+  stopLineWatch();
   void nextTick(() => restoreLineFocus(hash));
   lineDetailOpen.value = false;
   lineDetailBusy.value = false;
@@ -1038,7 +1091,38 @@ function closeLineDetails(): void {
 const lineUsersBusy = ref(false);
 const lineUsersError = ref("");
 const lineUserAdd = ref("");
-const lineApprovals = ref<{ id: string; summary: string }[]>([]);
+const lineApprovals = ref<{ id: string; summary: string; state?: WatchState; note?: string }[]>([]);
+/* A line-user plan is followed until the line shows it (planWatch.ts), and
+ * then the lines are read again, so the panel stops saying "pending" by
+ * itself. It needs users-admin link_get; without it the entry stays a plain
+ * "pending approval" with its link to Approvals. */
+let lineWatcher: PlanWatcher | undefined;
+function stopLineWatch(): void {
+  lineWatcher?.dispose();
+  lineWatcher = undefined;
+}
+function watchLinePlan(approvalId: string, userId: string, lineHash: string, op: WatchedOp, summary: string): void {
+  if (!canCall(init.value, SERVICES.admin, "link_get")) return;
+  lineWatcher ??= new PlanWatcher({
+    read: async (id) => {
+      const status = parseLinkStatus(await pluginCall<unknown>(SERVICES.admin, "link_get", { user_id: id }));
+      if (!status) throw new Error("the link status was not readable");
+      return status;
+    },
+    onChange: (plans, applied) => {
+      const byId = new Map(plans.map((plan) => [plan.approvalId, plan]));
+      lineApprovals.value = lineApprovals.value.map((item) => {
+        const plan = byId.get(item.id);
+        return plan ? { ...item, state: plan.state, note: plan.note } : item;
+      });
+      if (applied.length) {
+        notice.value = applied.length === 1 ? "The approved plan is applied; the line was read again." : `${applied.length} approved plans are applied; the lines were read again.`;
+        void loadCurrent(true);
+      }
+    },
+  });
+  lineWatcher.watch({ approvalId, userId, lineHash, op, summary });
+}
 
 const lineDetailBoundUsers = computed(() => {
   const line = lineDetail.value;
@@ -1061,7 +1145,7 @@ interface LinePlanResult {
   approval?: { id: string; plan?: string };
 }
 
-function recordLineApproval(result: LinePlanResult, fallback: string): void {
+function recordLineApproval(result: LinePlanResult, fallback: string): string | undefined {
   let summary = fallback;
   try {
     summary = JSON.parse(result.approval?.plan ?? "{}").summary ?? fallback;
@@ -1069,6 +1153,7 @@ function recordLineApproval(result: LinePlanResult, fallback: string): void {
     summary = fallback;
   }
   if (result.approval?.id) lineApprovals.value = [{ id: result.approval.id, summary }, ...lineApprovals.value];
+  return result.approval?.id ? summary : undefined;
 }
 
 async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", userId: string): Promise<void> {
@@ -1078,8 +1163,9 @@ async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", user
   lineUsersError.value = "";
   try {
     const result = await pluginCall<LinePlanResult>(SERVICES.admin, op, { user_id: userId, line_hash_id: line.line_hash_id });
-    recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
-    notice.value = "On-node action queued. Approve it in the Approvals console, then rediscover";
+    const summary = recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
+    if (summary && result.approval?.id) watchLinePlan(result.approval.id, userId, line.line_hash_id, op, summary);
+    notice.value = "On-node action queued. Approve it in Approvals; this panel reads the line again once it is applied";
     await loadCurrent(true);
   } catch (cause) {
     lineUsersError.value = safeErrorMessage(cause, "The on-node action could not be planned");
@@ -1155,11 +1241,12 @@ async function rotateCredential(): Promise<void> {
   rotateBusy.value = true;
   rotateError.value = "";
   try {
-    const result = await pluginCall<{ protocol: string; revealed_credential: string }>(
+    const result = await pluginCall<RotateResult>(
       SERVICES.admin, "rotate", { user_id: user.id, protocol: rotateProtocol.value });
-    rotateRevealed.value = { email: user.email, protocol: result.protocol, secret: result.revealed_credential };
+    const outcome = rotateOutcome(user.email, result);
+    if (outcome.secret) rotateRevealed.value = { email: user.email, protocol: result.protocol, secret: outcome.secret };
     rotateUser.value = undefined;
-    tellOutcome(user, `${user.email}: new ${result.protocol} secret issued. The old one keeps working on each bound line until that line is planned and applied again.`);
+    tellOutcome(user, outcome.text);
     await loadCurrent(true);
   } catch (cause) {
     rotateError.value = safeErrorMessage(cause, "The credential could not be rotated");
@@ -1266,6 +1353,7 @@ const overlayStyle = computed(() => ({ "--overlay-anchor-top": `${overlayAnchorT
 // in the stylesheet as well as here.
 const openOverlayKey = computed(() => {
   if (rotateRevealed.value) return "rotate-revealed";
+  if (linkConfirm.value) return "link-confirm";
   if (deleteTarget.value) return "delete";
   if (rotateUser.value) return "rotate";
   if (rolloutOpen.value) return "rollout";
@@ -1289,7 +1377,8 @@ function closeTopOverlay(): void {
   // rotateRevealed is deliberately not dismissible here: it is the one-time
   // display of a secret, and losing it to a stray Escape means rotating again.
   if (rotateRevealed.value) return;
-  if (deleteTarget.value) deleteTarget.value = undefined;
+  if (linkConfirm.value) linkConfirm.value = undefined;
+  else if (deleteTarget.value) deleteTarget.value = undefined;
   else if (rotateUser.value) rotateUser.value = undefined;
   else if (rolloutOpen.value) closeRollout();
   else if (userDialogOpen.value) userDialogOpen.value = false;
@@ -1372,6 +1461,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
   narrowQuery?.removeEventListener("change", syncSheetModal);
   stateSender?.dispose();
+  stopLineWatch();
+  void identityLink.open("");
   bridge?.dispose();
 });
 </script>
@@ -1704,6 +1795,15 @@ onBeforeUnmount(() => {
         <footer><button class="button button-secondary" type="button" @click="closeRollout">Done</button></footer>
       </template>
     </section></div>
+    <div v-if="linkConfirm" class="overlay-scrim" data-overlay="link-confirm" :style="overlayStyle" @mousedown.self="linkConfirm = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="link-confirm-title" aria-describedby="link-confirm-impact">
+      <header><div><h2 id="link-confirm-title">{{ linkConfirm.action === 'rotate' ? `Rotate the link for ${linkConfirm.user.email}` : `Revoke the link for ${linkConfirm.user.email}` }}</h2><p>What this breaks:</p></div><button class="icon-button" type="button" aria-label="Close" @click="linkConfirm = undefined"><X :size="17" /></button></header>
+      <ul id="link-confirm-impact" class="impact-list">
+        <li>Every client using the current link stops updating at once. Its next refresh gets nothing, and it keeps the servers it already has.</li>
+        <li v-if="linkConfirm.action === 'rotate'">A new link is issued now. Reveal it after step-up and hand it to every device again.</li>
+        <li v-else>No link is issued afterwards. Issue a new one when this identity should have a link again.</li>
+        <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
+      </ul>
+      <footer><button class="button button-secondary" type="button" data-autofocus @click="linkConfirm = undefined">Cancel</button><button class="button button-danger" type="button" :disabled="linkConfirmBusy" data-testid="link-confirm" @click="confirmLinkAction"><LoaderCircle v-if="linkConfirmBusy" class="spin" :size="15" /> {{ linkConfirm.action === 'rotate' ? 'Rotate link' : 'Revoke link' }}</button></footer></section></div>
     <div v-if="deleteTarget" class="overlay-scrim" data-overlay="delete" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-impact">
       <header><div><h2 id="delete-title">Delete {{ deleteTarget.email }}</h2><p>What this breaks:</p></div><button class="icon-button" type="button" aria-label="Close" @click="deleteTarget = undefined"><X :size="17" /></button></header>
       <ul id="delete-impact" class="impact-list"><li v-for="line in deleteImpact" :key="line">{{ line }}</li></ul>
@@ -1711,12 +1811,12 @@ onBeforeUnmount(() => {
       <div v-if="deleteError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span><strong>Not deleted</strong>{{ deleteError }}</span></div>
       <footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" :disabled="deletingUser || deleteTyped.trim() !== deleteTarget.email" @click="deleteUser"><LoaderCircle v-if="deletingUser" class="spin" :size="15" /><Trash2 v-else :size="15" /> Delete identity</button></footer></section></div>
 
-    <div v-if="rotateUser" class="overlay-scrim" data-overlay="rotate" :style="overlayStyle" @mousedown.self="rotateUser = undefined"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="rotate-title"><header><div><h2 id="rotate-title">Rotate a credential</h2><p>{{ rotateUser.email }}, bound to {{ rotateUser.bindings.length }} {{ rotateUser.bindings.length === 1 ? 'line' : 'lines' }}. The new secret is shown once. The old one keeps working on each bound line until that line is planned and applied with the new one.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
+    <div v-if="rotateUser" class="overlay-scrim" data-overlay="rotate" :style="overlayStyle" @mousedown.self="rotateUser = undefined"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="rotate-title"><header><div><h2 id="rotate-title">Rotate a credential</h2><p>{{ rotateUser.email }}, bound to {{ rotateUser.bindings.length }} {{ rotateUser.bindings.length === 1 ? 'line' : 'lines' }}. The new secret is not shown here; reveal it in the Lattice console after step-up. The old one keeps working on each bound line until that line is planned and applied with the new one.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
       <div class="form-grid rotate-form"><label class="field field-wide"><span>Protocol credential</span><select v-model="rotateProtocol" data-autofocus><option v-for="credential in rotateUser.credentials" :key="credential.protocol" :value="credential.protocol">{{ credential.protocol }}</option></select></label></div>
       <div v-if="rotateError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span><strong>Not rotated</strong>{{ rotateError }}</span></div>
       <footer><button class="button button-secondary" type="button" @click="rotateUser = undefined">Cancel</button><button class="button button-primary" type="button" :disabled="rotateBusy || !rotateProtocol" @click="rotateCredential"><LoaderCircle v-if="rotateBusy" class="spin" :size="15" /> Rotate</button></footer></section></div>
 
-    <div v-if="rotateRevealed" class="overlay-scrim" data-overlay="rotate-revealed" :style="overlayStyle"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>New {{ rotateRevealed.protocol }} credential</h2><p>{{ rotateRevealed.email }}. Shown once and never retrievable again.</p></div></header>
+    <div v-if="rotateRevealed" class="overlay-scrim" data-overlay="rotate-revealed" :style="overlayStyle"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>New {{ rotateRevealed.protocol }} credential</h2><p>{{ rotateRevealed.email }}. Shown here once; the Lattice console can reveal it again after step-up.</p></div></header>
       <label class="field field-wide"><span>Secret (copy now)</span><textarea class="command-output mono" :value="rotateRevealed.secret" readonly rows="2" @focus="($event.target as HTMLTextAreaElement).select()" /></label>
       <footer><button class="button button-primary" type="button" @click="rotateRevealed = undefined">I have saved it</button></footer></section></div>
 
@@ -1804,8 +1904,15 @@ onBeforeUnmount(() => {
             <select v-model="lineUserAdd"><option value="">Select an identity to add</option><option v-for="user in lineDetailBindableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select>
             <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Queue add</button>
           </div>
-          <ul v-if="lineApprovals.length" class="detail-list">
-            <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span>: {{ item.summary }} <em>(pending approval)</em></li>
+          <ul v-if="lineApprovals.length" class="link-plans" data-testid="line-approvals">
+            <li v-for="item in lineApprovals" :key="item.id">
+              <span>
+                <span class="status-dot wrap" :data-tone="item.state === 'applied' ? 'healthy' : item.state === 'pending' || !item.state ? 'warning' : undefined">{{ item.summary }}</span>
+                <small>{{ item.note || (item.state === 'applied' ? 'applied; the line was read again' : item.state === 'pending' ? 'waiting for approval and apply; this panel reads the line again when it lands' : 'pending approval') }}<LoaderCircle v-if="item.state === 'pending'" class="spin" :size="11" aria-hidden="true" /></small>
+              </span>
+              <button v-if="hostOrigin" class="button button-secondary button-compact" type="button" @click="openApproval(item.id)">Review in Approvals</button>
+              <span v-else class="mono">{{ item.id }}</span>
+            </li>
           </ul>
         </section>
 
@@ -1831,6 +1938,8 @@ onBeforeUnmount(() => {
       :unbind-busy="unbindBusy"
       :outcome="userOutcome"
       :focus-bindings="bindingsFocus"
+      :link="showLinkSection ? identityLink : undefined"
+      :host-origin="hostOrigin"
       @close="closeUserPanel()"
       @edit="openEditUser"
       @rotate="openRotate"
@@ -1838,6 +1947,9 @@ onBeforeUnmount(() => {
       @unbind="unbindLine"
       @delete="askDeleteUser"
       @dismiss="userOutcome = undefined"
+      @rotate-link="(user) => (linkConfirm = { user, action: 'rotate' })"
+      @revoke-link="(user) => (linkConfirm = { user, action: 'revoke' })"
+      @review="openApproval"
     />
 
     <ProfileSheet

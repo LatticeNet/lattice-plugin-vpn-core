@@ -23,6 +23,7 @@
 
 import { filterPageState, validPageState, type PageState } from "../src/pageState";
 import { handlers, SCENARIOS, type Scenario } from "./fixtures";
+import { LinkFixtureError } from "./linkFixtures";
 
 const ROUTES = ["lines", "users", "profiles", "usage"] as const;
 type Route = (typeof ROUTES)[number];
@@ -38,7 +39,8 @@ const INTERFACES = [
   { service: "latticenet.vpn-core/users", methods: ["list"] },
   {
     service: "latticenet.vpn-core/users-admin",
-    methods: ["create", "update", "delete", "bind", "unbind", "rotate", "plan_add", "plan_update", "plan_remove", "usage_query"],
+    methods: ["create", "update", "delete", "bind", "unbind", "rotate", "plan_add", "plan_update", "plan_remove", "usage_query",
+      "link_get", "link_issue", "link_set", "link_revoke", "link_rotate", "link_reveal"],
   },
   { service: "latticenet.vpn-core/profiles", methods: ["query", "settings", "configure"] },
   { service: "latticenet.vpn-core/usage", methods: ["query"] },
@@ -163,7 +165,7 @@ function armMeasure(resolve: (value: Measure) => void): void {
 
 const params = new URLSearchParams(location.search);
 /* The harness's own keys. Everything else in the address is page state. */
-const HARNESS_KEYS = new Set(["route", "scenario", "theme", "width", "frame", "fail", "zoom", "measure", "plugin", "oldhost"]);
+const HARNESS_KEYS = new Set(["route", "scenario", "theme", "width", "frame", "fail", "zoom", "measure", "plugin", "oldhost", "stepup", "deny", "slow"]);
 let frameEpoch = 0;
 let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
@@ -189,6 +191,18 @@ let readySeen = false;
  * `fail=usage/query@30d` fails it only for that period, so a period switch
  * whose read fails can be looked at after a good first read. */
 const failCalls = new Set(params.getAll("fail"));
+/* The console runs a step-up prompt before it answers a reveal (lattice-dashboard
+ * PluginFrameHost.vue). `stepup=ok` (the default) answers as if the operator
+ * passed it after a short wait; `stepup=cancel` refuses as when they cancel;
+ * `stepup=old` answers like a console without the step-up path, which passes
+ * the server's step_up_required straight through. */
+const stepUp = params.get("stepup") ?? "ok";
+/* `deny=link` refuses every link method the way the server refuses a session
+ * without vpncore:admin or with a node allowlist: 403 capability_denied. */
+const denyLinks = params.get("deny") === "link";
+/* `slow=users-admin/link_get` holds that call for two minutes, so its loading
+ * state can be looked at. */
+const slowCalls = new Set(params.getAll("slow"));
 let dark = params.get("theme") !== "light";
 let width = params.get("width") ?? "1440";
 /** The height of the console's main region. The frame gets exactly this. */
@@ -233,6 +247,9 @@ function applyChrome(): void {
 function writeAddress(): void {
   const query = new URLSearchParams({ route, scenario, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
   for (const key of failCalls) query.append("fail", key);
+  for (const key of slowCalls) query.append("slow", key);
+  if (stepUp !== "ok") query.set("stepup", stepUp);
+  if (denyLinks) query.set("deny", "link");
   if (zoom) query.set("zoom", zoom);
   if (oldHost) query.set("oldhost", "1");
   for (const [key, value] of Object.entries(pageState)) query.set(key, value);
@@ -306,11 +323,33 @@ window.addEventListener("message", (event) => {
       reported.textContent = `plugin reported ${height}px (ignored; frame is ${windowHeight}px)`;
       return;
     }
+    case "lattice.plugin.clipboard": {
+      // The console copies on the frame's behalf and always answers.
+      const text = typeof data.text === "string" ? data.text : "";
+      void (navigator.clipboard?.writeText(text) ?? Promise.reject(new Error("no clipboard")))
+        .then(() => true, () => false)
+        .then((ok) => post({ type: "lattice.host.clipboard", id: data.id, ok, ...(ok ? {} : { code: "clipboard_refused" }) }));
+      return;
+    }
     case "lattice.plugin.call": {
       const table = handlers(scenario);
       const key = `${String(data.service).split("/").pop()}/${data.method}`;
       const handler = table[key];
+      const isLink = String(data.method).startsWith("link_");
+      if (denyLinks && isLink) {
+        window.setTimeout(() => post({ type: "lattice.host.error", id: data.id, code: "call_failed", apiCode: "capability_denied", httpStatus: 403,
+          message: "vpn-core/users-admin link methods require vpncore:admin with an unrestricted node allowlist" }), 320);
+        return;
+      }
+      if (data.method === "link_reveal" && stepUp !== "ok") {
+        window.setTimeout(() => post(stepUp === "cancel"
+          ? { type: "lattice.host.error", id: data.id, code: "step_up_required", apiCode: "step_up_required", httpStatus: 403, message: "Step-up was cancelled in the console, so nothing was revealed." }
+          : { type: "lattice.host.error", id: data.id, code: "call_failed", message: "step_up_required: revealing a secret needs a fresh second-factor step-up" }), stepUp === "cancel" ? 1_400 : 320);
+        return;
+      }
       // Latency, so loading and skeleton states are visible rather than theoretical.
+      // A reveal waits as long as the console's step-up prompt takes a person.
+      const latency = slowCalls.has(key) ? 120_000 : data.method === "link_reveal" ? 1_100 : 320;
       window.setTimeout(() => {
         const period = (data.payload as { period?: unknown } | undefined)?.period;
         if (scenario === "failing" || failCalls.has(key) || (typeof period === "string" && failCalls.has(`${key}@${period}`))) {
@@ -328,9 +367,13 @@ window.addEventListener("message", (event) => {
             watchRender();
           }
         } catch (cause) {
-          post({ type: "lattice.host.error", id: data.id, message: cause instanceof Error ? cause.message : String(cause) });
+          post({
+            type: "lattice.host.error", id: data.id, code: "call_failed",
+            message: cause instanceof Error ? cause.message : String(cause),
+            ...(cause instanceof LinkFixtureError ? { apiCode: cause.apiCode, httpStatus: cause.httpStatus } : {}),
+          });
         }
-      }, 320);
+      }, latency);
     }
   }
 });
