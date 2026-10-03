@@ -302,6 +302,48 @@
             "vpncore:admin",
             "node:read"
           ]
+        },
+        {
+          "name": "link_get",
+          "effect": "read",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_issue",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_set",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_revoke",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_rotate",
+          "effect": "write",
+          "scopes": [
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "link_reveal",
+          "effect": "read",
+          "scopes": [
+            "vpncore:admin"
+          ]
         }
       ],
       "backing": "core"
