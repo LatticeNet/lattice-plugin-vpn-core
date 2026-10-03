@@ -265,6 +265,8 @@ const pageState = computed<PageState>(() => encodePageState(route.value, {
   usersView: usersView.value,
   usersGroup: usersGroup.value,
   usersSort: usersSort.value,
+  // The New identity form, while it is open, so a link can land on it.
+  create: route.value === "users" && userDialogOpen.value && !editingUser.value,
 }));
 
 /* The state goes out only after init, and only once the operator changes
@@ -276,7 +278,10 @@ let hostKeepsState = false;
 
 function adoptPageState(value: HostInit): void {
   hostKeepsState = value.pageState !== undefined;
-  if (value.pageState) applyPageState(decodePageState(value.pageState));
+  const asked = value.pageState ? decodePageState(value.pageState) : startState;
+  if (value.pageState) applyPageState(asked);
+  // `create=1`: the console palette's "Add a VPN user" lands on the form.
+  if (asked.create && value.pluginRoute === "users" && canCall(value, SERVICES.admin, "create")) openCreateUser();
   const client = bridge;
   stateSender?.dispose();
   stateSender = createStateSender((state) => client?.sendState(state), { baseline: pageState.value });

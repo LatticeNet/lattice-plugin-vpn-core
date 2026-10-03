@@ -118,6 +118,9 @@ export interface VpnPageState {
   usersView: UsersView;
   usersGroup: UsersGroupBy;
   usersSort: UserSort;
+  /** Users: the New identity form is open (`create=1`), so a link such as the
+   *  console palette's "Add a VPN user" lands on the form. */
+  create: boolean;
 }
 
 export const DEFAULT_PAGE_STATE: Readonly<VpnPageState> = {
@@ -131,6 +134,7 @@ export const DEFAULT_PAGE_STATE: Readonly<VpnPageState> = {
   usersView: "all",
   usersGroup: "none",
   usersSort: { ...DEFAULT_USER_SORT },
+  create: false,
 };
 
 function pick<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {
@@ -164,6 +168,7 @@ export function encodePageState(route: string, state: VpnPageState): PageState {
     put("q", state.q.trim());
     put("sort", encodeUserSort(state.usersSort));
     put("open", state.open);
+    if (state.create) put("create", "1");
   } else if (route === "profiles") {
     put("open", state.open);
   }
@@ -198,6 +203,7 @@ export function decodePageState(state: PageState): VpnPageState {
     usersView: isUsersView(state.show) ? state.show : isUsersView(state.view) ? state.view : DEFAULT_PAGE_STATE.usersView,
     usersGroup: isUsersGroupBy(state.group) ? state.group : DEFAULT_PAGE_STATE.usersGroup,
     usersSort: parseUserSort(state.sort),
+    create: state.create === "1",
   };
 }
 
