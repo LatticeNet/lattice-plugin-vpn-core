@@ -24,6 +24,7 @@
 
 import type { UsageSeries, UsagePrevious } from "../src/trafficModel";
 import type { UsageLineRow } from "../src/usageModel";
+import { linkHandlers, resetLinkStores } from "./linkFixtures";
 
 export type Scenario = "production" | "dense" | "legacy" | "hubs" | "offfleet" | "rich" | "empty" | "failing";
 export const SCENARIOS: readonly Scenario[] = ["production", "dense", "legacy", "hubs", "offfleet", "rich", "empty", "failing"];
@@ -1091,6 +1092,7 @@ function usersOf(scenario: Scenario, build: () => FixtureUser[]): FixtureUser[] 
 /** Forget every edit, as a harness reload does. For tests. */
 export function resetUserStores(): void {
   userStores.clear();
+  resetLinkStores();
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
@@ -1218,6 +1220,7 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     return scenario === "empty" ? [] : (usersWithUsage(scenario) as unknown as FixtureUser[]);
   });
   const admin = userAdmin(users, (hash) => flat.some((line) => line.line_hash_id === hash));
+  const links = linkHandlers(scenario, users, groups as unknown as Parameters<typeof linkHandlers>[2]);
   // Dense attribution rotates through the seats in their own order, so edits
   // to the store never reshuffle whose traffic is whose.
   const seats = scenario === "dense" ? denseSeats(groups) : users;
@@ -1255,15 +1258,22 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     "lines/plan_remove_chain": () => ({ approval: { id: "apr_drop_chain" }, preview: { summary: "The source outbound returns to direct." } }),
     "lines/sync_metadata": () => ({ approval: { id: "apr_sync", plan: JSON.stringify({ summary: "write the sidecar identity file" }) } }),
     "lines/reattach": () => ({ ok: true }),
-    "users/list": () => ({ users }),
+    // Every identity view carries its link summary, as the server's does.
+    "users/list": () => ({ users: users.map((user) => ({ ...user, link: links.summaryFor(user.id) ?? null })) }),
     "users-admin/create": admin.create,
     "users-admin/update": admin.update,
     "users-admin/delete": admin.delete,
     "users-admin/bind": admin.bind,
     "users-admin/unbind": admin.unbind,
     "users-admin/rotate": admin.rotate,
-    "users-admin/plan_add": () => ({ approval: { id: "apr_add", plan: JSON.stringify({ summary: "sb user add" }) } }),
-    "users-admin/plan_update": () => ({ approval: { id: "apr_upd", plan: JSON.stringify({ summary: "sb user update" }) } }),
+    "users-admin/plan_add": links["users-admin/plan_add"],
+    "users-admin/plan_update": links["users-admin/plan_update"],
+    "users-admin/link_get": links["users-admin/link_get"],
+    "users-admin/link_issue": links["users-admin/link_issue"],
+    "users-admin/link_set": links["users-admin/link_set"],
+    "users-admin/link_revoke": links["users-admin/link_revoke"],
+    "users-admin/link_rotate": links["users-admin/link_rotate"],
+    "users-admin/link_reveal": links["users-admin/link_reveal"],
     "users-admin/plan_remove": () => ({ approval: { id: "apr_del", plan: JSON.stringify({ summary: "sb user del" }) } }),
     "profiles/query": () => ({ profiles: production ? productionProfiles(groups, scenario) : buildProfiles(scenario) }),
     "profiles/settings": ({ node_id }: { node_id: string }) => ({

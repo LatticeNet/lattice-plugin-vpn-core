@@ -38,7 +38,8 @@ import {
 import { bytesByLine, egressByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
 import UsageScreen from "./UsageScreen.vue";
 import UserSheet from "./UserSheet.vue";
-import { parseLinkStatus } from "./identityLinkModel";
+import { useIdentityLink, type LinkMethod } from "./identityLink";
+import { parseLinkStatus, type FixAction } from "./identityLinkModel";
 import { PlanWatcher, type WatchedOp, type WatchState } from "./planWatch";
 import { blankIdentityForm, quotaInput, saveIdentity, type IdentityForm, type IdentityInitial } from "./identityForm";
 import UsersTable from "./UsersTable.vue";
@@ -754,6 +755,41 @@ function closeUserPanel(): void {
   });
 }
 
+/* ── the open identity's subscription link ──────────────────────────── */
+const identityLink = useIdentityLink({
+  call: <T,>(method: LinkMethod | FixAction, payload: Record<string, unknown>, timeoutMs?: number) => {
+    if (!bridge || !canCall(init.value, SERVICES.admin, method)) {
+      return Promise.reject(new Error(`This session is not allowed to run ${method}, so nothing was sent.`));
+    }
+    return bridge.call<T>(SERVICES.admin, method, payload, timeoutMs).promise;
+  },
+  can: (method) => canCall(init.value, SERVICES.admin, method),
+  copy: (text) => (bridge ? bridge.copy(text) : Promise.resolve(false)),
+});
+/* The section follows the panel: it reads the link of the identity that is
+ * open, and forgets everything (a revealed link, watched plans) when the
+ * panel closes or moves to another identity. */
+watch(
+  () => (route.value === "users" && openUser.value ? openUser.value.id : ""),
+  (id) => void identityLink.open(id),
+);
+const showLinkSection = computed(() => canCall(init.value, SERVICES.admin, "link_get"));
+
+const linkConfirm = ref<{ user: VpnUser; action: "rotate" | "revoke" }>();
+const linkConfirmBusy = ref(false);
+async function confirmLinkAction(): Promise<void> {
+  const pending = linkConfirm.value;
+  if (!pending || linkConfirmBusy.value) return;
+  linkConfirmBusy.value = true;
+  try {
+    if (pending.action === "rotate") await identityLink.rotate();
+    else await identityLink.revoke();
+  } finally {
+    linkConfirmBusy.value = false;
+    linkConfirm.value = undefined;
+  }
+}
+
 /* The console opens the approval read only; deciding stays the operator's click there. */
 function openApproval(id: string): void {
   if (!hostOrigin || !id) return;
@@ -1312,6 +1348,7 @@ const overlayStyle = computed(() => ({ "--overlay-anchor-top": `${overlayAnchorT
 // in the stylesheet as well as here.
 const openOverlayKey = computed(() => {
   if (rotateRevealed.value) return "rotate-revealed";
+  if (linkConfirm.value) return "link-confirm";
   if (deleteTarget.value) return "delete";
   if (rotateUser.value) return "rotate";
   if (rolloutOpen.value) return "rollout";
@@ -1335,7 +1372,8 @@ function closeTopOverlay(): void {
   // rotateRevealed is deliberately not dismissible here: it is the one-time
   // display of a secret, and losing it to a stray Escape means rotating again.
   if (rotateRevealed.value) return;
-  if (deleteTarget.value) deleteTarget.value = undefined;
+  if (linkConfirm.value) linkConfirm.value = undefined;
+  else if (deleteTarget.value) deleteTarget.value = undefined;
   else if (rotateUser.value) rotateUser.value = undefined;
   else if (rolloutOpen.value) closeRollout();
   else if (userDialogOpen.value) userDialogOpen.value = false;
@@ -1419,6 +1457,7 @@ onBeforeUnmount(() => {
   narrowQuery?.removeEventListener("change", syncSheetModal);
   stateSender?.dispose();
   stopLineWatch();
+  void identityLink.open("");
   bridge?.dispose();
 });
 </script>
@@ -1751,6 +1790,15 @@ onBeforeUnmount(() => {
         <footer><button class="button button-secondary" type="button" @click="closeRollout">Done</button></footer>
       </template>
     </section></div>
+    <div v-if="linkConfirm" class="overlay-scrim" data-overlay="link-confirm" :style="overlayStyle" @mousedown.self="linkConfirm = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="link-confirm-title" aria-describedby="link-confirm-impact">
+      <header><div><h2 id="link-confirm-title">{{ linkConfirm.action === 'rotate' ? `Rotate the link for ${linkConfirm.user.email}` : `Revoke the link for ${linkConfirm.user.email}` }}</h2><p>What this breaks:</p></div><button class="icon-button" type="button" aria-label="Close" @click="linkConfirm = undefined"><X :size="17" /></button></header>
+      <ul id="link-confirm-impact" class="impact-list">
+        <li>Every client using the current link stops updating at once. Its next refresh gets nothing, and it keeps the servers it already has.</li>
+        <li v-if="linkConfirm.action === 'rotate'">A new link is issued now. Reveal it after step-up and hand it to every device again.</li>
+        <li v-else>No link is issued afterwards. Issue a new one when this identity should have a link again.</li>
+        <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
+      </ul>
+      <footer><button class="button button-secondary" type="button" data-autofocus @click="linkConfirm = undefined">Cancel</button><button class="button button-danger" type="button" :disabled="linkConfirmBusy" data-testid="link-confirm" @click="confirmLinkAction"><LoaderCircle v-if="linkConfirmBusy" class="spin" :size="15" /> {{ linkConfirm.action === 'rotate' ? 'Rotate link' : 'Revoke link' }}</button></footer></section></div>
     <div v-if="deleteTarget" class="overlay-scrim" data-overlay="delete" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-impact">
       <header><div><h2 id="delete-title">Delete {{ deleteTarget.email }}</h2><p>What this breaks:</p></div><button class="icon-button" type="button" aria-label="Close" @click="deleteTarget = undefined"><X :size="17" /></button></header>
       <ul id="delete-impact" class="impact-list"><li v-for="line in deleteImpact" :key="line">{{ line }}</li></ul>
@@ -1885,6 +1933,8 @@ onBeforeUnmount(() => {
       :unbind-busy="unbindBusy"
       :outcome="userOutcome"
       :focus-bindings="bindingsFocus"
+      :link="showLinkSection ? identityLink : undefined"
+      :host-origin="hostOrigin"
       @close="closeUserPanel()"
       @edit="openEditUser"
       @rotate="openRotate"
@@ -1892,6 +1942,9 @@ onBeforeUnmount(() => {
       @unbind="unbindLine"
       @delete="askDeleteUser"
       @dismiss="userOutcome = undefined"
+      @rotate-link="(user) => (linkConfirm = { user, action: 'rotate' })"
+      @revoke-link="(user) => (linkConfirm = { user, action: 'revoke' })"
+      @review="openApproval"
     />
 
     <ProfileSheet

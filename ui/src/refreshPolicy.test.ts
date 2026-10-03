@@ -20,5 +20,9 @@ describe("vpn-core refresh policy", () => {
     // A timeout chain that re-arms only while a plan is pending, never an interval.
     expect(watch).not.toContain("setInterval");
     expect(watch).toContain("PLAN_WATCH_MAX_MS = 30 * 60_000");
+    for (const file of ["./identityLink.ts", "./IdentityLinkPanel.vue"]) {
+      const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8");
+      expect(source).not.toContain("setInterval");
+    }
   });
 });
