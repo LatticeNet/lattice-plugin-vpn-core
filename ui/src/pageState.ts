@@ -47,9 +47,9 @@ export { PAGE_STATE_KEY_PATTERN, PAGE_STATE_MAX_KEYS, PAGE_STATE_MAX_VALUE_LENGT
 /** The console's own query keys. They never cross the bridge either way. */
 export const RESERVED_PAGE_STATE_KEYS: ReadonlySet<string> = PAGE_STATE_RESERVED_KEYS;
 
+/** One entry under the contract's rules, asked of the bridge's own check. */
 function validEntry(key: string, value: unknown): value is string {
-  return PAGE_STATE_KEY_PATTERN.test(key) && !RESERVED_PAGE_STATE_KEYS.has(key) &&
-    typeof value === "string" && value.length <= PAGE_STATE_MAX_VALUE_LENGTH;
+  return validPageState({ [key]: value }) !== undefined;
 }
 
 /** The entries of a record without the console's reserved keys. */
