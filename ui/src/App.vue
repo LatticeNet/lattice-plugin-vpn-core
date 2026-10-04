@@ -992,14 +992,57 @@ async function rebindLine(user: VpnUser, hash: string, flowOverride?: string, do
   }
 }
 
-/* A binding turned off in Lattice is turned on again by binding the line once
- * more (users-admin bind sets enabled), with the flow override it already has,
- * because bind replaces the override with whatever it is sent. */
-function enableBinding(user: VpnUser, hash: string): void {
+/*
+ * A binding turned off in Lattice is turned on again by binding the line once
+ * more (users-admin bind sets enabled). That adds the line to the identity's
+ * live subscription link at once, and no call turns a binding off again
+ * (update takes no bindings; unbind deletes the binding and its override), so
+ * Undo cannot put it back: the page confirms first instead. The identity is
+ * read again before the call, because bind replaces the flow override with
+ * whatever it is sent, and the one this page holds may be stale.
+ */
+const bindingConfirm = ref<{ user: VpnUser; hash: string }>();
+const bindingConfirmBusy = ref(false);
+
+function askEnableBinding(user: VpnUser, hash: string): void {
   const binding = user.bindings.find((value) => value.line_hash_id === hash);
-  if (!binding || binding.enabled) return;
-  void rebindLine(user, hash, binding.flow_override,
-    `The binding to ${lineTitle(hash)} is on again. The line's credential on the node is unchanged; the link serves the line once that credential is current.`);
+  if (binding && !binding.enabled) bindingConfirm.value = { user, hash };
+}
+
+async function confirmEnableBinding(): Promise<void> {
+  const pending = bindingConfirm.value;
+  if (!pending || bindingConfirmBusy.value) return;
+  bindingConfirmBusy.value = true;
+  const { user, hash } = pending;
+  try {
+    if (!canCall(init.value, SERVICES.users, "list")) throw new Error("this session cannot read identities, so the binding's current flow override is unknown");
+    const result = await pluginCall<{ users: VpnUser[] }>(SERVICES.users, "list");
+    const fresh = (result.users ?? []).find((value) => value.id === user.id);
+    const binding = fresh?.bindings.find((value) => value.line_hash_id === hash);
+    if (!fresh || !binding) {
+      tellOutcome(user, `Nothing was turned on: ${user.email} is no longer bound to ${lineTitle(hash)} since this page last read it.`, "error", user.id, LINES);
+      await loadCurrent(true);
+      return;
+    }
+    if (binding.enabled) {
+      tellOutcome(user, `The binding to ${lineTitle(hash)} is already on; nothing was sent.`, "success", user.id, LINES);
+      await loadCurrent(true);
+      return;
+    }
+    bindingConfirm.value = undefined;
+    await rebindLine(fresh, hash, binding.flow_override,
+      `The binding to ${lineTitle(hash)} is on again. The line's credential on the node is unchanged; the link serves the line once that credential is current.`);
+  } catch (cause) {
+    tellOutcome(user, `The binding was not turned on: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
+  } finally {
+    bindingConfirmBusy.value = false;
+    bindingConfirm.value = undefined;
+  }
+  // Turn on, which opened the dialog, is gone with the disabled binding; the
+  // Lines section takes focus rather than the document.
+  await nextTick();
+  await nextTick();
+  if (document.activeElement === document.body) document.getElementById("user-lines")?.focus();
 }
 
 /* ── delete: breaks the Sub-Store subscriptions built for the identity, so the email is typed ── */
@@ -1416,6 +1459,7 @@ const overlayStyle = computed(() => ({ "--overlay-anchor-top": `${overlayAnchorT
 const openOverlayKey = computed(() => {
   if (rotateRevealed.value) return "rotate-revealed";
   if (linkConfirm.value) return "link-confirm";
+  if (bindingConfirm.value) return "binding-confirm";
   if (deleteTarget.value) return "delete";
   if (rotateUser.value) return "rotate";
   if (rolloutOpen.value) return "rollout";
@@ -1440,6 +1484,7 @@ function closeTopOverlay(): void {
   // display of a secret, and losing it to a stray Escape means rotating again.
   if (rotateRevealed.value) return;
   if (linkConfirm.value) linkConfirm.value = undefined;
+  else if (bindingConfirm.value) bindingConfirm.value = undefined;
   else if (deleteTarget.value) deleteTarget.value = undefined;
   else if (rotateUser.value) rotateUser.value = undefined;
   else if (rolloutOpen.value) closeRollout();
@@ -1866,6 +1911,15 @@ onBeforeUnmount(() => {
         <footer><button class="button button-secondary" type="button" @click="closeRollout">Done</button></footer>
       </template>
     </section></div>
+    <div v-if="bindingConfirm" class="overlay-scrim" data-overlay="binding-confirm" :style="overlayStyle" @mousedown.self="bindingConfirm = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="binding-confirm-title" aria-describedby="binding-confirm-impact">
+      <header><div><h2 id="binding-confirm-title">Turn on the binding to {{ lineTitle(bindingConfirm.hash) }}</h2><p>What this changes for {{ bindingConfirm.user.email }}:</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingConfirm = undefined"><X :size="17" /></button></header>
+      <ul id="binding-confirm-impact" class="impact-list">
+        <li>The line is bound to this identity again in Lattice. Its subscription link serves the line from the next fetch once the line holds the identity's current credential, to every device that has the link.</li>
+        <li>There is no Undo: this page cannot turn a binding off again. Remove takes the line off the identity entirely.</li>
+        <li>The binding keeps the flow override stored for it now, and nothing is sent to a node.</li>
+      </ul>
+      <footer><button class="button button-secondary" type="button" data-autofocus @click="bindingConfirm = undefined">Cancel</button><button class="button button-primary" type="button" :disabled="bindingConfirmBusy" data-testid="binding-confirm" @click="confirmEnableBinding"><LoaderCircle v-if="bindingConfirmBusy" class="spin" :size="15" /> Turn on</button></footer></section></div>
+
     <div v-if="linkConfirm" class="overlay-scrim" data-overlay="link-confirm" :style="overlayStyle" @mousedown.self="linkConfirm = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="link-confirm-title" aria-describedby="link-confirm-impact">
       <header><div><h2 id="link-confirm-title">{{ linkConfirmTitle }}</h2><p>{{ linkConfirm.action === 'clear-expiry' ? 'What this changes:' : 'What this breaks:' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="linkConfirm = undefined"><X :size="17" /></button></header>
       <ul v-if="linkConfirm.action === 'clear-expiry' && linkConfirm.expired" id="link-confirm-impact" class="impact-list">
@@ -2029,7 +2083,7 @@ onBeforeUnmount(() => {
       @rotate="openRotate"
       @bind="bindLine"
       @unbind="unbindLine"
-      @enable-binding="enableBinding"
+      @enable-binding="askEnableBinding"
       @delete="askDeleteUser"
       @dismiss="userOutcome = undefined"
       @rotate-link="(user) => (linkConfirm = { user, action: 'rotate' })"
