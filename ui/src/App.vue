@@ -835,10 +835,18 @@ async function confirmLinkAction(choice: "main" | "rotate-first" = "main"): Prom
   }
   if (pending.action !== "clear-expiry") return;
   // Remove expiry, which opened the dialog, is gone with the expiry; the
-  // section's heading takes focus rather than the document.
+  // section's heading takes focus rather than the document or the sheet.
   await nextTick();
   await nextTick();
-  if (document.activeElement === document.body) document.getElementById("user-link-title")?.focus();
+  if (focusUnplaced()) document.getElementById("user-link-title")?.focus();
+}
+
+/* After a dialog whose opener is gone, the overlay watcher parks focus on
+ * the identity's sheet itself (or it falls to the document). Either way the
+ * caller still has to put it where the change happened. */
+function focusUnplaced(): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body || active.matches('[data-overlay="user-detail"] > .modal');
 }
 
 /* The console opens the approval read only; deciding stays the operator's click there. */
@@ -1039,10 +1047,10 @@ async function confirmEnableBinding(): Promise<void> {
     bindingConfirm.value = undefined;
   }
   // Turn on, which opened the dialog, is gone with the disabled binding; the
-  // Lines section takes focus rather than the document.
+  // Lines section takes focus rather than the document or the sheet.
   await nextTick();
   await nextTick();
-  if (document.activeElement === document.body) document.getElementById("user-lines")?.focus();
+  if (focusUnplaced()) document.getElementById("user-lines")?.focus();
 }
 
 /* ── delete: breaks the Sub-Store subscriptions built for the identity, so the email is typed ── */
