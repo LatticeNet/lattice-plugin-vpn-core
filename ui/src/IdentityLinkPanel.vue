@@ -9,7 +9,7 @@
  * State and calls live in identityLink.ts; rotate and revoke ask the page,
  * whose confirm dialog sits in its overlay stack, and the page calls them.
  */
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { CircleAlert, Copy, Eye, EyeOff, LoaderCircle, Pause, Play, QrCode, RefreshCw, RotateCw, Trash2, X } from "@lucide/vue";
 
 import type { IdentityLinkState } from "./identityLink";
@@ -47,6 +47,9 @@ const emit = defineEmits<{
   review: [approvalId: string];
 }>();
 
+
+/** How long the live region stays empty before an outcome is read out. */
+const ANNOUNCE_DELAY_MS = 60;
 
 const status = computed(() => props.link.status.value);
 const headline = computed(() => (status.value ? linkHeadline(status.value) : undefined));
@@ -89,7 +92,22 @@ const clientsSummary = ref<HTMLElement>();
 /* Every outcome is read out from one live region that is always in the
  * page; the notes on screen are not live themselves, so nothing is said twice
  * and a note inserted with its text is not missed. */
-const announcement = computed(() => props.link.outcome.value?.text ?? "");
+const announcement = ref("");
+/* Cleared first and set a moment later, so the same text twice ("Link
+ * copied." after a second Copy) is a change a screen reader reads again. */
+let announceTimer: ReturnType<typeof setTimeout> | undefined;
+watch(() => props.link.outcome.value, (outcome) => {
+  if (announceTimer !== undefined) clearTimeout(announceTimer);
+  announcement.value = "";
+  if (!outcome?.text) return;
+  announceTimer = setTimeout(() => {
+    announceTimer = undefined;
+    announcement.value = outcome.text;
+  }, ANNOUNCE_DELAY_MS);
+});
+onBeforeUnmount(() => {
+  if (announceTimer !== undefined) clearTimeout(announceTimer);
+});
 
 /*
  * Focus follows the action. An element that is removed or replaced takes
@@ -127,6 +145,38 @@ function rowControl(lineHash: string): HTMLElement | null | undefined {
 function rowOf(lineHash: string): HTMLElement | undefined {
   return [...(section.value?.querySelectorAll<HTMLElement>("li[data-line]") ?? [])].find((row) => row.dataset.line === lineHash);
 }
+
+/*
+ * A left-out row leaves the list when its plan applies (or a read moves it).
+ * If focus was in that row it would fall to the document, so it moves to the
+ * row that followed (or the one before), or to the heading when none is left.
+ * Read before the patch (flush "pre"), while focus is still in the old row.
+ */
+watch(() => (status.value?.excluded ?? []).map((line) => line.line_hash_id), (now, before) => {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  const row = active instanceof HTMLElement ? active.closest<HTMLElement>("li[data-line]") : null;
+  const gone = row && section.value?.contains(row) ? row.dataset.line : undefined;
+  if (!gone || now.includes(gone)) return;
+  const at = (before ?? []).indexOf(gone);
+  const after = (before ?? []).slice(at + 1).find((hash) => now.includes(hash));
+  const earlier = (before ?? []).slice(0, Math.max(at, 0)).reverse().find((hash) => now.includes(hash));
+  const next = after ?? earlier;
+  void focusAfter(() => (next ? rowControl(next) : null) ?? heading.value);
+}, { flush: "pre" });
+
+/*
+ * A plan settles a moment before its row leaves: the row's "Plan filed"
+ * state, which had focus, goes first, and the re-read that removes the row
+ * comes after. Focus moves to what replaces it in the same row, so the watch
+ * above can carry it on when the row itself goes.
+ */
+watch(() => props.link.plans.value, () => {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  if (!(active instanceof HTMLElement) || active.dataset.testid !== "link-pending") return;
+  const hash = active.closest<HTMLElement>("li[data-line]")?.dataset.line;
+  if (!hash || props.link.pendingPlan(hash)) return;
+  void focusAfter(() => rowControl(hash) ?? heading.value);
+}, { flush: "pre" });
 
 /* Filing replaces the row's button with the plan's state, so focus moves to
  * that state (or back to the button when nothing was filed). */
@@ -242,7 +292,7 @@ const PLAN_STATE: Record<string, string> = {
           <dt>Link expires</dt>
           <dd>
             {{ expiryText(summary.expires_at) }}
-            <button v-if="summary.expires_at && can('link_set')" class="link-more" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-clear-expiry" @click="busy || emit('clear-expiry')">Remove expiry</button>
+            <button v-if="summary.expires_at && can('link_set')" class="button button-secondary button-compact link-fact-action" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-clear-expiry" @click="busy || emit('clear-expiry')">Remove expiry</button>
           </dd>
         </div>
         <div v-if="status.subscription_userinfo"><dt>Clients see</dt><dd :title="`Subscription-Userinfo: ${status.subscription_userinfo}`">{{ userinfoText(status.subscription_userinfo, status.answer) }}</dd></div>
@@ -267,7 +317,7 @@ const PLAN_STATE: Record<string, string> = {
             <span class="icon-actions">
               <button ref="copyButton" class="button button-primary button-compact" type="button" data-testid="link-copy" @click="copyLink(url, 'Link', 'reveal')"><Copy :size="13" aria-hidden="true" /> Copy</button>
               <button class="button button-secondary button-compact" type="button" :aria-pressed="qrOpen" data-testid="link-qr" @click="toggleQr"><QrCode :size="13" aria-hidden="true" /> {{ qrOpen ? 'Hide QR' : 'QR code' }}</button>
-              <button class="icon-button" type="button" aria-label="Hide the link" title="Hide the link" @click="link.forgetReveal()"><EyeOff :size="15" /></button>
+              <button class="icon-button" type="button" aria-label="Hide the link" title="Hide the link" @click="link.hide()"><EyeOff :size="15" /></button>
             </span>
           </div>
           <div v-if="revealOutcome" class="outcome-note" :data-tone="revealOutcome.tone" data-testid="link-outcome">
@@ -295,7 +345,7 @@ const PLAN_STATE: Record<string, string> = {
             <p v-if="convertNote(status.formats)" class="field-help">{{ convertNote(status.formats) }}</p>
           </details>
           <label v-if="manualOpen" class="field link-manual"><span>The full link, to copy by hand</span><input ref="manualInput" :value="manualUrl" type="text" readonly spellcheck="false" data-testid="link-manual" @focus="($event.target as HTMLInputElement).select()" /></label>
-          <button v-else class="link-more" type="button" data-testid="link-show-full" @click="showFullLink()">Show the full link</button>
+          <button v-else class="link-more" type="button" data-testid="link-show-full" @click="showFullLink('', true)">Show the full link</button>
         </template>
       </div>
 

@@ -31,6 +31,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/* The live region is emptied, then filled a moment later. */
+async function announced(host: ParentNode = document): Promise<string> {
+  await new Promise((resolve) => setTimeout(resolve, 90));
+  await settle();
+  return host.querySelector('[data-testid="link-live"]')?.textContent ?? "";
+}
+
 async function mount(over: Partial<Record<string, (payload: Record<string, unknown>) => unknown>> = {}, copied = true, events: Record<string, () => void> = {}) {
   const answers: Record<string, (payload: Record<string, unknown>) => unknown> = {
     link_get: () => status(),
@@ -130,7 +137,7 @@ describe("focus follows the action", () => {
     reveal.click();
     await settle();
     expect(document.activeElement).toBe(q("link-copy"));
-    expect(q("link-live")!.textContent).toMatch(/Link revealed/);
+    expect(await announced()).toMatch(/Link revealed/);
     host.querySelector<HTMLButtonElement>('[aria-label="Hide the link"]')!.click();
     await settle();
     expect(document.activeElement).toBe(q("link-reveal"));
@@ -208,7 +215,7 @@ describe("the served lines and the link's expiry", () => {
     await settle();
     expect(sent).toEqual({ user_id: "vu_a", clear_expiry: true });
     expect(q("link-clear-expiry")).toBeNull();
-    expect(q("link-live")!.textContent).toMatch(/serves its lines again on the next fetch, to everyone who holds it/);
+    expect(await announced()).toMatch(/serves its lines again on the next fetch, to everyone who holds it/);
   });
 });
 
@@ -269,5 +276,99 @@ describe("the full-link field", () => {
     json.click();
     await settle();
     expect(q<HTMLInputElement>("link-manual")!.value).toBe(`https://console.example/sub/u-abcdefghij/${TOKEN}?target=ClashMeta`);
+  });
+});
+
+describe("the design re-review's focus and note fixes", () => {
+  it("puts focus in the full link, selected, when asked for it", async () => {
+    const { q } = await mount();
+    q("link-reveal")!.click();
+    await settle();
+    q("link-show-full")!.click();
+    await settle();
+    const field = q<HTMLInputElement>("link-manual")!;
+    expect(document.activeElement).toBe(field);
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe(field.value.length);
+  });
+
+  it("clears the copy note with Hide, so nothing stale sits beside Reveal", async () => {
+    const { q, host } = await mount();
+    q("link-reveal")!.click();
+    await settle();
+    q("link-copy")!.click();
+    await settle();
+    expect(q("link-outcome")!.textContent).toContain("Link copied");
+    host.querySelector<HTMLButtonElement>('[aria-label="Hide the link"]')!.click();
+    await settle();
+    expect(q("link-outcome")).toBeNull();
+    expect(document.activeElement).toBe(q("link-reveal"));
+  });
+
+  it("reads the same outcome again when it repeats", async () => {
+    const { q } = await mount();
+    q("link-reveal")!.click();
+    await settle();
+    q("link-copy")!.click();
+    expect(await announced()).toBe("Link copied.");
+    q("link-copy")!.click();
+    await settle();
+    // Emptied first, then the same words again: a change a screen reader reads.
+    expect(q("link-live")!.textContent).toBe("");
+    expect(await announced()).toBe("Link copied.");
+  });
+
+  it("moves focus to the next left-out row when the focused one leaves the list", async () => {
+    const three = [
+      { line_hash_id: "lh_2", node_name: "[cd]-DMIT-4", line_name: "VLESS-REALITY-31001", protocol: "vless", reason: "rotation_not_applied", fix: "plan_update" },
+      { line_hash_id: "lh_3", node_name: "[cd]-DMIT-5", line_name: "VLESS-REALITY-31002", protocol: "vless", reason: "rotation_not_applied", fix: "plan_update" },
+      { line_hash_id: "lh_4", node_name: "[cd]-DMIT-6", line_name: "VLESS-REALITY-31003", protocol: "vless", reason: "rotation_not_applied", fix: "plan_update" },
+    ];
+    let excluded = three;
+    const { q, host, link } = await mount({ link_get: () => status({ excluded }) });
+    const fixOf = (hash: string) => host.querySelector<HTMLElement>(`li[data-line="${hash}"] [data-testid="link-fix"]`)!;
+    fixOf("lh_3").focus();
+    excluded = three.filter((line) => line.line_hash_id !== "lh_3");
+    await link.refresh();
+    await settle();
+    expect(document.activeElement).toBe(fixOf("lh_4"));
+    // The last one leaves: the row before it takes focus.
+    excluded = [three[0]!];
+    await link.refresh();
+    await settle();
+    expect(document.activeElement).toBe(fixOf("lh_2"));
+    // None left: the heading.
+    excluded = [];
+    await link.refresh();
+    await settle();
+    expect(document.activeElement).toBe(host.querySelector("#user-link-title"));
+    expect(q("link-excluded")).toBeNull();
+  });
+});
+
+describe("a plan that applies while its row has focus", () => {
+  it("keeps focus in the list as the row's state settles and the row leaves", async () => {
+    const lines = [
+      { line_hash_id: "lh_2", node_name: "[cd]-DMIT-4", line_name: "VLESS-REALITY-31001", protocol: "vless", reason: "rotation_not_applied", fix: "plan_update" },
+      { line_hash_id: "lh_3", node_name: "[cd]-DMIT-5", line_name: "VLESS-REALITY-31002", protocol: "vless", reason: "rotation_not_applied", fix: "plan_update" },
+    ];
+    let applied = false;
+    const { host } = await mount({
+      link_get: () => status({ excluded: applied ? [lines[1]] : lines, included: applied ? [{ line_hash_id: "lh_1" }, { line_hash_id: "lh_2" }] : [{ line_hash_id: "lh_1" }] }),
+      plan_update: () => ({ approval: { id: "apr_upd_1" } }),
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    host.querySelector<HTMLElement>('li[data-line="lh_2"] [data-testid="link-fix"]')!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    await settle();
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("link-pending");
+    applied = true;
+    // The watch's next read finds the line served: the plan settles, then the row leaves.
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    await settle();
+    expect(host.querySelector('li[data-line="lh_2"]')).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('li[data-line="lh_3"] [data-testid="link-fix"]'));
   });
 });

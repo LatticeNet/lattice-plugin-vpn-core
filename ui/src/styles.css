@@ -884,6 +884,7 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .link-facts dt { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-weight: 650; text-transform: uppercase; }
 .link-facts dd { margin: 2px 0 0; font-size: var(--text-xs); overflow-wrap: anywhere; }
 .link-facts dd small { color: var(--muted-foreground, #65707b); }
+.link-facts dd .link-fact-action { margin-left: var(--sp-2); vertical-align: middle; }
 .status-dot.wrap { max-width: none; white-space: normal; }
 .mono.wrap { overflow-wrap: anywhere; }
 .link-reveal { display: grid; gap: var(--sp-2); }

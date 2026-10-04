@@ -91,6 +91,12 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     revealedFor = undefined;
   }
 
+  /** The operator's Hide: the link goes, and so do the notes about it ("Link copied."). */
+  function hide(): void {
+    forgetReveal();
+    if (outcome.value?.place === "reveal" || outcome.value?.place === "clients") outcome.value = undefined;
+  }
+
   /** Forget the held link and say why beside Reveal. */
   function hideReveal(text: string): void {
     if (!revealed.value) return;
@@ -394,6 +400,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     revoke,
     reveal,
     forgetReveal,
+    hide,
     pageHidden,
     copy,
     fix,

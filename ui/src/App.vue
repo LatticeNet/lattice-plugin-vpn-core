@@ -833,12 +833,14 @@ async function confirmLinkAction(choice: "main" | "rotate-first" = "main"): Prom
     linkConfirmBusy.value = false;
     linkConfirm.value = undefined;
   }
-  if (pending.action !== "clear-expiry") return;
-  // Remove expiry, which opened the dialog, is gone with the expiry; the
-  // section's heading takes focus rather than the document or the sheet.
+  // Revoke and Remove expiry, which opened the dialog, are gone with the
+  // change; focus goes to what acts next (Issue link after a revoke) or the
+  // section's heading, rather than the document or the sheet.
   await nextTick();
   await nextTick();
-  if (focusUnplaced()) document.getElementById("user-link-title")?.focus();
+  if (!focusUnplaced()) return;
+  const next = pending.action === "revoke" ? document.querySelector<HTMLElement>('[data-testid="link-issue"]') : null;
+  (next ?? document.getElementById("user-link-title"))?.focus();
 }
 
 /* After a dialog whose opener is gone, the overlay watcher parks focus on
@@ -1936,7 +1938,8 @@ onBeforeUnmount(() => {
         <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
       </ul>
       <ul v-else-if="linkConfirm.action === 'clear-expiry'" id="link-confirm-impact" class="impact-list">
-        <li>The link expires on {{ linkConfirm.expiresAt }}. Without the expiry it never expires: it serves until it is paused, rotated or revoked.</li>
+        <li>The expiry on {{ linkConfirm.expiresAt }} is removed, and the link never expires: it serves until it is paused, rotated or revoked.</li>
+        <li>This page cannot set an expiry again; only the server's link API can.</li>
         <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
       </ul>
       <ul v-else id="link-confirm-impact" class="impact-list">

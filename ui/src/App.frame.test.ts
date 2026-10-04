@@ -199,7 +199,9 @@ describe("Remove expiry is confirmed in the page", () => {
     await mountPage("u_lab");
     (await until(() => testid("link-clear-expiry"), "Remove expiry")).click();
     const dialog = await until(() => q('[data-overlay="link-confirm"]'), "the confirm");
-    expect(dialog.textContent).toMatch(/Without the expiry it never expires/);
+    expect(dialog.textContent).toMatch(/The expiry on .+ is removed, and the link never expires/);
+    expect(dialog.textContent).toMatch(/This page cannot set an expiry again/);
+    expect(testid("link-clear-expiry")!.classList.contains("button")).toBe(true);
     expect(dialog.textContent).not.toMatch(/everyone who ever received it/);
     expect(testid("link-confirm-rotate-first")).toBeNull();
     testid("link-confirm")!.click();
@@ -236,5 +238,17 @@ describe("Turn on for a binding that is off", () => {
     expect(listsBetween).toBeGreaterThan(listsBefore);
     expect(bind.message.payload).toEqual({ user_id: "u_lab", line_hash_id: stored.line_hash_id, flow_override: "xtls-rprx-vision" });
     expect(hash.length).toBeGreaterThan(0);
+  });
+});
+
+describe("Revoke", () => {
+  it("gives focus to Issue link once the link is gone", async () => {
+    await mountPage("u_cdcd");
+    const revoke = testid("link-revoke")!;
+    revoke.focus();
+    revoke.click();
+    await until(() => testid("link-confirm"), "the confirm");
+    testid("link-confirm")!.click();
+    await until(() => testid("link-issue") && document.activeElement === testid("link-issue"), "focus on Issue link");
   });
 });
