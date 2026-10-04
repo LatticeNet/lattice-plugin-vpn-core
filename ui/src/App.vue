@@ -48,8 +48,10 @@ import {
   expiryInput,
   formatDay,
   lineOptions,
+  rotateOutcome,
   usersAttention,
   usersSummary,
+  type RotateResult,
   type UserOutcome,
   type UserSort,
   type UsersAttentionItem,
@@ -1155,11 +1157,12 @@ async function rotateCredential(): Promise<void> {
   rotateBusy.value = true;
   rotateError.value = "";
   try {
-    const result = await pluginCall<{ protocol: string; revealed_credential: string }>(
+    const result = await pluginCall<RotateResult>(
       SERVICES.admin, "rotate", { user_id: user.id, protocol: rotateProtocol.value });
-    rotateRevealed.value = { email: user.email, protocol: result.protocol, secret: result.revealed_credential };
+    const outcome = rotateOutcome(user.email, result);
+    if (outcome.secret) rotateRevealed.value = { email: user.email, protocol: result.protocol, secret: outcome.secret };
     rotateUser.value = undefined;
-    tellOutcome(user, `${user.email}: new ${result.protocol} secret issued. The old one keeps working on each bound line until that line is planned and applied again.`);
+    tellOutcome(user, outcome.text);
     await loadCurrent(true);
   } catch (cause) {
     rotateError.value = safeErrorMessage(cause, "The credential could not be rotated");
@@ -1711,12 +1714,12 @@ onBeforeUnmount(() => {
       <div v-if="deleteError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span><strong>Not deleted</strong>{{ deleteError }}</span></div>
       <footer><button class="button button-secondary" type="button" @click="deleteTarget = undefined">Cancel</button><button class="button button-danger" type="button" :disabled="deletingUser || deleteTyped.trim() !== deleteTarget.email" @click="deleteUser"><LoaderCircle v-if="deletingUser" class="spin" :size="15" /><Trash2 v-else :size="15" /> Delete identity</button></footer></section></div>
 
-    <div v-if="rotateUser" class="overlay-scrim" data-overlay="rotate" :style="overlayStyle" @mousedown.self="rotateUser = undefined"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="rotate-title"><header><div><h2 id="rotate-title">Rotate a credential</h2><p>{{ rotateUser.email }}, bound to {{ rotateUser.bindings.length }} {{ rotateUser.bindings.length === 1 ? 'line' : 'lines' }}. The new secret is shown once. The old one keeps working on each bound line until that line is planned and applied with the new one.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
+    <div v-if="rotateUser" class="overlay-scrim" data-overlay="rotate" :style="overlayStyle" @mousedown.self="rotateUser = undefined"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="rotate-title"><header><div><h2 id="rotate-title">Rotate a credential</h2><p>{{ rotateUser.email }}, bound to {{ rotateUser.bindings.length }} {{ rotateUser.bindings.length === 1 ? 'line' : 'lines' }}. The new secret is not shown here; reveal it in the Lattice console after step-up. The old one keeps working on each bound line until that line is planned and applied with the new one.</p></div><button class="icon-button" type="button" aria-label="Close" @click="rotateUser = undefined"><X :size="17" /></button></header>
       <div class="form-grid rotate-form"><label class="field field-wide"><span>Protocol credential</span><select v-model="rotateProtocol" data-autofocus><option v-for="credential in rotateUser.credentials" :key="credential.protocol" :value="credential.protocol">{{ credential.protocol }}</option></select></label></div>
       <div v-if="rotateError" class="alert" role="alert"><CircleAlert :size="17" aria-hidden="true" /><span><strong>Not rotated</strong>{{ rotateError }}</span></div>
       <footer><button class="button button-secondary" type="button" @click="rotateUser = undefined">Cancel</button><button class="button button-primary" type="button" :disabled="rotateBusy || !rotateProtocol" @click="rotateCredential"><LoaderCircle v-if="rotateBusy" class="spin" :size="15" /> Rotate</button></footer></section></div>
 
-    <div v-if="rotateRevealed" class="overlay-scrim" data-overlay="rotate-revealed" :style="overlayStyle"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>New {{ rotateRevealed.protocol }} credential</h2><p>{{ rotateRevealed.email }}. Shown once and never retrievable again.</p></div></header>
+    <div v-if="rotateRevealed" class="overlay-scrim" data-overlay="rotate-revealed" :style="overlayStyle"><section tabindex="-1" class="modal modal-small" role="dialog" aria-modal="true"><header><div><h2>New {{ rotateRevealed.protocol }} credential</h2><p>{{ rotateRevealed.email }}. Shown here once; the Lattice console can reveal it again after step-up.</p></div></header>
       <label class="field field-wide"><span>Secret (copy now)</span><textarea class="command-output mono" :value="rotateRevealed.secret" readonly rows="2" @focus="($event.target as HTMLTextAreaElement).select()" /></label>
       <footer><button class="button button-primary" type="button" @click="rotateRevealed = undefined">I have saved it</button></footer></section></div>
 

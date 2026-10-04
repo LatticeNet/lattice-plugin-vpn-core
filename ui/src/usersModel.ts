@@ -702,3 +702,31 @@ export function usedLabel(user: VpnUser, format: (bytes: number) => string): str
   const silent = (user.allocated_nodes ?? []).some((node) => node.collector_state !== "ok");
   return `${silent ? "at least " : ""}${format(user.used_period_bytes)}`;
 }
+
+// ── credential rotation ──────────────────────────────────────────────────
+
+/** What users-admin/rotate answers. */
+export interface RotateResult {
+  protocol: string;
+  /** The new secret, sent only when the server's reveal gate admitted the caller. */
+  revealed_credential?: string;
+  /** The rotation happened and the secret was not sent; reveal_code says why. */
+  credential_withheld?: boolean;
+  reveal_code?: string;
+}
+
+/**
+ * What the page shows after a rotation. The server sends the new secret only
+ * to a caller its reveal gate admits: a console session holding a fresh
+ * step-up, or a token with secrets:reveal. A plugin frame never holds a
+ * step-up grant, so here the secret is normally withheld and the outcome
+ * says where to reveal it instead of opening an empty one-time dialog.
+ */
+export function rotateOutcome(email: string, result: RotateResult): { secret?: string; text: string } {
+  const after = "The old one keeps working on each bound line until that line is planned and applied again.";
+  const secret = result.revealed_credential?.trim();
+  if (secret) return { secret, text: `${email}: new ${result.protocol} secret issued. ${after}` };
+  return {
+    text: `${email}: new ${result.protocol} secret issued. It is not shown here: reveal it in the Lattice console after step-up. ${after}`,
+  };
+}

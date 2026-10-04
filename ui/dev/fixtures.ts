@@ -1174,7 +1174,9 @@ function userAdmin(store: FixtureUser[], lineExists: (hash: string) => boolean) 
       const credential = (user.credentials ?? []).find((value: Record<string, unknown>) => value.protocol === payload.protocol);
       if (!credential) throw new Error(`no ${payload.protocol} credential on this identity`);
       credential.has_secret = true;
-      return { protocol: payload.protocol, revealed_credential: "4f2a1c88-0d55-4a3e-9d31-6b71f0c2a9de" };
+      // A plugin frame holds no step-up grant, so the server's reveal gate
+      // withholds the new secret from it.
+      return { protocol: payload.protocol, credential_withheld: true, reveal_code: "step_up_required" };
     },
   };
 }
