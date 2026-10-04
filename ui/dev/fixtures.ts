@@ -1265,7 +1265,11 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     "users-admin/delete": admin.delete,
     "users-admin/bind": admin.bind,
     "users-admin/unbind": admin.unbind,
-    "users-admin/rotate": admin.rotate,
+    "users-admin/rotate": (payload: Record<string, any>) => {
+      const answer = admin.rotate(payload);
+      links.noteRotation(String(payload.user_id), String(payload.protocol));
+      return answer;
+    },
     "users-admin/plan_add": links["users-admin/plan_add"],
     "users-admin/plan_update": links["users-admin/plan_update"],
     "users-admin/link_get": links["users-admin/link_get"],

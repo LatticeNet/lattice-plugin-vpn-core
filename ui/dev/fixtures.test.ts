@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lineRole } from "../src/fleetRows";
 import { attributionSummary, roleTotals, seriesEgressGap, type UsageSeries } from "../src/trafficModel";
@@ -135,5 +135,55 @@ describe("identities", () => {
     expect(list("production").find((user) => user.id === "u_cdcd")!.bindings).toEqual([{ line_hash_id: hash, enabled: true }]);
     table["users-admin/delete"]({ id: "u_migrated_5" });
     expect(list("production")).toHaveLength(133);
+  });
+});
+
+describe("identity links answer like the server", () => {
+  beforeEach(resetUserStores);
+  afterEach(() => vi.useRealTimers());
+
+  type Line = { line_hash_id: string; protocol?: string; reason?: string; fix?: string };
+  const status = (id: string) => handlers("dense")["users-admin/link_get"]({ user_id: id }) as { included: Line[]; excluded: Line[]; answer_reason: string };
+
+  it("leaves a rotated protocol's lines out until a plan filed after the rotation lands", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-10-04T08:00:00Z"));
+    expect(status("u_cdcd").excluded.filter((line) => line.reason === "rotation_not_applied")).toEqual([]);
+    const vless = status("u_cdcd").included.filter((line) => line.protocol === "vless").map((line) => line.line_hash_id);
+    expect(vless.length).toBeGreaterThan(1);
+
+    handlers("dense")["users-admin/rotate"]({ user_id: "u_cdcd", protocol: "vless" });
+    const after = status("u_cdcd");
+    const rotatedOut = after.excluded.filter((line) => line.reason === "rotation_not_applied").length;
+    expect(rotatedOut).toBeGreaterThanOrEqual(vless.length);
+    for (const hash of vless) {
+      expect(after.excluded.find((line) => line.line_hash_id === hash)).toMatchObject({ reason: "rotation_not_applied", fix: "plan_update" });
+    }
+
+    const first = handlers("dense")["users-admin/plan_update"]({ user_id: "u_cdcd", line_hash_id: vless[0] }) as { approval: { id: string } };
+    const second = handlers("dense")["users-admin/plan_update"]({ user_id: "u_cdcd", line_hash_id: vless[1] }) as { approval: { id: string } };
+    expect(first.approval.id).toMatch(/^apr_upd_[a-z0-9]{8}$/);
+    expect(second.approval.id).not.toBe(first.approval.id);
+
+    vi.setSystemTime(Date.parse("2026-10-04T08:00:21Z"));
+    const landed = status("u_cdcd");
+    expect(landed.included.map((line) => line.line_hash_id)).toEqual(expect.arrayContaining([vless[0], vless[1]]));
+    expect(landed.excluded.filter((line) => line.reason === "rotation_not_applied").length).toBe(rotatedOut - 2);
+  });
+
+  it("names plan_update for a credential never applied, as the server does", () => {
+    const fixes = Object.values(Object.fromEntries(["u_cdcd", "u_lab", "u_team_2"].flatMap((id) => status(id).excluded)
+      .filter((line) => line.reason === "credential_not_applied").map((line) => [line.line_hash_id, line.fix])));
+    expect(fixes.length).toBeGreaterThan(0);
+    expect(new Set(fixes)).toEqual(new Set(["plan_update"]));
+  });
+
+  it("serves nothing for an expired link until its expiry is cleared", () => {
+    const users = (handlers("dense")["users/list"]({}) as { users: Array<{ id: string; link: { expires_at?: string } | null }> }).users;
+    const expired = users.find((user) => user.link?.expires_at);
+    expect(expired).toBeDefined();
+    expect(status(expired!.id).answer_reason).toBe("link_expired");
+    handlers("dense")["users-admin/link_set"]({ user_id: expired!.id, clear_expiry: true });
+    expect(status(expired!.id).answer_reason).not.toBe("link_expired");
   });
 });

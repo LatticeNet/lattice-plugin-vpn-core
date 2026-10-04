@@ -6,10 +6,14 @@
  *
  * Seeded per scenario so each state the panel has to show is one click away:
  * an active link fetched by mihomo a few minutes ago, one never fetched since
- * the server started, a paused one, an expired identity and an over-quota one
- * serving the placeholder, and identities with no link. Lines are left out in
- * the server's reasons, two of them with a plan the panel can file, and a
- * filed plan "applies" twenty seconds later so the watch can be seen landing.
+ * the server started, a paused one, an expired link, an expired identity and
+ * an over-quota one serving the placeholder, and identities with no link.
+ * Lines are left out in the server's reasons. A credential rotation leaves
+ * every bound line of that protocol out as rotation_not_applied until a plan
+ * for the line lands, the way the server compares the applied credential with
+ * the current one; a filed plan "applies" twenty seconds later so the watch
+ * can be seen landing. Both credential fixes name plan_update, as the server
+ * does since lattice-server 0a4538c.
  */
 
 type Binding = { line_hash_id: string; enabled: boolean };
@@ -39,21 +43,31 @@ export class LinkFixtureError extends Error {
 }
 
 const stores = new Map<string, Map<string, StoredLink>>();
+/** `${user}|${line}` -> when the filed plan for that line lands. */
 const applied = new Map<string, number>();
+/** `${scenario}|${user}|${protocol}` -> when that credential was rotated. */
+const rotations = new Map<string, number>();
+let planSequence = 0;
 const APPLY_AFTER_MS = 20_000;
 const SUPPORTED = new Set(["vless", "vmess", "trojan", "hysteria2", "tuic", "anytls", "shadowsocks"]);
 
 export function resetLinkStores(): void {
   stores.clear();
   applied.clear();
+  rotations.clear();
+  planSequence = 0;
 }
 
+/* The whole seed is folded in before any output, so two seeds that share
+ * their first characters (an approval for the same identity a moment later)
+ * never come out the same. */
 function randomish(seed: string, length: number): string {
   const alphabet = "abcdefghijkmnopqrstuvwxyz23456789";
   let hash = 2166136261;
+  for (let i = 0; i < seed.length; i++) hash = Math.imul(hash ^ seed.charCodeAt(i), 16777619) >>> 0;
   let out = "";
   for (let i = 0; out.length < length; i++) {
-    hash = Math.imul(hash ^ seed.charCodeAt(i % seed.length) ^ i, 16777619) >>> 0;
+    hash = Math.imul(hash ^ i ^ (hash >>> 13), 16777619) >>> 0;
     out += alphabet[hash % alphabet.length];
   }
   return out;
@@ -81,6 +95,8 @@ function seed(users: User[]): Map<string, StoredLink> {
   if (active[1]) make(active[1]);
   if (active[2]) make(active[2], { disabled: true, last_fetch: { at: minutesAgo(60 * 30), ua_class: "shadowrocket", answer: "nodes" } });
   if (active[3]) make(active[3], { rotated_at: minutesAgo(50), update_interval_hours: 6, last_fetch: { at: minutesAgo(60 * 15), ua_class: "singbox", answer: "nodes" } });
+  const last = active[active.length - 1];
+  if (last && active.length > 5) make(last, { expires_at: minutesAgo(60 * 24 * 2), last_fetch: { at: minutesAgo(60 * 20), ua_class: "shadowrocket", answer: "decoy" } });
   for (const user of users.filter((value) => isExpired(value) || isOverQuota(value))) {
     make(user, { last_fetch: { at: minutesAgo(38), ua_class: "clashmeta", answer: "placeholder" } });
   }
@@ -117,7 +133,7 @@ function summaryOf(link: StoredLink | undefined) {
   };
 }
 
-function lineState(user: User, binding: Binding, index: number, lines: Map<string, { line: Line; group: Group }>) {
+function lineState(scenario: string, user: User, binding: Binding, index: number, lines: Map<string, { line: Line; group: Group }>) {
   const found = lines.get(binding.line_hash_id);
   const base = {
     line_hash_id: binding.line_hash_id,
@@ -130,8 +146,13 @@ function lineState(user: User, binding: Binding, index: number, lines: Map<strin
   const key = `${user.id}|${binding.line_hash_id}`;
   const done = applied.get(key);
   const isApplied = done !== undefined && Date.now() >= done;
-  if (!isApplied && index % 5 === 3) return { ...base, reason: "credential_not_applied", fix: "plan_add" };
-  if (!isApplied && index % 7 === 5) return { ...base, reason: "rotation_not_applied", fix: "plan_update" };
+  if (!isApplied && index % 5 === 3) return { ...base, reason: "credential_not_applied", fix: "plan_update" };
+  // The line holds the credential from before the last rotation of its
+  // protocol until a plan filed after that rotation lands.
+  const rotated = rotations.get(`${scenario}|${user.id}|${base.protocol}`);
+  if (rotated !== undefined && !(done !== undefined && done > rotated && Date.now() >= done)) {
+    return { ...base, reason: "rotation_not_applied", fix: "plan_update" };
+  }
   if (index % 11 === 9) return { ...base, reason: "template_lossy", fix: "wait_for_template", detail: "drops utls fingerprint, ech" };
   return base;
 }
@@ -159,7 +180,7 @@ export function linkHandlers(scenario: string, users: User[], groups: Group[]) {
     const included: unknown[] = [];
     const excluded: unknown[] = [];
     user.bindings.forEach((binding, index) => {
-      const line = lineState(user, binding, index, lines);
+      const line = lineState(scenario, user, binding, index, lines);
       if ("reason" in line && line.reason) excluded.push(line);
       else included.push(line);
     });
@@ -176,8 +197,10 @@ export function linkHandlers(scenario: string, users: User[], groups: Group[]) {
     const total = user.quota_bytes ?? 0;
     let userinfo: string | undefined = answer === "decoy" ? undefined
       : `upload=0; download=${answer === "placeholder" ? Math.max(used, total || 1) : used}; total=${answer === "placeholder" ? Math.max(used, total || 1) : total}; expire=0`;
+    const linkExpired = !!link?.expires_at && Date.parse(link.expires_at) <= Date.now();
     if (!link) [answer, reason, placeholder, userinfo] = ["decoy", "not_issued", undefined, undefined];
     else if (link.disabled) [answer, reason, placeholder, userinfo] = ["decoy", "link_disabled", undefined, undefined];
+    else if (linkExpired) [answer, reason, placeholder, userinfo] = ["decoy", "link_expired", undefined, undefined];
     return {
       identity_id: user.id,
       issued: !!link,
@@ -201,13 +224,18 @@ export function linkHandlers(scenario: string, users: User[], groups: Group[]) {
     const user = find(payload.user_id);
     const hash = String(payload.line_hash_id ?? "");
     applied.set(`${user.id}|${hash}`, Date.now() + APPLY_AFTER_MS);
-    const id = `apr_${op === "plan_add" ? "add" : "upd"}_${randomish(`${user.id}${hash}${Date.now()}`, 6)}`;
+    planSequence += 1;
+    const id = `apr_${op === "plan_add" ? "add" : "upd"}_${randomish(`${planSequence}|${user.id}|${hash}|${Date.now()}`, 8)}`;
     const verb = op === "plan_add" ? "sb user add" : "sb user update";
     return { approval: { id, plan: JSON.stringify({ summary: `${verb} ${user.email} on ${lines.get(hash)?.line.name ?? hash}` }) } };
   };
 
   return {
     summaryFor: (id: string) => summaryOf(store.get(id)),
+    /** users-admin rotate answered: every bound line of that protocol now holds the old credential. */
+    noteRotation: (userId: string, protocol: string) => {
+      rotations.set(`${scenario}|${userId}|${String(protocol).toLowerCase()}`, Date.now());
+    },
     "users-admin/link_get": (payload: Record<string, any>) => status(find(payload.user_id)),
     "users-admin/link_issue": (payload: Record<string, any>) => {
       const user = find(payload.user_id);
@@ -226,6 +254,8 @@ export function linkHandlers(scenario: string, users: User[], groups: Group[]) {
       const link = store.get(user.id);
       if (!link) throw new LinkFixtureError(404, "link_not_issued", "this identity has no link");
       if (payload.enabled !== undefined) link.disabled = !payload.enabled;
+      if (payload.clear_expiry === true) delete link.expires_at;
+      else if (typeof payload.expires_at === "string" && payload.expires_at) link.expires_at = payload.expires_at;
       return status(user);
     },
     "users-admin/link_revoke": (payload: Record<string, any>) => {
