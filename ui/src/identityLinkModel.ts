@@ -491,6 +491,8 @@ export function convertNote(formats: LinkFormats): string {
 // ── who may see the section ──────────────────────────────────────────────
 
 export interface LinkErrorLike {
+  /** The console's own class for a refused call (BridgeCallError.code). */
+  code?: string;
   message?: string;
   apiCode?: string;
   httpStatus?: number;
@@ -513,6 +515,23 @@ export function isStepUpError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const value = error as LinkErrorLike;
   return value.apiCode === "step_up_required" || /step_up_required|step-up/i.test(value.message ?? "");
+}
+
+/**
+ * What to say when a reveal is refused for want of a step-up, or undefined for
+ * any other failure. A console with the plugin step-up path answers with the
+ * code step_up_required (the operator cancelled, or the grant had lapsed by
+ * the time the call was repeated), and revealing again can succeed. A console
+ * without it passes the server's refusal on as a plain message, and revealing
+ * again from it cannot, so it says so instead of inviting a retry.
+ */
+export function revealRefusalText(error: unknown): string | undefined {
+  if (!isStepUpError(error)) return undefined;
+  const value = error as LinkErrorLike;
+  if (value.code === "step_up_required" || value.apiCode === "step_up_required") {
+    return "Nothing was revealed: the console's step-up did not complete. Reveal again and confirm with your authenticator or passkey.";
+  }
+  return "Nothing was revealed: this console cannot run the step-up a reveal needs, so revealing again from it will not work. Update the console, then reveal the link.";
 }
 
 /** How long a link was issued or rotated, for the facts row. */

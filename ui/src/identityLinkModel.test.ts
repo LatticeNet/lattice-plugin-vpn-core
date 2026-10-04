@@ -16,6 +16,7 @@ import {
   parseLinkReveal,
   parseLinkStatus,
   revealedUrl,
+  revealRefusalText,
   userinfoText,
   type LinkStatus,
 } from "./identityLinkModel";
@@ -181,5 +182,14 @@ describe("the list's view of a link", () => {
     expect(userinfoText("upload=0; download=22548578304; total=21474836480; expire=0", "placeholder")).toBe("21.0 GiB of 20.0 GiB, shown as used up");
     expect(userinfoText("upload=0; download=5242880; total=0; expire=0", "nodes")).toBe("5.0 MiB used, no limit");
     expect(userinfoText(undefined, "nodes")).toBe("");
+  });
+});
+
+describe("revealRefusalText", () => {
+  it("invites a retry only when the console ran its step-up", () => {
+    expect(revealRefusalText({ code: "step_up_required", apiCode: "step_up_required", message: "Step-up was cancelled" })).toMatch(/Reveal again/);
+    expect(revealRefusalText({ code: "call_failed", apiCode: "step_up_required", message: "second-factor step-up required" })).toMatch(/Reveal again/);
+    expect(revealRefusalText({ code: "call_failed", message: "step_up_required: revealing a secret needs a fresh second-factor step-up" })).toMatch(/cannot run the step-up/);
+    expect(revealRefusalText(new Error("upstream refused users-admin/link_reveal: 503"))).toBeUndefined();
   });
 });

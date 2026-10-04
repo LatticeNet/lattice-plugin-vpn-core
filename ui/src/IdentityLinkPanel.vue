@@ -9,7 +9,7 @@
  * State and calls live in identityLink.ts; rotate and revoke ask the page,
  * whose confirm dialog sits in its overlay stack, and the page calls them.
  */
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { CircleAlert, Copy, Eye, EyeOff, LoaderCircle, Pause, Play, QrCode, RefreshCw, RotateCw, Trash2, X } from "@lucide/vue";
 
 import type { IdentityLinkState } from "./identityLink";
@@ -58,13 +58,47 @@ const included = computed(() => {
   return allIncluded.value ? list : list.slice(0, SHOWN_LINES);
 });
 const busy = computed(() => props.link.busy.value);
-/* What Reveal and Copy answer is said beside them; everything else at the
- * actions. With no link left to reveal, the foot says it all. */
-const revealOutcome = computed(() => {
+/* An outcome is said beside the control that was pressed (Reveal and Copy,
+ * a client's copy button, a left-out line), everything else at the actions.
+ * When that control is gone (no link left to reveal), the foot says it. */
+const placedOutcome = computed(() => {
   const outcome = props.link.outcome.value;
-  return outcome?.place === "reveal" && summary.value ? outcome : undefined;
+  if (outcome?.place === "reveal" && summary.value) return outcome;
+  if (outcome?.place === "clients" && url.value) return outcome;
+  return undefined;
 });
-const footOutcome = computed(() => (revealOutcome.value ? undefined : props.link.outcome.value));
+const revealOutcome = computed(() => (placedOutcome.value?.place === "reveal" ? placedOutcome.value : undefined));
+const clientsOutcome = computed(() => (placedOutcome.value?.place === "clients" ? placedOutcome.value : undefined));
+const footOutcome = computed(() => (placedOutcome.value ? undefined : props.link.outcome.value));
+
+/* The full link is on screen only when asked for, or when the console could
+ * not copy it; beside Copy it is cut to its ends, and no title carries it. */
+const manualOpen = ref(false);
+const manualUrl = ref("");
+const manualInput = ref<HTMLInputElement>();
+const qrFigure = ref<HTMLElement>();
+
+async function showFullLink(value: string, select = false): Promise<void> {
+  manualUrl.value = value;
+  manualOpen.value = true;
+  await nextTick();
+  manualInput.value?.scrollIntoView?.({ block: "nearest" });
+  if (select) {
+    manualInput.value?.focus();
+    manualInput.value?.select();
+  }
+}
+
+async function copyLink(value: string, what: string, place: "reveal" | "clients"): Promise<void> {
+  if (!(await props.link.copy(value, what, place))) await showFullLink(value, true);
+}
+
+async function toggleQr(): Promise<void> {
+  qrOpen.value = !qrOpen.value;
+  if (!qrOpen.value) return;
+  await nextTick();
+  qrFigure.value?.scrollIntoView?.({ block: "nearest" });
+}
 /* The line lists describe what the link would carry; only a link answering
  * with servers carries them now. */
 const serving = computed(() => status.value?.answer === "nodes");
@@ -76,7 +110,10 @@ watch(() => props.link.userId.value, () => {
   allIncluded.value = false;
 });
 watch(url, (value) => {
-  if (!value) qrOpen.value = false;
+  if (value) return;
+  qrOpen.value = false;
+  manualOpen.value = false;
+  manualUrl.value = "";
 });
 
 function expiryText(at?: string): string {
@@ -143,10 +180,10 @@ const PLAN_STATE: Record<string, string> = {
         </template>
         <template v-else>
           <div class="link-url">
-            <code class="mono" :title="url" data-testid="link-url">{{ maskedUrl(url) }}</code>
+            <code class="mono" data-testid="link-url">{{ maskedUrl(url) }}</code>
             <span class="icon-actions">
-              <button class="button button-primary button-compact" type="button" data-testid="link-copy" @click="link.copy(url, 'Link')"><Copy :size="13" aria-hidden="true" /> Copy</button>
-              <button class="button button-secondary button-compact" type="button" :aria-pressed="qrOpen" data-testid="link-qr" @click="qrOpen = !qrOpen"><QrCode :size="13" aria-hidden="true" /> {{ qrOpen ? 'Hide QR' : 'QR code' }}</button>
+              <button class="button button-primary button-compact" type="button" data-testid="link-copy" @click="copyLink(url, 'Link', 'reveal')"><Copy :size="13" aria-hidden="true" /> Copy</button>
+              <button class="button button-secondary button-compact" type="button" :aria-pressed="qrOpen" data-testid="link-qr" @click="toggleQr"><QrCode :size="13" aria-hidden="true" /> {{ qrOpen ? 'Hide QR' : 'QR code' }}</button>
               <button class="icon-button" type="button" aria-label="Hide the link" title="Hide the link" @click="link.forgetReveal()"><EyeOff :size="15" /></button>
             </span>
           </div>
@@ -154,7 +191,7 @@ const PLAN_STATE: Record<string, string> = {
             <span>{{ revealOutcome.text }}</span>
             <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
           </div>
-          <figure v-if="qr" class="link-qr" data-testid="link-qr-code">
+          <figure v-if="qr" ref="qrFigure" class="link-qr" data-testid="link-qr-code">
             <svg :viewBox="`0 0 ${qr.size} ${qr.size}`" role="img" :aria-label="`QR code of the subscription link for ${email}`" shape-rendering="crispEdges">
               <rect :width="qr.size" :height="qr.size" fill="#fff" />
               <path :d="qr.path" fill="#000" />
@@ -164,13 +201,18 @@ const PLAN_STATE: Record<string, string> = {
           <details class="link-clients">
             <summary>Links for a specific client</summary>
             <div>
-              <button v-for="client in clients" :key="client.id" class="button button-secondary button-compact" type="button" :title="client.url" @click="link.copy(client.url, `Link for ${client.label}`)">
+              <button v-for="client in clients" :key="client.id" class="button button-secondary button-compact" type="button" @click="copyLink(client.url, `Link for ${client.label}`, 'clients')">
                 <Copy :size="12" aria-hidden="true" /> {{ client.label }}
               </button>
             </div>
+            <div v-if="clientsOutcome" class="outcome-note" :data-tone="clientsOutcome.tone" role="status" data-testid="link-clients-outcome">
+              <span>{{ clientsOutcome.text }}</span>
+              <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
+            </div>
             <p v-if="convertNote(status.formats)" class="field-help">{{ convertNote(status.formats) }}</p>
           </details>
-          <label class="field link-manual"><span>The link, to copy by hand</span><input :value="url" type="text" readonly spellcheck="false" @focus="($event.target as HTMLInputElement).select()" /></label>
+          <label v-if="manualOpen" class="field link-manual"><span>The full link, to copy by hand</span><input ref="manualInput" :value="manualUrl" type="text" readonly spellcheck="false" data-testid="link-manual" @focus="($event.target as HTMLInputElement).select()" /></label>
+          <button v-else class="link-more" type="button" data-testid="link-show-full" @click="showFullLink(url)">Show the full link</button>
         </template>
       </div>
 

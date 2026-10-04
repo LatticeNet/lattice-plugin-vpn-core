@@ -9,7 +9,10 @@
  * Every read and write goes through users-admin link_* (lattice-server
  * identity_link_api.go). The revealed link is held here only: it is dropped
  * when the panel moves to another identity or closes, when the link is
- * rotated or revoked, and after five minutes, and it never enters page state.
+ * rotated or revoked here, when a fresh status shows it was rotated, revoked,
+ * paused or expired elsewhere, when the page goes to the background, when a
+ * later reveal is refused, and after five minutes. It never enters page
+ * state, the address, a call payload or a log.
  */
 import { ref, shallowRef } from "vue";
 
@@ -17,7 +20,7 @@ import {
   parseLinkReveal,
   parseLinkStatus,
   isPermissionError,
-  isStepUpError,
+  revealRefusalText,
   lineTitle,
   type FixAction,
   type LinkLine,
@@ -42,10 +45,15 @@ export type LinkLoad = "idle" | "loading" | "ready" | "denied" | "error";
 export interface LinkOutcome {
   tone: "success" | "error" | "info";
   text: string;
-  /** "reveal" for what Reveal and Copy answer, which the panel says beside
-   *  those buttons: at the section's foot, under every line list, a refused
-   *  step-up or a failed copy was out of view, so the press looked ignored. */
-  place?: "reveal";
+  /**
+   * Where the panel says it, beside the control that was pressed: "reveal"
+   * for Reveal and Copy, "clients" for a per-client copy, "line" for a plan
+   * filed from one left-out line (lineHash). At the section's foot, under
+   * every line list, these were out of view, so the press looked ignored.
+   * Without a place the note sits at the actions.
+   */
+  place?: "reveal" | "clients" | "line";
+  lineHash?: string;
 }
 
 /** How long a revealed link stays on screen without being asked for again. */
@@ -70,6 +78,9 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
   const revealed = shallowRef<LinkReveal>();
   const plans = shallowRef<readonly WatchedPlan[]>([]);
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
+  /* What the link looked like when it was revealed. A status that differs
+   * means the held token no longer serves. */
+  let revealedFor: { slug: string; rotatedAt: string } | undefined;
   let watcher: PlanWatcher | undefined;
   let generation = 0;
 
@@ -77,6 +88,31 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     if (revealTimer !== undefined) clearTimeout(revealTimer);
     revealTimer = undefined;
     revealed.value = undefined;
+    revealedFor = undefined;
+  }
+
+  /** Forget the held link and say why beside Reveal. */
+  function hideReveal(text: string): void {
+    if (!revealed.value) return;
+    forgetReveal();
+    outcome.value = { tone: "info", place: "reveal", text };
+  }
+
+  /*
+   * A status from any read or write. When another operator (or the REST door)
+   * rotated, revoked, paused or let the link expire while this panel holds a
+   * reveal, the held URL only gets the decoy now, so it is dropped rather than
+   * copied or scanned for five more minutes.
+   */
+  function adopt(next: LinkStatus): void {
+    const held = revealedFor;
+    if (revealed.value && held) {
+      const link = next.link;
+      const stale = !next.issued || !link || !link.enabled || next.answer_reason === "link_expired" ||
+        link.slug !== held.slug || (link.rotated_at ?? "") !== held.rotatedAt;
+      if (stale) hideReveal("The link changed since it was revealed (rotated, revoked, paused or expired), so it was hidden. Reveal it again for the current one.");
+    }
+    status.value = next;
   }
 
   function stopWatching(): void {
@@ -120,7 +156,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     try {
       const next = await readStatus(id);
       if (mine !== generation) return;
-      status.value = next;
+      adopt(next);
       load.value = "ready";
       error.value = "";
     } catch (cause) {
@@ -145,7 +181,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
       const answer = await deps.call<unknown>(method, { user_id: id, ...payload });
       if (mine !== generation) return false;
       const parsed = parseLinkStatus(answer);
-      if (parsed) status.value = parsed;
+      if (parsed) adopt(parsed);
       else await refresh();
       outcome.value = { tone: "success", text: done };
       return true;
@@ -195,19 +231,21 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
       if (!parsed) throw new Error("The server's reveal answer carried no link.");
       forgetReveal();
       revealed.value = parsed;
+      revealedFor = { slug: parsed.slug || status.value?.link?.slug || "", rotatedAt: status.value?.link?.rotated_at ?? "" };
       revealTimer = setTimeout(() => {
-        revealed.value = undefined;
         revealTimer = undefined;
+        hideReveal("The link was hidden after five minutes. Reveal it again to copy it or show its QR code.");
       }, REVEAL_TTL_MS);
+      outcome.value = { tone: "success", place: "reveal", text: "Link revealed. It is hidden again after five minutes, or when you leave this identity." };
       return true;
     } catch (cause) {
       if (mine !== generation) return false;
+      // A refused reveal leaves nothing on screen, not an older link.
+      forgetReveal();
       outcome.value = {
         tone: "error",
         place: "reveal",
-        text: isStepUpError(cause)
-          ? "Nothing was revealed: the console's step-up did not complete. Reveal again and confirm with your authenticator or passkey."
-          : safeErrorMessage(cause, "The link could not be revealed"),
+        text: revealRefusalText(cause) ?? safeErrorMessage(cause, "The link could not be revealed"),
       };
       return false;
     } finally {
@@ -215,12 +253,18 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     }
   }
 
-  async function copy(text: string, what: string): Promise<boolean> {
+  /** Copy through the console. `place` says which control asked: Copy, or a client's button. */
+  async function copy(text: string, what: string, place: "reveal" | "clients" = "reveal"): Promise<boolean> {
     const ok = await deps.copy(text);
     outcome.value = ok
-      ? { tone: "success", place: "reveal", text: `${what} copied.` }
-      : { tone: "error", place: "reveal", text: "The console did not copy it. Select the link below and copy it by hand." };
+      ? { tone: "success", place, text: `${what} copied.` }
+      : { tone: "error", place, text: "The console did not copy it. The full link is selected below: copy it by hand." };
     return ok;
+  }
+
+  /** The page went to the background: a revealed link is not left on an unattended screen. */
+  function pageHidden(): void {
+    hideReveal("The link was hidden when this page went to the background. Reveal it again to copy it or show its QR code.");
   }
 
   function ensureWatcher(): PlanWatcher {
@@ -302,6 +346,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     revoke,
     reveal,
     forgetReveal,
+    pageHidden,
     copy,
     fix,
     dismiss,

@@ -156,3 +156,88 @@ describe("the link section's state", () => {
     expect(link.outcome.value?.text).toMatch(/revoked/);
   });
 });
+
+describe("the revealed link is held only while it still serves", () => {
+  const TOKEN = "Zq7tokenvaluethatmustneverleakanywhere9";
+  const reveal = () => ({ kind: "identity", id: "vu_a", slug: "u-abcdefghij", token: TOKEN, path: `/sub/u-abcdefghij/${TOKEN}` });
+  const link = (over: Record<string, unknown>) => ({ slug: "u-abcdefghij", enabled: true, issued_at: "2026-09-24T08:00:00Z", update_interval_hours: 2, ...over });
+
+  async function revealed(answers: Record<string, (payload: Record<string, unknown>) => unknown> = {}) {
+    let current: Record<string, unknown> = {};
+    const made = deps({ link_get: ({ user_id }) => status(String(user_id), current), link_reveal: reveal, ...answers });
+    const state = useIdentityLink(made.value);
+    await state.open("vu_a");
+    expect(await state.reveal()).toBe(true);
+    expect(state.outcome.value).toMatchObject({ tone: "success", place: "reveal" });
+    return { state, made, set: (next: Record<string, unknown>) => { current = next; } };
+  }
+
+  it.each([
+    ["rotated elsewhere", { link: link({ rotated_at: "2026-10-04T07:00:00Z" }) }],
+    ["given another slug", { link: link({ slug: "u-renamed123" }) }],
+    ["paused", { link: link({ enabled: false }), answer: "decoy", answer_reason: "link_disabled" }],
+    ["revoked", { issued: false, link: undefined, answer: "decoy", answer_reason: "not_issued" }],
+    ["expired", { link: link({ expires_at: "2026-10-01T00:00:00Z" }), answer: "decoy", answer_reason: "link_expired" }],
+  ])("drops it when a fresh read shows the link %s", async (_name, next) => {
+    const { state, set } = await revealed();
+    set(next);
+    await state.refresh();
+    expect(state.revealed.value).toBeUndefined();
+    expect(state.outcome.value).toMatchObject({ place: "reveal", text: expect.stringMatching(/changed since it was revealed/) });
+  });
+
+  it("keeps it across a read that shows the same link", async () => {
+    const { state } = await revealed();
+    await state.refresh();
+    expect(state.revealed.value?.token).toBe(TOKEN);
+  });
+
+  it("drops it on revoke, on panel close, and when the page is hidden", async () => {
+    const revoked = await revealed({ link_revoke: ({ user_id }) => status(String(user_id), { issued: false, link: undefined, answer: "decoy", answer_reason: "not_issued" }) });
+    await revoked.state.revoke();
+    expect(revoked.state.revealed.value).toBeUndefined();
+
+    const closed = await revealed();
+    await closed.state.open("");
+    expect(closed.state.revealed.value).toBeUndefined();
+
+    const hidden = await revealed();
+    hidden.state.pageHidden();
+    expect(hidden.state.revealed.value).toBeUndefined();
+    expect(hidden.state.outcome.value?.text).toMatch(/went to the background/);
+  });
+
+  it("says so when five minutes hide it", async () => {
+    vi.useFakeTimers();
+    const { state } = await revealed();
+    await vi.advanceTimersByTimeAsync(REVEAL_TTL_MS + 1);
+    expect(state.revealed.value).toBeUndefined();
+    expect(state.outcome.value).toMatchObject({ tone: "info", place: "reveal", text: expect.stringMatching(/after five minutes/) });
+  });
+
+  it("leaves nothing on screen when a later reveal is refused", async () => {
+    let refuse = false;
+    const { state } = await revealed({
+      link_reveal: () => {
+        if (refuse) throw new BridgeCallError("Step-up was cancelled", "step_up_required", "step_up_required", 403);
+        return reveal();
+      },
+    });
+    refuse = true;
+    expect(await state.reveal()).toBe(false);
+    expect(state.revealed.value).toBeUndefined();
+    expect(state.outcome.value?.text).toMatch(/step-up did not complete/);
+  });
+
+  it("never sends the token in a call", async () => {
+    const { state, made } = await revealed({ link_set: ({ user_id }) => status(String(user_id)), plan_update: () => ({ approval: { id: "apr_1" } }) });
+    await state.copy(`https://console.example/sub/u-abcdefghij/${TOKEN}`, "Link");
+    await state.setEnabled(true);
+    await state.fix({ line_hash_id: "lh_2", fix: "plan_update" }, "plan_update");
+    await state.refresh();
+    expect(made.calls.length).toBeGreaterThan(3);
+    expect(JSON.stringify(made.calls)).not.toContain(TOKEN);
+    // The console copies only what the operator asked it to copy.
+    expect(made.value.copy).toHaveBeenCalledTimes(1);
+  });
+});

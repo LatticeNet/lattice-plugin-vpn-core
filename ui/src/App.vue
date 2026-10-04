@@ -1473,8 +1473,16 @@ function syncSheetModal(): void {
   sheetModal.value = !!narrowQuery?.matches;
 }
 
+/* A revealed link is not left on a screen nobody is looking at: switching tab
+ * or window, or locking the screen, hides it (the frame shares the console's
+ * visibility). */
+function onVisibilityChange(): void {
+  if (document.visibilityState === "hidden") identityLink.pageHidden();
+}
+
 onMounted(() => {
   document.addEventListener("pointerdown", recordAnchor, true);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("keydown", onKeydown);
   narrowQuery = window.matchMedia?.("(max-width: 767.98px)");
   syncSheetModal();
@@ -1483,6 +1491,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", recordAnchor, true);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("keydown", onKeydown);
   narrowQuery?.removeEventListener("change", syncSheetModal);
   stateSender?.dispose();

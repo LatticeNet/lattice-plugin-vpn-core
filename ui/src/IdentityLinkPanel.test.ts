@@ -71,12 +71,14 @@ describe("the identity's link section", () => {
     expect(html).not.toContain("Add to line");
   });
 
-  it("shows a revealed link cut to its ends beside Copy, with the whole link only in the field to copy by hand", async () => {
+  it("shows a revealed link cut to its ends beside Copy and puts the whole token nowhere until asked", async () => {
     const token = "Xk2abcdefghijklmnopqrstuvwxyz9fQ";
     const html = await render(fakeLink({ status: ACTIVE, revealed: { kind: "identity", id: "vu_a", slug: "u-abcdefghij", token, path: `/sub/u-abcdefghij/${token}` } }));
     expect(html).toContain("https://console.example/sub/u-abcdefghij/Xk2a…z9fQ");
     expect(html).toContain('data-testid="link-copy"');
-    expect(html).toContain(`value="https://console.example/sub/u-abcdefghij/${token}"`);
+    // Not in a field, a title, or a client button: only behind Show the full link.
+    expect(html).not.toContain(token);
+    expect(html).toContain('data-testid="link-show-full"');
     // The QR is drawn only when asked for.
     expect(html).not.toContain('data-testid="link-qr-code"');
   });
@@ -92,11 +94,11 @@ describe("the identity's link section", () => {
     const copied = await render(fakeLink({
       status: ACTIVE,
       revealed: { kind: "identity", id: "vu_a", slug: "u-abcdefghij", token, path: `/sub/u-abcdefghij/${token}` },
-      outcome: { tone: "error", place: "reveal", text: "The console did not copy it. Select the link below and copy it by hand." },
+      outcome: { tone: "error", place: "reveal", text: "The console did not copy it. The full link is selected below: copy it by hand." },
     }));
     const copyNote = copied.indexOf('data-testid="link-outcome"');
     expect(copyNote).toBeGreaterThan(copied.indexOf('data-testid="link-copy"'));
-    expect(copyNote).toBeLessThan(copied.indexOf("The link, to copy by hand"));
+    expect(copyNote).toBeLessThan(copied.indexOf('data-testid="link-show-full"'));
 
     const paused = await render(fakeLink({ status: ACTIVE, outcome: { tone: "success", text: "Link paused: it answers like an unknown URL until you resume it." } }));
     expect(paused.indexOf('data-testid="link-outcome"')).toBeGreaterThan(paused.indexOf('data-testid="link-excluded"'));
