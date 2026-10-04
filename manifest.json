@@ -340,7 +340,7 @@
         },
         {
           "name": "link_reveal",
-          "effect": "read",
+          "effect": "write",
           "scopes": [
             "vpncore:admin"
           ]
