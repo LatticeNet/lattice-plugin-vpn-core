@@ -14,8 +14,17 @@
  * which only survives a reload of the frame itself and may be refused
  * outright in a sandboxed opaque-origin frame, so that write is best effort.
  *
- * The limits below are the contract's and are identical on both sides.
+ * The limits are the contract's and are identical on both sides.
  */
+
+import {
+  PAGE_STATE_KEY_PATTERN,
+  PAGE_STATE_MAX_KEYS,
+  PAGE_STATE_MAX_VALUE_LENGTH,
+  PAGE_STATE_RESERVED_KEYS,
+  validPageState,
+  type PageState,
+} from "@latticenet/plugin-bridge";
 
 import { isGroupBy, type GroupBy } from "./lineGroups";
 import { STACK_BY, USAGE_PERIODS, USAGE_VIEWS, type StackBy, type UsagePeriod, type UsageView } from "./usageModel";
@@ -30,39 +39,22 @@ import {
   type UsersView,
 } from "./usersModel";
 
-export type PageState = Record<string, string>;
-
-export const PAGE_STATE_MAX_KEYS = 16;
-export const PAGE_STATE_KEY_PATTERN = /^[a-z][a-z0-9_]{0,23}$/;
-export const PAGE_STATE_MAX_VALUE_LENGTH = 256;
+/* The contract's rules are plugin-bridge's (validPageState and the
+ * PAGE_STATE_* constants), the same code the other plugin pages and their
+ * client apply. This page still runs its own client (bridge.ts), which reads
+ * them from here. */
+export { PAGE_STATE_KEY_PATTERN, PAGE_STATE_MAX_KEYS, PAGE_STATE_MAX_VALUE_LENGTH, validPageState, type PageState };
 /** The console's own query keys. They never cross the bridge either way. */
-export const RESERVED_PAGE_STATE_KEYS: ReadonlySet<string> = new Set(["redirect", "next", "code", "state", "token", "sso_error", "totp_challenge", "mfa"]);
+export const RESERVED_PAGE_STATE_KEYS: ReadonlySet<string> = PAGE_STATE_RESERVED_KEYS;
 
+/** One entry under the contract's rules, asked of the bridge's own check. */
 function validEntry(key: string, value: unknown): value is string {
-  return PAGE_STATE_KEY_PATTERN.test(key) && !RESERVED_PAGE_STATE_KEYS.has(key) &&
-    typeof value === "string" && value.length <= PAGE_STATE_MAX_VALUE_LENGTH;
+  return validPageState({ [key]: value }) !== undefined;
 }
 
 /** The entries of a record without the console's reserved keys. */
 export function withoutReservedKeys(value: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !RESERVED_PAGE_STATE_KEYS.has(key)));
-}
-
-/**
- * The state if every entry keeps the rules, otherwise undefined. One bad
- * entry drops the whole state, as the host drops the whole message, so a
- * state is never applied by halves.
- */
-export function validPageState(value: unknown): PageState | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const entries = Object.entries(value);
-  if (entries.length > PAGE_STATE_MAX_KEYS) return undefined;
-  const state: PageState = {};
-  for (const [key, entry] of entries) {
-    if (!validEntry(key, entry)) return undefined;
-    state[key] = entry;
-  }
-  return state;
 }
 
 /**
