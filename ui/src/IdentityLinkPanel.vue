@@ -58,6 +58,13 @@ const included = computed(() => {
   return allIncluded.value ? list : list.slice(0, SHOWN_LINES);
 });
 const busy = computed(() => props.link.busy.value);
+/* What Reveal and Copy answer is said beside them; everything else at the
+ * actions. With no link left to reveal, the foot says it all. */
+const revealOutcome = computed(() => {
+  const outcome = props.link.outcome.value;
+  return outcome?.place === "reveal" && summary.value ? outcome : undefined;
+});
+const footOutcome = computed(() => (revealOutcome.value ? undefined : props.link.outcome.value));
 /* The line lists describe what the link would carry; only a link answering
  * with servers carries them now. */
 const serving = computed(() => status.value?.answer === "nodes");
@@ -128,6 +135,10 @@ const PLAN_STATE: Record<string, string> = {
             <LoaderCircle v-if="busy === 'reveal'" class="spin" :size="13" aria-hidden="true" /><Eye v-else :size="13" aria-hidden="true" />
             {{ busy === 'reveal' ? 'Waiting for step-up in the console' : 'Reveal link' }}
           </button>
+          <div v-if="revealOutcome" class="outcome-note" :data-tone="revealOutcome.tone" role="status" data-testid="link-outcome">
+            <span>{{ revealOutcome.text }}</span>
+            <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
+          </div>
           <p class="field-help">{{ can('link_reveal') ? 'Revealing asks the console for your step-up and is recorded in the audit log. The link stays here for five minutes.' : 'This session cannot reveal links.' }}</p>
         </template>
         <template v-else>
@@ -138,6 +149,10 @@ const PLAN_STATE: Record<string, string> = {
               <button class="button button-secondary button-compact" type="button" :aria-pressed="qrOpen" data-testid="link-qr" @click="qrOpen = !qrOpen"><QrCode :size="13" aria-hidden="true" /> {{ qrOpen ? 'Hide QR' : 'QR code' }}</button>
               <button class="icon-button" type="button" aria-label="Hide the link" title="Hide the link" @click="link.forgetReveal()"><EyeOff :size="15" /></button>
             </span>
+          </div>
+          <div v-if="revealOutcome" class="outcome-note" :data-tone="revealOutcome.tone" role="status" data-testid="link-outcome">
+            <span>{{ revealOutcome.text }}</span>
+            <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
           </div>
           <figure v-if="qr" class="link-qr" data-testid="link-qr-code">
             <svg :viewBox="`0 0 ${qr.size} ${qr.size}`" role="img" :aria-label="`QR code of the subscription link for ${email}`" shape-rendering="crispEdges">
@@ -201,8 +216,8 @@ const PLAN_STATE: Record<string, string> = {
         </li>
       </ul>
 
-      <div v-if="link.outcome.value" class="outcome-note" :data-tone="link.outcome.value.tone" role="status" data-testid="link-outcome">
-        <span>{{ link.outcome.value.text }}</span>
+      <div v-if="footOutcome" class="outcome-note" :data-tone="footOutcome.tone" role="status" data-testid="link-outcome">
+        <span>{{ footOutcome.text }}</span>
         <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
       </div>
 

@@ -42,6 +42,10 @@ export type LinkLoad = "idle" | "loading" | "ready" | "denied" | "error";
 export interface LinkOutcome {
   tone: "success" | "error" | "info";
   text: string;
+  /** "reveal" for what Reveal and Copy answer, which the panel says beside
+   *  those buttons: at the section's foot, under every line list, a refused
+   *  step-up or a failed copy was out of view, so the press looked ignored. */
+  place?: "reveal";
 }
 
 /** How long a revealed link stays on screen without being asked for again. */
@@ -200,6 +204,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
       if (mine !== generation) return false;
       outcome.value = {
         tone: "error",
+        place: "reveal",
         text: isStepUpError(cause)
           ? "Nothing was revealed: the console's step-up did not complete. Reveal again and confirm with your authenticator or passkey."
           : safeErrorMessage(cause, "The link could not be revealed"),
@@ -213,8 +218,8 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
   async function copy(text: string, what: string): Promise<boolean> {
     const ok = await deps.copy(text);
     outcome.value = ok
-      ? { tone: "success", text: `${what} copied.` }
-      : { tone: "error", text: "The console did not copy it. Select the link below and copy it by hand." };
+      ? { tone: "success", place: "reveal", text: `${what} copied.` }
+      : { tone: "error", place: "reveal", text: "The console did not copy it. Select the link below and copy it by hand." };
     return ok;
   }
 

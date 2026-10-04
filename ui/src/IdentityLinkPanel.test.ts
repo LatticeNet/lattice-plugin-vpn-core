@@ -3,12 +3,12 @@ import { renderToString } from "@vue/server-renderer";
 import { describe, expect, it } from "vitest";
 
 import IdentityLinkPanel from "./IdentityLinkPanel.vue";
-import type { IdentityLinkState } from "./identityLink";
+import type { IdentityLinkState, LinkOutcome } from "./identityLink";
 import { parseLinkStatus, type LinkReveal } from "./identityLinkModel";
 
 const NOW = Date.parse("2026-10-03T08:00:00Z");
 
-function fakeLink(over: { load?: string; status?: unknown; revealed?: LinkReveal; can?: (method: string) => boolean } = {}): IdentityLinkState {
+function fakeLink(over: { load?: string; status?: unknown; revealed?: LinkReveal; can?: (method: string) => boolean; outcome?: LinkOutcome } = {}): IdentityLinkState {
   const noop = async () => true;
   return {
     userId: ref("vu_a"),
@@ -16,7 +16,7 @@ function fakeLink(over: { load?: string; status?: unknown; revealed?: LinkReveal
     status: shallowRef(over.status === undefined ? undefined : parseLinkStatus(over.status)),
     error: ref(""),
     busy: ref(""),
-    outcome: ref(undefined),
+    outcome: ref(over.outcome),
     revealed: shallowRef(over.revealed),
     plans: shallowRef([]),
     open: async () => {},
@@ -79,6 +79,27 @@ describe("the identity's link section", () => {
     expect(html).toContain(`value="https://console.example/sub/u-abcdefghij/${token}"`);
     // The QR is drawn only when asked for.
     expect(html).not.toContain('data-testid="link-qr-code"');
+  });
+
+  it("says what Reveal and Copy answered beside them, not under the line lists", async () => {
+    const refused = await render(fakeLink({ status: ACTIVE, outcome: { tone: "error", place: "reveal", text: "Nothing was revealed: the console's step-up did not complete." } }));
+    const note = refused.indexOf('data-testid="link-outcome"');
+    expect(note).toBeGreaterThan(refused.indexOf('data-testid="link-reveal"'));
+    expect(note).toBeLessThan(refused.indexOf("Revealing asks the console"));
+    expect(refused.split('data-testid="link-outcome"')).toHaveLength(2);
+
+    const token = "Xk2abcdefghijklmnopqrstuvwxyz9fQ";
+    const copied = await render(fakeLink({
+      status: ACTIVE,
+      revealed: { kind: "identity", id: "vu_a", slug: "u-abcdefghij", token, path: `/sub/u-abcdefghij/${token}` },
+      outcome: { tone: "error", place: "reveal", text: "The console did not copy it. Select the link below and copy it by hand." },
+    }));
+    const copyNote = copied.indexOf('data-testid="link-outcome"');
+    expect(copyNote).toBeGreaterThan(copied.indexOf('data-testid="link-copy"'));
+    expect(copyNote).toBeLessThan(copied.indexOf("The link, to copy by hand"));
+
+    const paused = await render(fakeLink({ status: ACTIVE, outcome: { tone: "success", text: "Link paused: it answers like an unknown URL until you resume it." } }));
+    expect(paused.indexOf('data-testid="link-outcome"')).toBeGreaterThan(paused.indexOf('data-testid="link-excluded"'));
   });
 
   it("offers Issue for an identity with no link", async () => {

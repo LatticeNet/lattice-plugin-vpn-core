@@ -88,6 +88,21 @@ describe("the link section's state", () => {
     expect(await link.reveal()).toBe(false);
     expect(link.revealed.value).toBeUndefined();
     expect(link.outcome.value?.text).toMatch(/step-up did not complete/);
+    expect(link.outcome.value?.place).toBe("reveal");
+  });
+
+  it("answers Copy beside the reveal controls and the other actions at the foot", async () => {
+    const answers = deps({ link_get: ({ user_id }) => status(String(user_id)), link_set: ({ user_id }) => status(String(user_id)) });
+    const link = useIdentityLink(answers.value);
+    await link.open("vu_a");
+    await link.copy("https://console.example/sub/u-abcdefghij/t", "Link");
+    expect(link.outcome.value).toEqual({ tone: "success", place: "reveal", text: "Link copied." });
+    vi.mocked(answers.value.copy).mockResolvedValueOnce(false);
+    await link.copy("https://console.example/sub/u-abcdefghij/t", "Link");
+    expect(link.outcome.value?.place).toBe("reveal");
+    expect(link.outcome.value?.text).toMatch(/copy it by hand/);
+    await link.setEnabled(false);
+    expect(link.outcome.value?.place).toBeUndefined();
   });
 
   it("forgets the revealed link and ignores late answers when the panel moves to another identity", async () => {
