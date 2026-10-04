@@ -241,3 +241,33 @@ describe("the revealed link is held only while it still serves", () => {
     expect(made.value.copy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("filing a plan for a left-out line", () => {
+  it("files once while the plan is followed and says the result at the row", async () => {
+    let filed = 0;
+    const { value, calls } = deps({
+      link_get: ({ user_id }) => status(String(user_id)),
+      plan_update: () => ({ approval: { id: `apr_${++filed}` } }),
+    });
+    const link = useIdentityLink(value);
+    await link.open("vu_a");
+    const line = { line_hash_id: "lh_2", fix: "plan_update" };
+    await link.fix(line, "plan_update");
+    expect(link.outcome.value).toMatchObject({ place: "line", lineHash: "lh_2" });
+    expect(link.pendingPlan("lh_2")?.approvalId).toBe("apr_1");
+    await link.fix(line, "plan_update");
+    expect(calls.filter((call) => call.method === "plan_update")).toHaveLength(1);
+    expect(link.outcome.value).toMatchObject({ place: "line", lineHash: "lh_2", text: expect.stringMatching(/already waiting/) });
+  });
+
+  it("says a refused filing at the row", async () => {
+    const link = useIdentityLink(deps({
+      link_get: ({ user_id }) => status(String(user_id)),
+      plan_update: () => { throw new Error("vpn-core/users-admin plan_update: line lh_2 is not adopted"); },
+    }).value);
+    await link.open("vu_a");
+    await link.fix({ line_hash_id: "lh_2", fix: "plan_update" }, "plan_update");
+    expect(link.outcome.value).toMatchObject({ tone: "error", place: "line", lineHash: "lh_2" });
+    expect(link.pendingPlan("lh_2")).toBeUndefined();
+  });
+});

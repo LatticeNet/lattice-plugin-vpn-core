@@ -27,6 +27,7 @@ function fakeLink(over: { load?: string; status?: unknown; revealed?: LinkReveal
     fix: async () => {},
     dismiss: () => {},
     canFix: () => (over.can ?? (() => true))("plan_update"),
+    pendingPlan: () => undefined,
     can: over.can ?? (() => true),
   } as unknown as IdentityLinkState;
 }
@@ -57,7 +58,7 @@ describe("the identity's link section", () => {
     expect(html).toContain("Serves 1 line; 1 bound line is left out");
     expect(html).toContain("/sub/u-abcdefghij/…");
     expect(html).toContain("Fetched 14m ago by mihomo (Clash Verge, FlClash), got the servers");
-    expect(html).toContain("Add to line");
+    expect(html).toContain("Queue add");
     expect(html).toContain('data-testid="link-reveal"');
     expect(html).not.toContain('data-testid="link-url"');
   });
@@ -68,7 +69,7 @@ describe("the identity's link section", () => {
     expect(html).toContain("This session cannot reveal links.");
     expect(html).not.toContain('data-testid="link-rotate"');
     expect(html).not.toContain('data-testid="link-revoke"');
-    expect(html).not.toContain("Add to line");
+    expect(html).not.toContain("Queue add");
   });
 
   it("shows a revealed link cut to its ends beside Copy and puts the whole token nowhere until asked", async () => {

@@ -397,8 +397,9 @@ export function linkFix(line: LinkLine): LinkFixView | undefined {
   // the Lines section is the way back.
   if (line.reason === "binding_disabled" && !line.fix) return { label: "turn the binding on in Lines below" };
   switch (line.fix) {
-    case "plan_add": return { action: "plan_add", label: "Add to line" };
-    case "plan_update": return { action: "plan_update", label: "Update on line" };
+    // Queue, as the Lines panel says it: the press files a plan for Approvals.
+    case "plan_add": return { action: "plan_add", label: "Queue add" };
+    case "plan_update": return { action: "plan_update", label: "Queue update" };
     case "wait_for_discovery": return { label: "waits for the node to report the line" };
     case "wait_for_template": return { label: "waits for the next discovery to read a template" };
     case "wait_for_line_uuid": return { label: "waits for discovery to report the line's user id" };

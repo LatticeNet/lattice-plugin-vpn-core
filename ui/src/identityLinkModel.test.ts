@@ -121,8 +121,8 @@ describe("lines left out", () => {
   it("says each reason and offers a plan only where the fix is a plan", () => {
     expect(excludedReason({ line_hash_id: "a", reason: "template_lossy", detail: "drops ech" })).toBe("the client template would drop parameters (drops ech)");
     expect(excludedReason({ line_hash_id: "a", reason: "brand_new_reason" })).toBe("brand new reason");
-    expect(linkFix({ line_hash_id: "a", fix: "plan_add" })).toEqual({ action: "plan_add", label: "Add to line" });
-    expect(linkFix({ line_hash_id: "a", fix: "plan_update" })).toEqual({ action: "plan_update", label: "Update on line" });
+    expect(linkFix({ line_hash_id: "a", fix: "plan_add" })).toEqual({ action: "plan_add", label: "Queue add" });
+    expect(linkFix({ line_hash_id: "a", fix: "plan_update" })).toEqual({ action: "plan_update", label: "Queue update" });
     expect(linkFix({ line_hash_id: "a", fix: "wait_for_template" })?.action).toBeUndefined();
     expect(linkFix({ line_hash_id: "a" })).toBeUndefined();
     expect(linkFix({ line_hash_id: "a", reason: "binding_disabled" })).toEqual({ label: "turn the binding on in Lines below" });

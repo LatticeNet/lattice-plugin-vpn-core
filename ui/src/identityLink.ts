@@ -294,6 +294,13 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
   async function fix(line: LinkLine, action: FixAction): Promise<void> {
     const id = userId.value;
     if (!id || busy.value || !canFix()) return;
+    const at = { place: "line" as const, lineHash: line.line_hash_id };
+    // One plan per line at a time: a second press would file a second,
+    // identical privileged plan for Approvals.
+    if (pendingPlan(line.line_hash_id)) {
+      outcome.value = { tone: "info", ...at, text: "A plan for this line is already waiting for approval. Review it in Approvals." };
+      return;
+    }
     const mine = generation;
     busy.value = "plan";
     outcome.value = undefined;
@@ -308,14 +315,14 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
         // the fallback above
       }
       if (!approvalId) {
-        outcome.value = { tone: "info", text: "The plan was filed but the answer named no approval. Find it in Approvals." };
+        outcome.value = { tone: "info", ...at, text: "The plan was filed but the answer named no approval. Find it in Approvals." };
         return;
       }
       ensureWatcher().watch({ approvalId, userId: id, lineHash: line.line_hash_id, op: BOUND_LINE_PLAN, summary });
-      outcome.value = { tone: "info", text: "Plan filed. Nothing changes on the node until you approve it in Approvals." };
+      outcome.value = { tone: "info", ...at, text: "Nothing changes on the node until you approve it in Approvals." };
     } catch (cause) {
       if (mine !== generation) return;
-      outcome.value = { tone: "error", text: safeErrorMessage(cause, "The plan could not be filed") };
+      outcome.value = { tone: "error", ...at, text: safeErrorMessage(cause, "The plan could not be filed") };
     } finally {
       if (mine === generation) busy.value = "";
     }
@@ -323,6 +330,11 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
 
   function canFix(): boolean {
     return deps.can(BOUND_LINE_PLAN);
+  }
+
+  /** The plan filed for a line that is still waiting for approval and apply, if any. */
+  function pendingPlan(lineHash: string): WatchedPlan | undefined {
+    return plans.value.find((plan) => plan.lineHash === lineHash && plan.state === "pending");
   }
 
   function dismiss(): void {
@@ -351,6 +363,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     fix,
     dismiss,
     canFix,
+    pendingPlan,
     can: deps.can,
   };
 }

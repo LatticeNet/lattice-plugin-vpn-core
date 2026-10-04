@@ -95,3 +95,29 @@ describe("the link section in the page", () => {
     expect(q("link-outcome")!.textContent).toMatch(/selected below/);
   });
 });
+
+describe("a plan filed from a left-out line", () => {
+  it("replaces the row's button with the plan's state, moves focus there, and refuses a second filing", async () => {
+    let filed = 0;
+    const { q, host } = await mount({
+      plan_update: () => {
+        filed += 1;
+        return { approval: { id: `apr_upd_${filed}`, plan: JSON.stringify({ summary: "sb user update alice on VLESS-REALITY-31001" }) } };
+      },
+    });
+    const fix = q("link-fix")!;
+    expect(fix.textContent).toContain("Queue update");
+    fix.click();
+    await settle();
+    const pending = q("link-pending")!;
+    expect(pending.closest("li")?.dataset.line).toBe("lh_2");
+    expect(document.activeElement).toBe(pending);
+    expect(q("link-fix")).toBeNull();
+    expect(pending.closest("li")!.textContent).toContain("Review in Approvals");
+    expect(q("link-line-outcome")!.closest("li")?.dataset.line).toBe("lh_2");
+    // The waiting plan is in its row, not repeated under the lines.
+    expect(q("link-plans")).toBeNull();
+    expect(filed).toBe(1);
+    expect(host.textContent).toContain("Plan filed, waiting for approval");
+  });
+});

@@ -13,6 +13,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { CircleAlert, Copy, Eye, EyeOff, LoaderCircle, Pause, Play, QrCode, RefreshCw, RotateCw, Trash2, X } from "@lucide/vue";
 
 import type { IdentityLinkState } from "./identityLink";
+import type { FixAction, LinkLine } from "./identityLinkModel";
 import {
   clientLinks,
   convertNote,
@@ -65,8 +66,30 @@ const placedOutcome = computed(() => {
   const outcome = props.link.outcome.value;
   if (outcome?.place === "reveal" && summary.value) return outcome;
   if (outcome?.place === "clients" && url.value) return outcome;
+  if (outcome?.place === "line" && status.value?.excluded.some((line) => line.line_hash_id === outcome.lineHash)) return outcome;
   return undefined;
 });
+const lineOutcome = computed(() => (placedOutcome.value?.place === "line" ? placedOutcome.value : undefined));
+/* A plan waiting on a left-out line is shown in that line's row; the list
+ * under the lines keeps the settled ones and any whose line left the list. */
+const footPlans = computed(() => {
+  const leftOut = new Set((status.value?.excluded ?? []).map((line) => line.line_hash_id));
+  return props.link.plans.value.filter((plan) => plan.state !== "pending" || !leftOut.has(plan.lineHash));
+});
+
+const section = ref<HTMLElement>();
+function rowOf(lineHash: string): HTMLElement | undefined {
+  return [...(section.value?.querySelectorAll<HTMLElement>("li[data-line]") ?? [])].find((row) => row.dataset.line === lineHash);
+}
+
+/* Filing replaces the row's button with the plan's state, so focus moves to
+ * that state (or back to the button when nothing was filed). */
+async function fileFix(line: LinkLine, action: FixAction): Promise<void> {
+  await props.link.fix(line, action);
+  await nextTick();
+  const row = rowOf(line.line_hash_id);
+  (row?.querySelector<HTMLElement>('[data-testid="link-pending"]') ?? row?.querySelector<HTMLElement>('[data-testid="link-fix"]'))?.focus();
+}
 const revealOutcome = computed(() => (placedOutcome.value?.place === "reveal" ? placedOutcome.value : undefined));
 const clientsOutcome = computed(() => (placedOutcome.value?.place === "clients" ? placedOutcome.value : undefined));
 const footOutcome = computed(() => (placedOutcome.value ? undefined : props.link.outcome.value));
@@ -131,7 +154,7 @@ const PLAN_STATE: Record<string, string> = {
 </script>
 
 <template>
-  <section class="detail-section link-section" aria-labelledby="user-link-title" data-testid="identity-link">
+  <section ref="section" class="detail-section link-section" aria-labelledby="user-link-title" data-testid="identity-link">
     <h3 id="user-link-title">Subscription link</h3>
 
     <p v-if="link.load.value === 'loading'" class="empty-inline" role="status"><LoaderCircle class="spin" :size="13" aria-hidden="true" /> Reading the link for {{ email }}</p>
@@ -230,25 +253,33 @@ const PLAN_STATE: Record<string, string> = {
       <div v-if="status.excluded.length" class="link-lines" data-testid="link-excluded">
         <h4>{{ serving || status.answer === 'decoy' ? 'Leaves out' : 'Would leave out' }} {{ status.excluded.length }} {{ status.excluded.length === 1 ? 'bound line' : 'bound lines' }}</h4>
         <ul>
-          <li v-for="line in status.excluded" :key="line.line_hash_id" class="excluded">
+          <li v-for="line in status.excluded" :key="line.line_hash_id" class="excluded" :data-line="line.line_hash_id">
             <span class="link-line-name" :title="lineTitle(line)">{{ lineTitle(line) }}<small>{{ excludedReason(line) }}</small></span>
-            <template v-if="linkFix(line)">
+            <span v-if="link.pendingPlan(line.line_hash_id)" class="icon-actions link-row-plan">
+              <span class="status-dot wrap" data-tone="warning" tabindex="-1" data-testid="link-pending">Plan filed, waiting for approval <LoaderCircle class="spin" :size="11" aria-hidden="true" /></span>
+              <button v-if="hostOrigin" class="button button-secondary button-compact" type="button" @click="emit('review', link.pendingPlan(line.line_hash_id)!.approvalId)">Review in Approvals</button>
+            </span>
+            <template v-else-if="linkFix(line)">
               <button
                 v-if="linkFix(line)!.action && link.canFix()"
                 class="button button-secondary button-compact"
                 type="button"
                 :disabled="!!busy"
-                :title="`File a plan; nothing changes on the node until you approve it`"
-                @click="link.fix(line, linkFix(line)!.action!)"
+                data-testid="link-fix"
+                @click="fileFix(line, linkFix(line)!.action!)"
               >{{ linkFix(line)!.label }}</button>
               <small v-else-if="!linkFix(line)!.action" class="link-fix-note">{{ linkFix(line)!.label }}</small>
             </template>
+            <div v-if="lineOutcome?.lineHash === line.line_hash_id" class="outcome-note link-row-note" :data-tone="lineOutcome.tone" role="status" data-testid="link-line-outcome">
+              <span>{{ lineOutcome.text }}</span>
+              <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
+            </div>
           </li>
         </ul>
       </div>
 
-      <ul v-if="link.plans.value.length" class="link-plans" data-testid="link-plans">
-        <li v-for="plan in link.plans.value" :key="plan.approvalId">
+      <ul v-if="footPlans.length" class="link-plans" data-testid="link-plans">
+        <li v-for="plan in footPlans" :key="plan.approvalId">
           <span>
             <span class="status-dot wrap" :data-tone="plan.state === 'applied' ? 'healthy' : plan.state === 'pending' ? 'warning' : undefined">{{ plan.summary }}</span>
             <small>{{ plan.note || PLAN_STATE[plan.state] }}<template v-if="plan.state === 'pending'"><LoaderCircle class="spin" :size="11" aria-hidden="true" /></template></small>
