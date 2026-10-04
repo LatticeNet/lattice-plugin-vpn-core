@@ -182,3 +182,26 @@ describe("focus follows the action", () => {
     expect(document.activeElement).toBe(pause);
   });
 });
+
+describe("the served lines and the link's expiry", () => {
+  it("shows the served lines on request and removes an expiry through link_set", async () => {
+    let sent: Record<string, unknown> | undefined;
+    const expiring = { link: { slug: "u-abcdefghij", enabled: true, issued_at: "2026-09-24T08:00:00Z", expires_at: "2026-10-01T00:00:00Z", update_interval_hours: 2 }, answer: "decoy", answer_reason: "link_expired" };
+    const { q, host } = await mount({
+      link_get: () => status(expiring),
+      link_set: (payload) => { sent = payload; return status(); },
+    });
+    const toggle = q("link-served-toggle")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.textContent).not.toContain("VLESS-REALITY-31010");
+    toggle.click();
+    await settle();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(host.textContent).toContain("VLESS-REALITY-31010");
+    q("link-clear-expiry")!.click();
+    await settle();
+    expect(sent).toEqual({ user_id: "vu_a", clear_expiry: true });
+    expect(q("link-clear-expiry")).toBeNull();
+    expect(q("link-live")!.textContent).toMatch(/expiry removed/);
+  });
+});

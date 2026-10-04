@@ -920,4 +920,7 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
   .sort-button, .fold-all, .node-toggle { min-height: 44px; }
   /* The row menu's items were 29px tall on touch; Sub-Store's are 44. */
   .row-menu button { min-height: 44px; }
+  /* The link section's text controls: 13px tall before. */
+  .link-more { min-height: 44px; }
+  .link-clients summary { box-sizing: border-box; min-height: 44px; padding-block: 12px; }
 }

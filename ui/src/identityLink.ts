@@ -73,7 +73,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
   const load = ref<LinkLoad>("idle");
   const status = shallowRef<LinkStatus>();
   const error = ref("");
-  const busy = ref<"" | "issue" | "pause" | "resume" | "rotate" | "revoke" | "reveal" | "plan">("");
+  const busy = ref<"" | "issue" | "pause" | "resume" | "expiry" | "rotate" | "revoke" | "reveal" | "plan">("");
   const outcome = ref<LinkOutcome>();
   const revealed = shallowRef<LinkReveal>();
   const plans = shallowRef<readonly WatchedPlan[]>([]);
@@ -201,6 +201,11 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
   function setEnabled(enabled: boolean): Promise<boolean> {
     return write(enabled ? "resume" : "pause", "link_set", { enabled },
       enabled ? "Link resumed: clients get their servers again on the next refresh." : "Link paused: it answers like an unknown URL until you resume it.");
+  }
+
+  /** The link stops expiring (users-admin link_set clear_expiry). */
+  function clearExpiry(): Promise<boolean> {
+    return write("expiry", "link_set", { clear_expiry: true }, "Link expiry removed: the link serves again on the next fetch.");
   }
 
   async function rotate(): Promise<boolean> {
@@ -354,6 +359,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     refresh,
     issue,
     setEnabled,
+    clearExpiry,
     rotate,
     revoke,
     reveal,

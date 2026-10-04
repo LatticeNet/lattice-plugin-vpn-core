@@ -10,6 +10,7 @@ import {
   lineTitle,
   linkBadge,
   linkFix,
+  leftOutHeading,
   linkHeadline,
   linkPathHint,
   maskedUrl,
@@ -17,6 +18,7 @@ import {
   parseLinkStatus,
   revealedUrl,
   revealRefusalText,
+  servedHeading,
   userinfoText,
   type LinkStatus,
 } from "./identityLinkModel";
@@ -81,15 +83,16 @@ describe("what a fetch gets now", () => {
     const expired = linkHeadline(status({ answer: "decoy", answer_reason: "link_expired", link: { ...status().link!, expires_at: "2026-10-01T00:00:00Z" } }));
     expect(expired).toMatchObject({ key: "expired", tone: "error" });
     expect(expired.detail).toMatch(/expired on/);
+    expect(expired.detail).toMatch(/Removing its expiry serves it again/);
   });
 
   it("names the placeholder and why for each reason the server gives", () => {
     const cases: Array<[string, RegExp]> = [
-      ["disabled", /turned off/],
-      ["operator", /suspended/],
-      ["expiry", /expired/],
-      ["quota", /over its quota/],
-      ["no_lines", /bound to no line/],
+      ["disabled", /turned off.*Identity enabled in Edit/],
+      ["operator", /suspended.*suspension is lifted/],
+      ["expiry", /expired.*Expires at in Edit/],
+      ["quota", /over its quota.*Raising the quota in Edit/],
+      ["no_lines", /bound to no line.*Binding a line in Lines below/],
     ];
     for (const [reason, pattern] of cases) {
       const line = linkHeadline(status({ answer: "placeholder", answer_reason: reason, placeholder: "Quota used: 21.0 GiB of 20.0 GiB" }));
@@ -112,6 +115,8 @@ describe("the last fetch", () => {
     expect(fresh).toMatchObject({ freshness: "fresh", tone: "healthy", text: "Fetched 14m ago by mihomo (Clash Verge, FlClash), got the servers" });
     const stale = fetchLine(status({ last_fetch: { at: new Date(NOW - 5 * 60 * MIN).toISOString(), ua_class: "shadowrocket", answer: "placeholder" } }), NOW);
     expect(stale).toMatchObject({ freshness: "stale", tone: "warning", text: "Fetched 5h ago by Shadowrocket, got the placeholder" });
+    // Recent, but it got the placeholder: not shown as healthy.
+    expect(fetchLine(status({ last_fetch: { at: new Date(NOW - MIN).toISOString(), ua_class: "clashmeta", answer: "placeholder" } }), NOW).tone).toBe("warning");
     expect(fetchLine(status(), NOW)).toMatchObject({ freshness: "never", text: "Not fetched since the server last started" });
     expect(fetchLine(status({ last_fetch: { at: new Date(NOW - MIN).toISOString(), ua_class: "curl-ish", answer: "decoy" } }), NOW).text).toBe("Fetched 1m ago by an unrecognised client, got nothing");
   });
@@ -191,5 +196,22 @@ describe("revealRefusalText", () => {
     expect(revealRefusalText({ code: "call_failed", apiCode: "step_up_required", message: "second-factor step-up required" })).toMatch(/Reveal again/);
     expect(revealRefusalText({ code: "call_failed", message: "step_up_required: revealing a secret needs a fresh second-factor step-up" })).toMatch(/cannot run the step-up/);
     expect(revealRefusalText(new Error("upstream refused users-admin/link_reveal: 503"))).toBeUndefined();
+  });
+});
+
+describe("the line list headings", () => {
+  const issuedOff = { link: { slug: "u-a", enabled: false, issued_at: "2026-09-24T08:00:00Z", update_interval_hours: 2 } };
+  it("say serves and leaves out only while the link answers", () => {
+    const one = { included: [{ line_hash_id: "a" }], excluded: [{ line_hash_id: "b", reason: "service_down" }] };
+    expect(servedHeading(status(one))).toBe("Serves 1 line");
+    expect(leftOutHeading(status(one))).toBe("Leaves out 1 bound line");
+    const none = status({ ...one, issued: false, link: undefined, answer: "decoy", answer_reason: "not_issued" });
+    expect(servedHeading(none)).toBe("Would serve 1 line once a link is issued");
+    expect(leftOutHeading(none)).toBe("Would leave out 1 bound line");
+    expect(servedHeading(status({ ...one, ...issuedOff, answer: "decoy", answer_reason: "link_disabled" }))).toBe("Would serve 1 line once the link is resumed");
+    expect(servedHeading(status({ ...one, answer: "decoy", answer_reason: "link_expired" }))).toBe("Would serve 1 line once the link's expiry is removed");
+    expect(servedHeading(status({ ...one, answer: "placeholder", answer_reason: "expiry" }))).toBe("Would serve 1 line once the identity is back in service");
+    // Every line left out: the link answers, with nothing.
+    expect(leftOutHeading(status({ included: [], excluded: one.excluded, answer: "decoy", answer_reason: "transient_empty" }))).toBe("Leaves out 1 bound line");
   });
 });

@@ -105,6 +105,25 @@ describe("the identity's link section", () => {
     expect(paused.indexOf('data-testid="link-outcome"')).toBeGreaterThan(paused.indexOf('data-testid="link-excluded"'));
   });
 
+  it("keeps the served lines a count until asked, and never says serves for a link that does not answer", async () => {
+    const active = await render(fakeLink({ status: ACTIVE }));
+    expect(active).toContain("Serves 1 line");
+    expect(active).toContain('data-testid="link-served-toggle"');
+    expect(active).not.toContain("VLESS-REALITY-31010");
+    expect(active).toContain("VLESS-REALITY-31001");
+    const none = await render(fakeLink({ status: { ...ACTIVE, issued: false, link: undefined, answer: "decoy", answer_reason: "not_issued" } }));
+    expect(none).toContain("Would serve 1 line once a link is issued");
+    expect(none).toContain("Would leave out 1 bound line");
+    expect(none).not.toMatch(/>Serves |>Leaves out /);
+  });
+
+  it("offers Remove expiry for a link with one", async () => {
+    const expired = await render(fakeLink({ status: { ...ACTIVE, answer: "decoy", answer_reason: "link_expired", link: { ...ACTIVE.link, expires_at: "2026-10-01T00:00:00Z" } } }));
+    expect(expired).toContain('data-testid="link-clear-expiry"');
+    expect(expired).toContain("Removing its expiry serves it again");
+    expect(await render(fakeLink({ status: ACTIVE }))).not.toContain('data-testid="link-clear-expiry"');
+  });
+
   it("offers Issue for an identity with no link", async () => {
     const html = await render(fakeLink({ status: { identity_id: "vu_a", issued: false, answer: "decoy", answer_reason: "not_issued", included: [], excluded: [], formats: {} } }));
     expect(html).toContain("No link");

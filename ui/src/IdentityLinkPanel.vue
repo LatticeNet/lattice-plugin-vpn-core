@@ -19,6 +19,7 @@ import {
   convertNote,
   excludedReason,
   fetchLine,
+  leftOutHeading,
   linkAge,
   linkFix,
   linkHeadline,
@@ -26,6 +27,7 @@ import {
   lineTitle,
   maskedUrl,
   revealedUrl,
+  servedHeading,
   userinfoText,
 } from "./identityLinkModel";
 import { qrDrawing } from "./qr";
@@ -43,7 +45,6 @@ const emit = defineEmits<{
   review: [approvalId: string];
 }>();
 
-const SHOWN_LINES = 6;
 
 const status = computed(() => props.link.status.value);
 const headline = computed(() => (status.value ? linkHeadline(status.value) : undefined));
@@ -53,11 +54,11 @@ const url = computed(() => (props.link.revealed.value ? revealedUrl(props.link.r
 const clients = computed(() => (url.value && status.value ? clientLinks(url.value, status.value.formats) : []));
 const qrOpen = ref(false);
 const qr = computed(() => (qrOpen.value && url.value ? qrDrawing(url.value) : undefined));
+/* The served lines are a count until asked for: the Lines section below
+ * lists every binding, and the left-out lines, which carry the actions,
+ * stay in view. */
 const allIncluded = ref(false);
-const included = computed(() => {
-  const list = status.value?.included ?? [];
-  return allIncluded.value ? list : list.slice(0, SHOWN_LINES);
-});
+const included = computed(() => (allIncluded.value ? status.value?.included ?? [] : []));
 const busy = computed(() => props.link.busy.value);
 /* An outcome is said beside the control that was pressed (Reveal and Copy,
  * a client's copy button, a left-out line), everything else at the actions.
@@ -103,6 +104,10 @@ async function focusAfter(target: () => HTMLElement | null | undefined): Promise
   await nextTick();
   if (!focusIsOurs()) return;
   (target() ?? heading.value)?.focus();
+}
+
+async function removeExpiry(): Promise<void> {
+  if (await props.link.clearExpiry()) await focusAfter(() => heading.value);
 }
 
 async function issueLink(): Promise<void> {
@@ -164,9 +169,6 @@ async function toggleQr(): Promise<void> {
   await nextTick();
   qrFigure.value?.scrollIntoView?.({ block: "nearest" });
 }
-/* The line lists describe what the link would carry; only a link answering
- * with servers carries them now. */
-const serving = computed(() => status.value?.answer === "nodes");
 const can = props.link.can;
 
 // A new identity, or a link that is gone, starts with the QR hidden.
@@ -231,7 +233,13 @@ const PLAN_STATE: Record<string, string> = {
         </div>
         <div><dt>Refresh</dt><dd>every {{ summary.update_interval_hours }} h<small v-if="summary.update_interval_hours === 2"> (default)</small></dd></div>
         <div><dt>Issued</dt><dd>{{ linkAge(summary.issued_at, now) || 'unknown' }}<small v-if="summary.rotated_at"> · rotated {{ linkAge(summary.rotated_at, now) }}</small></dd></div>
-        <div><dt>Link expires</dt><dd>{{ expiryText(summary.expires_at) }}</dd></div>
+        <div>
+          <dt>Link expires</dt>
+          <dd>
+            {{ expiryText(summary.expires_at) }}
+            <button v-if="summary.expires_at && can('link_set')" class="link-more" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-clear-expiry" @click="busy || removeExpiry()">Remove expiry</button>
+          </dd>
+        </div>
         <div v-if="status.subscription_userinfo"><dt>Clients see</dt><dd :title="`Subscription-Userinfo: ${status.subscription_userinfo}`">{{ userinfoText(status.subscription_userinfo, status.answer) }}</dd></div>
       </dl>
 
@@ -287,18 +295,18 @@ const PLAN_STATE: Record<string, string> = {
       </div>
 
       <div v-if="status.included.length" class="link-lines">
-        <h4>{{ serving ? 'Serves' : 'Would serve' }} {{ status.included.length }} {{ status.included.length === 1 ? 'line' : 'lines' }}<template v-if="!serving"> once it answers with servers again</template></h4>
-        <ul>
+        <h4>{{ servedHeading(status) }}</h4>
+        <ul v-if="included.length" id="link-served-lines">
           <li v-for="line in included" :key="line.line_hash_id">
             <span class="link-line-name" :title="lineTitle(line)">{{ lineTitle(line) }}</span>
             <span v-if="line.protocol" class="badge">{{ line.protocol }}</span>
           </li>
         </ul>
-        <button v-if="status.included.length > SHOWN_LINES" class="link-more" type="button" @click="allIncluded = !allIncluded">{{ allIncluded ? 'Show fewer' : `Show all ${status.included.length}` }}</button>
+        <button class="link-more" type="button" :aria-expanded="allIncluded" aria-controls="link-served-lines" data-testid="link-served-toggle" @click="allIncluded = !allIncluded">{{ allIncluded ? 'Hide the lines' : status.included.length === 1 ? 'Show the line' : `Show the ${status.included.length} lines` }}</button>
       </div>
 
       <div v-if="status.excluded.length" class="link-lines" data-testid="link-excluded">
-        <h4>{{ serving || status.answer === 'decoy' ? 'Leaves out' : 'Would leave out' }} {{ status.excluded.length }} {{ status.excluded.length === 1 ? 'bound line' : 'bound lines' }}</h4>
+        <h4>{{ leftOutHeading(status) }}</h4>
         <ul>
           <li v-for="line in status.excluded" :key="line.line_hash_id" class="excluded" :data-line="line.line_hash_id">
             <span class="link-line-name" :title="lineTitle(line)">{{ lineTitle(line) }}<small>{{ excludedReason(line) }}</small></span>

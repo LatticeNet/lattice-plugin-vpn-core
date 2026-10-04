@@ -255,7 +255,7 @@ export function linkHeadline(status: LinkStatus): LinkHeadline {
       key: "expired",
       tone: "error",
       title: "Link expired",
-      detail: `The link expired${when} and answers like an unknown URL. Clear or move the expiry to serve it again.`,
+      detail: `The link expired${when} and answers like an unknown URL. Removing its expiry serves it again.`,
     };
   }
   const placeholder = status.placeholder ? `one entry named "${status.placeholder}"` : "one placeholder entry";
@@ -267,11 +267,19 @@ export function linkHeadline(status: LinkStatus): LinkHeadline {
       quota: "The identity is over its quota",
       no_lines: "The identity is bound to no line",
     } as Record<string, string>)[status.answer_reason] ?? "The identity is not in service";
+    // How it comes back, with the control this page has for it.
+    const back = ({
+      disabled: " Turning on Identity enabled in Edit serves its lines again.",
+      operator: " It serves its lines again when the suspension is lifted.",
+      expiry: " Moving or clearing Expires at in Edit serves its lines again.",
+      quota: " Raising the quota in Edit serves its lines again, as does the next quota reset.",
+      no_lines: " Binding a line in Lines below serves it.",
+    } as Record<string, string>)[status.answer_reason] ?? "";
     return {
       key: "placeholder",
       tone: "warning",
       title: "Serving a placeholder",
-      detail: `${why}, so a client gets ${placeholder} and no servers, with its quota shown as used up.`,
+      detail: `${why}, so a client gets ${placeholder} and no servers, with its quota shown as used up.${back}`,
     };
   }
   if (status.answer === "decoy") {
@@ -293,6 +301,30 @@ export function linkHeadline(status: LinkStatus): LinkHeadline {
       ? `Serves ${plural(served, "line", "lines")}; ${plural(left, "bound line is", "bound lines are")} left out, each with the reason below.`
       : `Serves ${plural(served, "line", "lines")}, every line this identity is bound to.`,
   };
+}
+
+/** Whether the link answers fetches now: issued, on, and not expired. */
+export function linkAnswers(status: LinkStatus): boolean {
+  return status.issued && !!status.link?.enabled &&
+    status.answer_reason !== "not_issued" && status.answer_reason !== "link_disabled" && status.answer_reason !== "link_expired";
+}
+
+/** The heading over the lines a fetch gets: present tense only while it gets them. */
+export function servedHeading(status: LinkStatus): string {
+  const lines = plural(status.included.length, "line", "lines");
+  if (linkAnswers(status) && status.answer === "nodes") return `Serves ${lines}`;
+  const when = !status.issued ? "once a link is issued"
+    : status.answer_reason === "link_disabled" ? "once the link is resumed"
+      : status.answer_reason === "link_expired" ? "once the link's expiry is removed"
+        : status.answer === "placeholder" ? "once the identity is back in service"
+          : "once it answers with servers again";
+  return `Would serve ${lines} ${when}`;
+}
+
+/** The heading over the bound lines a fetch leaves out. */
+export function leftOutHeading(status: LinkStatus): string {
+  const lines = plural(status.excluded.length, "bound line", "bound lines");
+  return linkAnswers(status) && status.answer !== "placeholder" ? `Leaves out ${lines}` : `Would leave out ${lines}`;
 }
 
 // ── the last fetch ───────────────────────────────────────────────────────
@@ -348,9 +380,11 @@ export function fetchLine(status: LinkStatus, now: number): FetchLine {
   const interval = (status.link?.update_interval_hours ?? 2) * 3_600_000;
   const freshness: FetchFreshness = age <= interval * 2 ? "fresh" : "stale";
   const got = ({ nodes: "got the servers", placeholder: "got the placeholder", decoy: "got nothing" } as Record<string, string>)[fetch.answer] ?? "got an answer";
+  // Healthy only for a recent fetch that got the servers: a client that
+  // fetched a placeholder or nothing a minute ago is not a good sign.
   return {
     freshness,
-    tone: freshness === "fresh" ? "healthy" : "warning",
+    tone: freshness === "fresh" && fetch.answer === "nodes" ? "healthy" : "warning",
     text: `Fetched ${formatAge(age)} ago by ${clientFamily(fetch.ua_class)}, ${got}`,
     title: new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" }).format(new Date(at)),
   };
