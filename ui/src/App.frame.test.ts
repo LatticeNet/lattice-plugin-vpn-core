@@ -102,6 +102,11 @@ beforeEach(() => {
   resetUserStores();
   posted = [];
   Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+  // jsdom has no CSS.escape; the page uses it to find a re-rendered row when
+  // the identity's panel closes. Identity ids here are plain, so this escapes
+  // only what a selector cannot carry bare.
+  (globalThis as { CSS?: { escape?: (value: string) => string } }).CSS ??= {};
+  (globalThis as { CSS: { escape?: (value: string) => string } }).CSS.escape ??= (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, (char) => `\\${char}`);
 });
 
 afterEach(() => {
