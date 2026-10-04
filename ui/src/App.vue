@@ -73,7 +73,7 @@ import {
   type UsagePeriod,
   type UsageView,
 } from "./usageModel";
-import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
+import { approvalRoute, evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
 import { useObservedAge } from "./observedAge";
@@ -797,8 +797,9 @@ async function confirmLinkAction(): Promise<void> {
 
 /* The console opens the approval read only; deciding stays the operator's click there. */
 function openApproval(id: string): void {
-  if (!hostOrigin || !id) return;
-  postNavigate(window, `/approvals?open=${encodeURIComponent(id)}`, hostOrigin);
+  const target = approvalRoute(id);
+  if (!hostOrigin || !target) return;
+  postNavigate(window, target, hostOrigin);
 }
 
 /* ── create and edit ─────────────────────────────────────────────────── */

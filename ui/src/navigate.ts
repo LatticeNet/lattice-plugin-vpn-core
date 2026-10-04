@@ -46,6 +46,16 @@ export function hostOriginFromHash(hash: string): string | null {
   return url.origin;
 }
 
+/* An approval id as the server mints it (apr_ and the like): letters, digits,
+ * "_" and "-". The console's allowlist would refuse anything else too, but an
+ * id this page did not expect is not sent at all. */
+const APPROVAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** Approvals opened on one approval, read only, or undefined for an id of another shape. */
+export function approvalRoute(id: string): string | undefined {
+  return APPROVAL_ID.test(id) ? `/approvals?open=${id}` : undefined;
+}
+
 /** Fire-and-forget: the console answers by navigating, not by replying. */
 export function postNavigate(win: Window, route: string, hostOrigin: string): void {
   win.parent.postMessage({ type: NAVIGATE_MESSAGE_TYPE, route }, hostOrigin);

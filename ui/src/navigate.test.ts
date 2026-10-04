@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { evidenceRoute, hostOriginFromHash, NAVIGATE_MESSAGE_TYPE, postNavigate } from "./navigate";
+import { approvalRoute, evidenceRoute, hostOriginFromHash, NAVIGATE_MESSAGE_TYPE, postNavigate } from "./navigate";
 
 describe("evidenceRoute", () => {
   it("names the node, the lens only when it is not the default, and the line by uuid", () => {
@@ -33,5 +33,18 @@ describe("postNavigate", () => {
     const win = { parent: { postMessage } } as unknown as Window;
     postNavigate(win, "/platform/evidence?node_id=n", "https://lattice.roobli.org");
     expect(postMessage).toHaveBeenCalledWith({ type: NAVIGATE_MESSAGE_TYPE, route: "/platform/evidence?node_id=n" }, "https://lattice.roobli.org");
+  });
+});
+
+describe("approvalRoute", () => {
+  it("opens Approvals on an id the server mints", () => {
+    expect(approvalRoute("apr_upd_7kq2m9xa")).toBe("/approvals?open=apr_upd_7kq2m9xa");
+    expect(approvalRoute("cutover_01J9-ab")).toBe("/approvals?open=cutover_01J9-ab");
+  });
+
+  it("sends nothing for an id of any other shape", () => {
+    for (const id of ["", " apr_1", "apr_1&lens=x", "apr/../../tokens", "apr_1?x=1", "apr_1#frag", "a%2Fb", "apr 1", "apr_1\n", "x".repeat(129)]) {
+      expect(approvalRoute(id)).toBeUndefined();
+    }
   });
 });
