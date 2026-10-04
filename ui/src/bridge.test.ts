@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { BridgeCallError, BridgeClient, canCall } from "./bridge";
@@ -260,5 +263,30 @@ describe("page state over the bridge", () => {
     await expect(disposed).resolves.toBe(false);
     await expect(client.copy("after")).resolves.toBe(false);
     vi.useRealTimers();
+  });
+
+  it("posts a clipboard message only from copy()", async () => {
+    // Every other way out of the client, with text a caller controls.
+    const { win, posted, dispatch } = harness();
+    const client = new BridgeClient(win);
+    dispatch({
+      type: "lattice.host.init", nonce: client.nonce, version: "1", pluginId: "latticenet.vpn-core", pluginVersion: "0.11.0-alpha.1",
+      pluginRoute: "users", locale: "en", colorScheme: "light", designTokens: {}, interfaces: [{ service: "s", methods: ["m"] }],
+    });
+    await client.init;
+    client.call("s", "m", { text: "https://c.example/sub/u-a/T" }).cancel();
+    client.sendState({ q: "https://c.example" });
+    dispatch({ type: "lattice.host.theme", nonce: client.nonce, colorScheme: "dark", designTokens: {} });
+    client.dispose();
+    expect(posted.map((message) => (message as { type?: string }).type)).not.toContain("lattice.plugin.clipboard");
+    // And in the source, the message is built in one place, inside copy().
+    const source = readFileSync(fileURLToPath(new URL("./bridge.ts", import.meta.url)), "utf8");
+    const built = [...source.matchAll(/type: "lattice\.plugin\.clipboard", nonce/g)].map((match) => match.index!);
+    expect(built).toHaveLength(1);
+    const copyAt = source.indexOf("  copy(text: string");
+    const copyEnd = source.indexOf("\n  }\n", copyAt);
+    expect(copyAt).toBeGreaterThan(-1);
+    expect(built[0]).toBeGreaterThan(copyAt);
+    expect(built[0]).toBeLessThan(copyEnd);
   });
 });

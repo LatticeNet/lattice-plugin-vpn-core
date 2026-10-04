@@ -4,8 +4,12 @@
  * IdentityLinkPanel.vue, and leaves the frame only when the operator presses
  * Copy (the console's clipboard). It must never reach page state (the
  * console's address), the page's own address, storage, a log, or any other
- * postMessage. identityLink.test.ts pins that no call payload carries it, and
- * IdentityLinkPanel.dom.test.ts that the panel posts and stores nothing.
+ * postMessage. These are source checks, and a source check misses a leak
+ * written in a shape it does not grep for (a destructured `revealed` watched
+ * from App.vue passed them), so the behaviour is held by App.frame.test.ts,
+ * which mounts the whole page with a fake console and inspects every message
+ * it posts. identityLink.test.ts pins that no call payload carries the token,
+ * and IdentityLinkPanel.dom.test.ts that the panel posts and stores nothing.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
