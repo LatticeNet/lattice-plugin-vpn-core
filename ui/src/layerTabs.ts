@@ -12,28 +12,14 @@
  * Only the row scrolls. scrollIntoView would also scroll the page and, in a
  * frame, the console around it.
  *
- * The same file as lattice-plugin-sub-store/ui/src/layerTabs.ts.
+ * The rule itself is the chassis's revealSelectedTab (plugin-bridge 0.2.0),
+ * the one PcLensTabs variant="layer" runs for the other plugin pages. This
+ * page draws its own row, so it keeps the directive that calls it.
  */
 import type { ObjectDirective } from "vue";
+import { revealSelectedTab, type TabRow } from "@latticenet/plugin-bridge/chassis";
 
-/** A tab row as this needs it; duck-typed so the tests run without a DOM. */
-export interface TabRow {
-  scrollLeft: number;
-  getBoundingClientRect(): { left: number; right: number };
-  querySelector(selector: string): { getBoundingClientRect(): { left: number; right: number } } | null;
-}
-
-/** Room left beside the tab, so its edge does not sit on the row's. */
-const EDGE = 4;
-
-export function revealSelectedTab(row: TabRow | null | undefined): void {
-  const tab = row?.querySelector('[aria-selected="true"]');
-  if (!row || !tab) return;
-  const box = row.getBoundingClientRect();
-  const at = tab.getBoundingClientRect();
-  if (at.left < box.left + EDGE) row.scrollLeft -= box.left + EDGE - at.left;
-  else if (at.right > box.right - EDGE) row.scrollLeft += at.right - (box.right - EDGE);
-}
+export { revealSelectedTab, type TabRow };
 
 /** `v-reveal-selected="layer"` on the tab row: reveals on mount and when `layer` changes. */
 export const vRevealSelected: ObjectDirective<HTMLElement, string> = {

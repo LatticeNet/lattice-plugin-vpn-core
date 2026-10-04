@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"reflect"
@@ -255,8 +257,8 @@ func TestManifestDeclaresSubscriptionSourceContract(t *testing.T) {
 }
 
 // The version the sidecar reports and the version the manifest declares must be
-// the same number, and the manifest must be unsigned when it reaches the
-// signer.
+// the same number, and a signature, when the manifest carries one, must be what
+// pluginsign writes over a packed bundle.
 //
 // This used to assert the literal "0.8.0-alpha.10" and an unsigned manifest,
 // which described one afternoon rather than a rule: the plugin moved on four
@@ -264,11 +266,16 @@ func TestManifestDeclaresSubscriptionSourceContract(t *testing.T) {
 // a whole suite was being ignored. The rule it was reaching for survives without
 // the literal.
 //
-// The unsigned half is kept for the reason SIGNING-HANDOFF.md gives: for a v2
-// manifest it is hygiene rather than a technical requirement, because
-// SigningPayload blanks the field before marshalling anyway, but a populated
-// field means you are about to sign something you did not just build.
-func TestVersionContractIsConsistentAndUnsignedBeforeHandoff(t *testing.T) {
+// The unsigned half went the same way. The release ritual signs the manifest on
+// integration, and it stays signed there until the next version reopens with
+// the field cleared, so "unsigned" turned every released tree red again. The
+// empty-field check in SIGNING-HANDOFF.md is for the signer at the moment of
+// signing, and it stays there. What CI can still refuse is a signature that is
+// not an ed25519 signature, or one over a manifest that names no bundle digest:
+// that is a field filled in by hand rather than by pluginsign over a fixed
+// build. TestSigningHandoffMatchesManifestVersionAndBundleDigest keeps the
+// checklist and the manifest naming the same bytes.
+func TestVersionContractIsConsistentAndSignedOnlyOverAPackedBundle(t *testing.T) {
 	raw, err := os.ReadFile("../manifest.json")
 	if err != nil {
 		t.Fatal(err)
@@ -276,6 +283,9 @@ func TestVersionContractIsConsistentAndUnsignedBeforeHandoff(t *testing.T) {
 	var manifest struct {
 		Version   string `json:"version"`
 		Signature string `json:"signature_ed25519"`
+		Bundle    struct {
+			Digest string `json:"digest_sha256"`
+		} `json:"bundle"`
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
@@ -283,8 +293,15 @@ func TestVersionContractIsConsistentAndUnsignedBeforeHandoff(t *testing.T) {
 	if pluginVersion != manifest.Version {
 		t.Fatalf("version drift: manifest=%q go=%q", manifest.Version, pluginVersion)
 	}
-	if manifest.Signature != "" {
-		t.Fatal("implementation handoff must fail closed until an authorized signer supplies the signature")
+	if manifest.Signature == "" {
+		return
+	}
+	sig, err := base64.StdEncoding.DecodeString(manifest.Signature)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		t.Fatalf("signature_ed25519 is not a base64 ed25519 signature (%d bytes, err %v)", len(sig), err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(manifest.Bundle.Digest) {
+		t.Fatalf("manifest is signed but names no packed bundle: digest_sha256 = %q", manifest.Bundle.Digest)
 	}
 }
 
