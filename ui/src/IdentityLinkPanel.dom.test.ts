@@ -237,3 +237,37 @@ describe("the revealed token leaves the panel only through Copy", () => {
     ]);
   });
 });
+
+describe("the full-link field", () => {
+  it("follows the link held now, so a replaced link never leaves the old token in it", async () => {
+    let n = 0;
+    const tokens = ["Aa1firsttokenvaluethatwasrevealedfirst00", "Bb2secondtokenvaluerevealedafterwards99"];
+    const { q, link } = await mount({
+      link_reveal: () => {
+        const token = tokens[Math.min(n++, 1)]!;
+        return { kind: "identity", id: "vu_a", slug: "u-abcdefghij", token, path: `/sub/u-abcdefghij/${token}` };
+      },
+    });
+    q("link-reveal")!.click();
+    await settle();
+    q("link-show-full")!.click();
+    await settle();
+    expect(q<HTMLInputElement>("link-manual")!.value).toContain(tokens[0]);
+    // Replaced while the field is open: reveal() sets the new link in one tick.
+    await link.reveal();
+    await settle();
+    const field = q<HTMLInputElement>("link-manual");
+    expect(field?.value ?? "").not.toContain(tokens[0]);
+    if (field) expect(field.value).toContain(tokens[1]);
+  });
+
+  it("shows the client link whose copy was refused", async () => {
+    const { q, host } = await mount({}, false);
+    q("link-reveal")!.click();
+    await settle();
+    const json = [...host.querySelectorAll<HTMLButtonElement>(".link-clients button")].find((button) => button.textContent?.includes("mihomo"))!;
+    json.click();
+    await settle();
+    expect(q<HTMLInputElement>("link-manual")!.value).toBe(`https://console.example/sub/u-abcdefghij/${TOKEN}?target=ClashMeta`);
+  });
+});

@@ -140,14 +140,21 @@ const clientsOutcome = computed(() => (placedOutcome.value?.place === "clients" 
 const footOutcome = computed(() => (placedOutcome.value ? undefined : props.link.outcome.value));
 
 /* The full link is on screen only when asked for, or when the console could
- * not copy it; beside Copy it is cut to its ends, and no title carries it. */
+ * not copy it; beside Copy it is cut to its ends, and no title carries it.
+ * The field's value is derived from the link held now (the bare link, or the
+ * client link whose copy was refused), never a copy taken when it opened, so
+ * a link replaced while the field is open can never leave the old token in it. */
 const manualOpen = ref(false);
-const manualUrl = ref("");
+const manualClient = ref("");
+const manualUrl = computed(() => {
+  if (!manualOpen.value || !url.value) return "";
+  return (manualClient.value && clients.value.find((client) => client.id === manualClient.value)?.url) || url.value;
+});
 const manualInput = ref<HTMLInputElement>();
 const qrFigure = ref<HTMLElement>();
 
-async function showFullLink(value: string, select = false): Promise<void> {
-  manualUrl.value = value;
+async function showFullLink(clientId = "", select = false): Promise<void> {
+  manualClient.value = clientId;
   manualOpen.value = true;
   await nextTick();
   manualInput.value?.scrollIntoView?.({ block: "nearest" });
@@ -157,8 +164,8 @@ async function showFullLink(value: string, select = false): Promise<void> {
   }
 }
 
-async function copyLink(value: string, what: string, place: "reveal" | "clients"): Promise<void> {
-  if (!(await props.link.copy(value, what, place))) await showFullLink(value, true);
+async function copyLink(value: string, what: string, place: "reveal" | "clients", clientId = ""): Promise<void> {
+  if (!(await props.link.copy(value, what, place))) await showFullLink(clientId, true);
 }
 
 async function toggleQr(): Promise<void> {
@@ -181,7 +188,7 @@ watch(url, (value, before) => {
   if (value) return;
   qrOpen.value = false;
   manualOpen.value = false;
-  manualUrl.value = "";
+  manualClient.value = "";
   if (before) void focusAfter(() => revealButton.value);
 });
 
@@ -277,7 +284,7 @@ const PLAN_STATE: Record<string, string> = {
           <details class="link-clients">
             <summary ref="clientsSummary">Links for a specific client</summary>
             <div>
-              <button v-for="client in clients" :key="client.id" class="button button-secondary button-compact" type="button" @click="copyLink(client.url, `Link for ${client.label}`, 'clients')">
+              <button v-for="client in clients" :key="client.id" class="button button-secondary button-compact" type="button" @click="copyLink(client.url, `Link for ${client.label}`, 'clients', client.id)">
                 <Copy :size="12" aria-hidden="true" /> {{ client.label }}
               </button>
             </div>
@@ -288,7 +295,7 @@ const PLAN_STATE: Record<string, string> = {
             <p v-if="convertNote(status.formats)" class="field-help">{{ convertNote(status.formats) }}</p>
           </details>
           <label v-if="manualOpen" class="field link-manual"><span>The full link, to copy by hand</span><input ref="manualInput" :value="manualUrl" type="text" readonly spellcheck="false" data-testid="link-manual" @focus="($event.target as HTMLInputElement).select()" /></label>
-          <button v-else class="link-more" type="button" data-testid="link-show-full" @click="showFullLink(url)">Show the full link</button>
+          <button v-else class="link-more" type="button" data-testid="link-show-full" @click="showFullLink()">Show the full link</button>
         </template>
       </div>
 
