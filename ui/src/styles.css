@@ -724,6 +724,24 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .modal.sheet > footer { position: sticky; bottom: 0; z-index: 2; background: var(--card, #fff); }
 .sheet-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--sp-2); }
 .sheet-proof { margin: var(--sp-2) 0 0; }
+/* A side panel's header reads as the console's object sheet (ObjectSheet.vue,
+   and plugin-bridge chassis.css from 0.2.0-alpha.2 on the other plugin
+   pages): 20px in at the top and the start, 16px under the last line, a
+   16/24 title at weight 600, 12/16 lines under it, and the close's 16px X
+   16px from the panel's top and end, centred in a 32px target. Measured at
+   1440 the header was 16px all round, its title 15px at weight 650 with
+   normal leading, and its X 22.5px in from a 30px button. The narrow rule's
+   12px does not reach it, since the sheet keeps its spacing on a phone. Only
+   the header's title changes; body h2s keep their size and weight. */
+.modal.sheet > header { padding: calc(var(--sp-4) + var(--sp-1)) var(--sp-4) var(--sp-4) calc(var(--sp-4) + var(--sp-1)); }
+.modal.sheet > header h2 { font-size: 16px; font-weight: 600; line-height: 24px; letter-spacing: -0.01em; }
+.modal.sheet > header p { font-size: var(--text-sm); line-height: 16px; }
+/* An action beside the close (an identity's Edit) starts level with the
+   title, as the sheet's own header action does; the close alone moves up
+   into the corner. */
+.modal.sheet > header > .sheet-actions { align-items: flex-start; }
+.modal.sheet > header .icon-button { width: 32px; height: 32px; margin: calc(-1 * var(--sp-3)) calc(-1 * var(--sp-2)) 0 0; }
+.modal.sheet > header .icon-button svg { width: 16px; height: 16px; }
 /* Two identity cards a row even on a phone; one a row made the sheet a scroll of cards. */
 .modal.sheet .detail-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .chain-path { display: flex; flex-wrap: wrap; gap: var(--sp-2) 28px; margin: 0; padding: 0; list-style: none; }
@@ -917,6 +935,9 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
    sort headers at 16px. A mouse keeps the dense layout. */
 @media (pointer: coarse) {
   .icon-button, .outcome-note .icon-button { width: 44px; height: 44px; }
+  /* As the console sheet's close on touch: 44px, its corner 2px from the
+     panel's top and end, the X still 16px in. */
+  .modal.sheet > header .icon-button { width: 44px; height: 44px; margin: calc(2px - var(--sp-4) - var(--sp-1)) calc(2px - var(--sp-4)) 0 0; }
   .button, .button-compact, .segmented-option { min-height: 44px; }
   .sort-button, .fold-all, .node-toggle { min-height: 44px; }
   /* The row menu's items were 29px tall on touch; Sub-Store's are 44. */
