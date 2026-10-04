@@ -91,6 +91,14 @@ describe("encoding this plugin's state", () => {
     expect(encodePageState("profiles", busy)).toEqual({ open: "lh_9" });
   });
 
+  it("names the open New identity form on Users only, so a link can land on it", () => {
+    expect(encodePageState("users", state({ create: true }))).toEqual({ create: "1" });
+    expect(encodePageState("lines", state({ create: true }))).toEqual({});
+    expect(decodePageState({ create: "1" }).create).toBe(true);
+    expect(decodePageState({ create: "yes" }).create).toBe(false);
+    expect(decodePageState({}).create).toBe(false);
+  });
+
   it("trims the search and leaves out a value too long for the address instead of cutting it", () => {
     expect(encodePageState("lines", state({ q: "  DMIT-1  " }))).toEqual({ q: "DMIT-1" });
     expect(encodePageState("lines", state({ q: "   " }))).toEqual({});

@@ -32,7 +32,31 @@ type PluginMessage =
   | { type: "lattice.plugin.ready"; nonce: string }
   | { type: "lattice.plugin.call"; nonce: string; id: string; service: string; method: string; payload: unknown }
   | { type: "lattice.plugin.cancel"; nonce: string; id: string }
-  | { type: "lattice.plugin.state"; nonce: string; state: PageState };
+  | { type: "lattice.plugin.state"; nonce: string; state: PageState }
+  | { type: "lattice.plugin.clipboard"; nonce: string; id: string; text: string };
+
+/**
+ * A call the console refused or failed, with what it said about why.
+ *
+ * `code` is the host's own class (call_failed, timeout, step_up_required when
+ * the operator cancelled the console's step-up, and so on). `apiCode` and
+ * `httpStatus` are the server's answer to the call, which a console from
+ * wave 3 forwards beside the message (bridge v1, additive); an older console
+ * sends neither, so callers read them as hints and fall back to the message.
+ */
+export class BridgeCallError extends Error {
+  readonly code: string;
+  readonly apiCode?: string;
+  readonly httpStatus?: number;
+
+  constructor(message: string, code = "", apiCode?: string, httpStatus?: number) {
+    super(message);
+    this.name = "BridgeCallError";
+    this.code = code;
+    if (apiCode) this.apiCode = apiCode;
+    if (httpStatus !== undefined) this.httpStatus = httpStatus;
+  }
+}
 
 const TOKEN_NAMES = new Set([
   "--background", "--foreground", "--card", "--card-foreground", "--muted",
@@ -52,6 +76,7 @@ export class BridgeClient {
   // hostOrigin pins both inbound and outbound messages; absence fails closed.
   private readonly hostOrigin: string;
   private readonly pending = new Map<string, Pending>();
+  private readonly copies = new Map<string, { resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> }>();
   private initResolve!: (value: HostInit) => void;
   private initReject!: (reason: Error) => void;
   private sequence = 0;
@@ -114,6 +139,26 @@ export class BridgeClient {
     if (valid) this.post({ type: "lattice.plugin.state", nonce: this.nonce, state: valid });
   }
 
+  /**
+   * Ask the console to put `text` on the operator's clipboard. The frame is
+   * sandboxed without the Clipboard API, so the host copies on the
+   * operator's click and answers whether it landed. Resolves false when it
+   * did not, when the console never answers (an older one has no clipboard
+   * handler) or after dispose, so the caller can show the text to copy by hand.
+   */
+  copy(text: string, timeoutMs = 3_000): Promise<boolean> {
+    if (this.disposed) return Promise.resolve(false);
+    const id = `vpn-core-copy-${++this.sequence}`;
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.copies.delete(id);
+        resolve(false);
+      }, timeoutMs);
+      this.copies.set(id, { resolve, timer });
+      this.post({ type: "lattice.plugin.clipboard", nonce: this.nonce, id, text });
+    });
+  }
+
   dispose(): void {
     this.failBridge(new Error("The console disconnected this plugin. Any request still in flight has an unknown outcome: reload and check before retrying."));
   }
@@ -139,9 +184,22 @@ export class BridgeClient {
       case "lattice.host.result":
         this.finish(message.id, undefined, message.result);
         return;
+      case "lattice.host.clipboard": {
+        const copy = typeof message.id === "string" ? this.copies.get(message.id) : undefined;
+        if (!copy) return;
+        clearTimeout(copy.timer);
+        this.copies.delete(message.id as string);
+        copy.resolve(message.ok === true);
+        return;
+      }
       case "lattice.host.error":
         if (typeof message.id === "string") {
-          this.finish(message.id, new Error(typeof message.message === "string" ? message.message : "The console refused this request and gave no reason."));
+          this.finish(message.id, new BridgeCallError(
+            typeof message.message === "string" ? message.message : "The console refused this request and gave no reason.",
+            typeof message.code === "string" ? message.code : "",
+            typeof message.apiCode === "string" ? message.apiCode : undefined,
+            typeof message.httpStatus === "number" ? message.httpStatus : undefined,
+          ));
         } else {
           this.failBridge(new Error(typeof message.message === "string" ? message.message : "The console refused to start this plugin. Your session may lack the scopes it declares."));
         }
@@ -189,6 +247,11 @@ export class BridgeClient {
       pending.reject(error);
     }
     this.pending.clear();
+    for (const copy of this.copies.values()) {
+      clearTimeout(copy.timer);
+      copy.resolve(false);
+    }
+    this.copies.clear();
     this.initReject(error);
   }
 }

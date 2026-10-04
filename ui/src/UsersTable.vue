@@ -15,6 +15,7 @@ import { computed, ref, watch } from "vue";
 import { ChevronRight, Ellipsis, UserRound, X } from "@lucide/vue";
 
 import RowMenu, { type RowMenuItem } from "./RowMenu.vue";
+import { linkBadge } from "./identityLinkModel";
 import { quotaState } from "./usageModel";
 import {
   USERS_GROUP_BY,
@@ -298,7 +299,7 @@ defineExpose({ anchorBefore });
               <tr class="line-row clickable-row" :data-selected="openUser === row.user.id || undefined" @click="emit('open', row.user)">
                 <td class="sticky-first line-col">
                   <button class="row-open" type="button" :data-user-open="row.user.id" @click.stop="emit('open', row.user)"><strong :title="row.user.email">{{ row.user.email }}</strong></button>
-                  <small :title="subline(row.user)">{{ subline(row.user) }}</small>
+                  <small :title="subline(row.user)">{{ subline(row.user) }}<span v-if="linkBadge(row.user.link, now)" class="badge link-badge" :data-tone="linkBadge(row.user.link, now)!.tone" :title="`Subscription link /sub/${row.user.link!.slug}/…; open the identity for what it serves`">{{ linkBadge(row.user.link, now)!.text }}</span></small>
                 </td>
                 <td v-if="show.group"><span class="cell-text" :title="row.user.group || undefined" :data-unknown="!row.user.group || undefined">{{ row.user.group || 'none' }}</span></td>
                 <td v-if="show.status"><span class="conditions"><span v-for="state in identityConditions(row.user, now)" :key="state.key" class="status-dot" :data-tone="state.tone" :data-common="state.key === commonState || undefined">{{ state.label }}</span></span></td>

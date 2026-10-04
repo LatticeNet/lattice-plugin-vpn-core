@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
-import { BridgeClient, canCall } from "./bridge";
+import { BridgeCallError, BridgeClient, canCall } from "./bridge";
 
 function harness() {
   const posted: unknown[] = [];
@@ -211,5 +214,79 @@ describe("page state over the bridge", () => {
     client.dispose();
     client.sendState({ view: "topology" });
     expect(posts).toHaveLength(1);
+  });
+
+  it("keeps the host's error class and the server's code and status on a refused call", async () => {
+    const { win, posted, dispatch } = harness();
+    const client = new BridgeClient(win);
+    const request = client.call("latticenet.vpn-core/users-admin", "link_get", { user_id: "vu_a" });
+    const call = posted.at(-1) as { id: string; nonce: string };
+    dispatch({ type: "lattice.host.error", nonce: call.nonce, id: call.id, code: "call_failed", apiCode: "capability_denied", httpStatus: 403, message: "requires vpncore:admin" });
+    const error = await request.promise.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(BridgeCallError);
+    expect(error).toMatchObject({ message: "requires vpncore:admin", code: "call_failed", apiCode: "capability_denied", httpStatus: 403 });
+
+    // An older console sends only the message and its own class.
+    const old = client.call("latticenet.vpn-core/users-admin", "link_get", {});
+    const oldCall = posted.at(-1) as { id: string; nonce: string };
+    dispatch({ type: "lattice.host.error", nonce: oldCall.nonce, id: oldCall.id, code: "call_failed", message: "plugin request failed" });
+    const plain = await old.promise.catch((cause: unknown) => cause) as BridgeCallError;
+    expect(plain.apiCode).toBeUndefined();
+    expect(plain.httpStatus).toBeUndefined();
+    client.dispose();
+  });
+
+  it("asks the host to copy and resolves with its answer, or false when none comes", async () => {
+    vi.useFakeTimers();
+    const posts: Array<{ message: Record<string, unknown>; origin: string }> = [];
+    const { win, dispatch } = harness();
+    (win.parent as { postMessage: unknown }).postMessage = (message: Record<string, unknown>, origin: string) => posts.push({ message, origin });
+    const client = new BridgeClient(win);
+    posts.length = 0;
+    const copied = client.copy("https://c.example/sub/u-a/T");
+    expect(posts).toHaveLength(1);
+    expect(posts[0].origin).toBe("https://dash.example");
+    expect(posts[0].message).toMatchObject({ type: "lattice.plugin.clipboard", nonce: client.nonce, text: "https://c.example/sub/u-a/T" });
+    dispatch({ type: "lattice.host.clipboard", nonce: client.nonce, id: posts[0].message.id, ok: true });
+    await expect(copied).resolves.toBe(true);
+
+    const refused = client.copy("x");
+    dispatch({ type: "lattice.host.clipboard", nonce: client.nonce, id: posts[1].message.id, ok: false, code: "clipboard_refused" });
+    await expect(refused).resolves.toBe(false);
+
+    const silent = client.copy("x");
+    await vi.advanceTimersByTimeAsync(3_001);
+    await expect(silent).resolves.toBe(false);
+
+    const disposed = client.copy("x");
+    client.dispose();
+    await expect(disposed).resolves.toBe(false);
+    await expect(client.copy("after")).resolves.toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("posts a clipboard message only from copy()", async () => {
+    // Every other way out of the client, with text a caller controls.
+    const { win, posted, dispatch } = harness();
+    const client = new BridgeClient(win);
+    dispatch({
+      type: "lattice.host.init", nonce: client.nonce, version: "1", pluginId: "latticenet.vpn-core", pluginVersion: "0.11.0-alpha.1",
+      pluginRoute: "users", locale: "en", colorScheme: "light", designTokens: {}, interfaces: [{ service: "s", methods: ["m"] }],
+    });
+    await client.init;
+    client.call("s", "m", { text: "https://c.example/sub/u-a/T" }).cancel();
+    client.sendState({ q: "https://c.example" });
+    dispatch({ type: "lattice.host.theme", nonce: client.nonce, colorScheme: "dark", designTokens: {} });
+    client.dispose();
+    expect(posted.map((message) => (message as { type?: string }).type)).not.toContain("lattice.plugin.clipboard");
+    // And in the source, the message is built in one place, inside copy().
+    const source = readFileSync(fileURLToPath(new URL("./bridge.ts", import.meta.url)), "utf8");
+    const built = [...source.matchAll(/type: "lattice\.plugin\.clipboard", nonce/g)].map((match) => match.index!);
+    expect(built).toHaveLength(1);
+    const copyAt = source.indexOf("  copy(text: string");
+    const copyEnd = source.indexOf("\n  }\n", copyAt);
+    expect(copyAt).toBeGreaterThan(-1);
+    expect(built[0]).toBeGreaterThan(copyAt);
+    expect(built[0]).toBeLessThan(copyEnd);
   });
 });

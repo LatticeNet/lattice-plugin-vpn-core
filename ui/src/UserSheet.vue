@@ -11,7 +11,9 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { CircleAlert, KeyRound, LoaderCircle, Pencil, Trash2, X } from "@lucide/vue";
 
+import IdentityLinkPanel from "./IdentityLinkPanel.vue";
 import LinePicker from "./LinePicker.vue";
+import type { IdentityLinkState } from "./identityLink";
 import { collectorLabel, collectorReports, collectorTone, coverageNote, quotaState, summarizeAllocation } from "./usageModel";
 import {
   expiryOf,
@@ -41,6 +43,10 @@ const props = defineProps<{
   outcome?: UserOutcome;
   /** Changes when the row menu asks for the bindings, so the panel scrolls there. */
   focusBindings: number;
+  /** The open identity's subscription link, when this session may read links. */
+  link?: IdentityLinkState;
+  /** The console's origin, for a revealed link's URL and for asking it to open Approvals. */
+  hostOrigin: string | null;
 }>();
 const emit = defineEmits<{
   close: [];
@@ -48,8 +54,13 @@ const emit = defineEmits<{
   rotate: [user: VpnUser, protocol: string];
   bind: [user: VpnUser, hash: string];
   unbind: [user: VpnUser, hash: string];
+  "enable-binding": [user: VpnUser, hash: string];
   delete: [user: VpnUser];
   dismiss: [];
+  "rotate-link": [user: VpnUser];
+  "revoke-link": [user: VpnUser];
+  "clear-link-expiry": [user: VpnUser];
+  review: [approvalId: string];
 }>();
 
 const panel = ref<HTMLElement>();
@@ -146,7 +157,7 @@ watch(() => props.focusBindings, async (value) => {
       </div>
 
       <div v-else class="detail-body">
-        <div v-if="outcomeHere && outcomeHere.section !== 'lines'" class="outcome-note" :data-tone="outcomeHere.tone" role="status">
+        <div v-if="outcomeHere && !outcomeHere.section" class="outcome-note" :data-tone="outcomeHere.tone" role="status">
           <span>{{ outcomeHere.text }}</span>
           <button v-if="outcomeHere.undo" class="button button-secondary button-compact" type="button" :disabled="bindBusy" @click="outcomeHere.undo()">Undo</button>
           <button class="icon-button" type="button" aria-label="Dismiss" @click="emit('dismiss')"><X :size="14" /></button>
@@ -181,9 +192,26 @@ watch(() => props.focusBindings, async (value) => {
           </div>
         </div>
 
+        <IdentityLinkPanel
+          v-if="link"
+          :link="link"
+          :email="user.email"
+          :now="now"
+          :host-origin="hostOrigin"
+          @rotate="emit('rotate-link', user)"
+          @revoke="emit('revoke-link', user)"
+          @clear-expiry="emit('clear-link-expiry', user)"
+          @review="(id) => emit('review', id)"
+        />
+
         <section class="detail-section" aria-labelledby="user-credentials">
           <h3 id="user-credentials">Credentials</h3>
           <p class="field-help">Secrets are write-only here. Rotating issues a new one, which the Lattice console reveals after step-up; the old one keeps working on each line until that line is planned and applied again.</p>
+          <!-- A rotation's outcome sits beside the Rotate that was pressed. -->
+          <div v-if="outcomeHere && outcomeHere.section === 'credentials'" class="outcome-note" :data-tone="outcomeHere.tone" role="status" data-testid="credentials-outcome">
+            <span>{{ outcomeHere.text }}</span>
+            <button class="icon-button" type="button" aria-label="Dismiss" @click="emit('dismiss')"><X :size="14" /></button>
+          </div>
           <div class="binding-list">
             <div v-for="credential in user.credentials" :key="credential.protocol">
               <span class="credential-line">
@@ -212,7 +240,10 @@ watch(() => props.focusBindings, async (value) => {
                 <strong :title="lineLabel(binding.line_hash_id).title">{{ lineLabel(binding.line_hash_id).title }}</strong>
                 <small :class="{ 'warn-text': !lineLabel(binding.line_hash_id).known }">{{ lineLabel(binding.line_hash_id).detail }}<template v-if="!binding.enabled"> · binding disabled</template></small>
               </span>
-              <button v-if="can.unbind" class="button button-secondary button-compact destructive" type="button" :disabled="unbindBusy" @click="unbind(user, binding.line_hash_id)">Remove</button>
+              <span v-if="(!binding.enabled && can.bind) || can.unbind" class="icon-actions">
+                <button v-if="!binding.enabled && can.bind" class="button button-secondary button-compact" type="button" :disabled="bindBusy" @click="emit('enable-binding', user, binding.line_hash_id)">Turn on</button>
+                <button v-if="can.unbind" class="button button-secondary button-compact destructive" type="button" :disabled="unbindBusy" @click="unbind(user, binding.line_hash_id)">Remove</button>
+              </span>
             </div>
             <p v-if="!user.bindings.length" class="empty-inline">Bound to no line, so its credential signs in nowhere Lattice manages.</p>
           </div>

@@ -38,6 +38,9 @@ import {
 import { bytesByLine, egressByLine, roleTotals, trafficByNode, type UsagePrevious, type UsageSeries } from "./trafficModel";
 import UsageScreen from "./UsageScreen.vue";
 import UserSheet from "./UserSheet.vue";
+import { useIdentityLink, type LinkMethod } from "./identityLink";
+import { parseLinkStatus, type FixAction } from "./identityLinkModel";
+import { PlanWatcher, type WatchedOp, type WatchState } from "./planWatch";
 import { blankIdentityForm, quotaInput, saveIdentity, type IdentityForm, type IdentityInitial } from "./identityForm";
 import UsersTable from "./UsersTable.vue";
 import ProfileSheet from "./ProfileSheet.vue";
@@ -70,7 +73,7 @@ import {
   type UsagePeriod,
   type UsageView,
 } from "./usageModel";
-import { evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
+import { approvalRoute, evidenceRoute, hostOriginFromHash, postNavigate, type EvidenceLens } from "./navigate";
 import { LineWorkspaceLoader } from "./lineWorkspace";
 import { MIN_ANCHOR_TOP, anchorTopFrom, clampAnchorTop, isInsideOverlay } from "./overlayAnchor";
 import { useObservedAge } from "./observedAge";
@@ -262,6 +265,8 @@ const pageState = computed<PageState>(() => encodePageState(route.value, {
   usersView: usersView.value,
   usersGroup: usersGroup.value,
   usersSort: usersSort.value,
+  // The New identity form, while it is open, so a link can land on it.
+  create: route.value === "users" && userDialogOpen.value && !editingUser.value,
 }));
 
 /* The state goes out only after init, and only once the operator changes
@@ -273,7 +278,10 @@ let hostKeepsState = false;
 
 function adoptPageState(value: HostInit): void {
   hostKeepsState = value.pageState !== undefined;
-  if (value.pageState) applyPageState(decodePageState(value.pageState));
+  const asked = value.pageState ? decodePageState(value.pageState) : startState;
+  if (value.pageState) applyPageState(asked);
+  // `create=1`: the console palette's "Add a VPN user" lands on the form.
+  if (asked.create && value.pluginRoute === "users" && canCall(value, SERVICES.admin, "create")) openCreateUser();
   const client = bridge;
   stateSender?.dispose();
   stateSender = createStateSender((state) => client?.sendState(state), { baseline: pageState.value });
@@ -706,6 +714,15 @@ function tellOutcome(user: Pick<VpnUser, "id">, text: string, tone: UserOutcome[
   userOutcome.value = { userId: user.id, anchor, text, tone, ...extra };
 }
 const LINES: Pick<UserOutcome, "section"> = { section: "lines" };
+const CREDENTIALS: Pick<UserOutcome, "section"> = { section: "credentials" };
+
+/* A rotation, a binding change or an applied line plan changes what the
+ * identity's link serves (a rotated credential leaves every line of its
+ * protocol out until that line is planned and applied again), so the open
+ * panel reads its link again instead of keeping the answer from before. */
+function rereadLink(userId: string): void {
+  if (identityLink.userId.value === userId) void identityLink.refresh();
+}
 
 const nextExpiryNote = computed(() => {
   const next = userSummary.value.expiring[0];
@@ -750,6 +767,95 @@ function closeUserPanel(): void {
     }
     if (id && typeof document !== "undefined") document.querySelector<HTMLElement>(`[data-user-open="${CSS.escape(id)}"]`)?.focus();
   });
+}
+
+/* ── the open identity's subscription link ──────────────────────────── */
+const identityLink = useIdentityLink({
+  call: <T,>(method: LinkMethod | FixAction, payload: Record<string, unknown>, timeoutMs?: number) => {
+    if (!bridge || !canCall(init.value, SERVICES.admin, method)) {
+      return Promise.reject(new Error(`This session is not allowed to run ${method}, so nothing was sent.`));
+    }
+    return bridge.call<T>(SERVICES.admin, method, payload, timeoutMs).promise;
+  },
+  can: (method) => canCall(init.value, SERVICES.admin, method),
+  copy: (text) => (bridge ? bridge.copy(text) : Promise.resolve(false)),
+});
+/* The section follows the panel: it reads the link of the identity that is
+ * open, and forgets everything (a revealed link, watched plans) when the
+ * panel closes or moves to another identity. */
+watch(
+  () => (route.value === "users" && openUser.value ? openUser.value.id : ""),
+  (id) => void identityLink.open(id),
+);
+const showLinkSection = computed(() => canCall(init.value, SERVICES.admin, "link_get"));
+
+/*
+ * Rotate, revoke and removing the link's expiry are confirmed in the page's
+ * overlay stack. Removing the expiry reveals nothing, so it needs no step-up,
+ * but on an expired link it makes the same URL, held by everyone who ever
+ * received it, serve real servers again; the dialog offers rotating first as
+ * the other way back.
+ */
+type LinkConfirm =
+  | { user: VpnUser; action: "rotate" | "revoke" }
+  | { user: VpnUser; action: "clear-expiry"; expired: boolean; expiresAt: string };
+const linkConfirm = ref<LinkConfirm>();
+const linkConfirmBusy = ref(false);
+const linkConfirmTitle = computed(() => {
+  const pending = linkConfirm.value;
+  if (!pending) return "";
+  if (pending.action === "clear-expiry") return `Remove the expiry of the link for ${pending.user.email}`;
+  return `${pending.action === "rotate" ? "Rotate" : "Revoke"} the link for ${pending.user.email}`;
+});
+
+function askClearLinkExpiry(user: VpnUser): void {
+  const status = identityLink.status.value;
+  if (!status?.link?.expires_at) return;
+  const at = new Date(Date.parse(status.link.expires_at));
+  linkConfirm.value = {
+    user,
+    action: "clear-expiry",
+    expired: status.answer_reason === "link_expired",
+    expiresAt: Number.isFinite(at.getTime()) ? formatDay(at) : "its set date",
+  };
+}
+
+async function confirmLinkAction(choice: "main" | "rotate-first" = "main"): Promise<void> {
+  const pending = linkConfirm.value;
+  if (!pending || linkConfirmBusy.value) return;
+  linkConfirmBusy.value = true;
+  try {
+    if (pending.action === "rotate") await identityLink.rotate();
+    else if (pending.action === "revoke") await identityLink.revoke();
+    else if (choice === "rotate-first") await identityLink.rotateAndClearExpiry();
+    else await identityLink.clearExpiry();
+  } finally {
+    linkConfirmBusy.value = false;
+    linkConfirm.value = undefined;
+  }
+  // Revoke and Remove expiry, which opened the dialog, are gone with the
+  // change; focus goes to what acts next (Issue link after a revoke) or the
+  // section's heading, rather than the document or the sheet.
+  await nextTick();
+  await nextTick();
+  if (!focusUnplaced()) return;
+  const next = pending.action === "revoke" ? document.querySelector<HTMLElement>('[data-testid="link-issue"]') : null;
+  (next ?? document.getElementById("user-link-title"))?.focus();
+}
+
+/* After a dialog whose opener is gone, the overlay watcher parks focus on
+ * the identity's sheet itself (or it falls to the document). Either way the
+ * caller still has to put it where the change happened. */
+function focusUnplaced(): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body || active.matches('[data-overlay="user-detail"] > .modal');
+}
+
+/* The console opens the approval read only; deciding stays the operator's click there. */
+function openApproval(id: string): void {
+  const target = approvalRoute(id);
+  if (!hostOrigin || !target) return;
+  postNavigate(window, target, hostOrigin);
 }
 
 /* ── create and edit ─────────────────────────────────────────────────── */
@@ -851,6 +957,7 @@ async function bindLine(user: VpnUser, hash: string): Promise<void> {
     await pluginCall(SERVICES.admin, "bind", { user_id: user.id, line_hash_id: hash });
     tellOutcome(user, `${user.email} is bound to ${lineTitle(hash)}. The node gets the credential when that line is planned and applied.`, "success", user.id, LINES);
     await loadCurrent(true);
+    rereadLink(user.id);
   } catch (cause) {
     tellOutcome(user, `The binding was not added: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
   } finally {
@@ -872,6 +979,7 @@ async function unbindLine(user: VpnUser, hash: string): Promise<void> {
     const undo = canBindUser.value ? () => void rebindLine(user, hash, before?.flow_override) : undefined;
     tellOutcome(user, `${user.email} is no longer bound to ${lineTitle(hash)}. A Sub-Store subscription that gives this identity that line fails to render until the line is bound again. The credential stays on the node until the line is planned and applied again.`, "success", user.id, { ...LINES, undo });
     await loadCurrent(true);
+    rereadLink(user.id);
   } catch (cause) {
     tellOutcome(user, `The binding was not removed: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
   } finally {
@@ -879,18 +987,72 @@ async function unbindLine(user: VpnUser, hash: string): Promise<void> {
   }
 }
 
-async function rebindLine(user: VpnUser, hash: string, flowOverride?: string): Promise<void> {
+async function rebindLine(user: VpnUser, hash: string, flowOverride?: string, done = `${user.email} is bound to ${lineTitle(hash)} again. Nothing on the node changed in between.`): Promise<void> {
   if (!hash || bindingBusy.value || !canBindUser.value) return;
   bindingBusy.value = true;
   try {
     await pluginCall(SERVICES.admin, "bind", { user_id: user.id, line_hash_id: hash, ...(flowOverride ? { flow_override: flowOverride } : {}) });
-    tellOutcome(user, `${user.email} is bound to ${lineTitle(hash)} again. Nothing on the node changed in between.`, "success", user.id, LINES);
+    tellOutcome(user, done, "success", user.id, LINES);
     await loadCurrent(true);
+    rereadLink(user.id);
   } catch (cause) {
     tellOutcome(user, `The binding was not restored: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
   } finally {
     bindingBusy.value = false;
   }
+}
+
+/*
+ * A binding turned off in Lattice is turned on again by binding the line once
+ * more (users-admin bind sets enabled). That adds the line to the identity's
+ * live subscription link at once, and no call turns a binding off again
+ * (update takes no bindings; unbind deletes the binding and its override), so
+ * Undo cannot put it back: the page confirms first instead. The identity is
+ * read again before the call, because bind replaces the flow override with
+ * whatever it is sent, and the one this page holds may be stale.
+ */
+const bindingConfirm = ref<{ user: VpnUser; hash: string }>();
+const bindingConfirmBusy = ref(false);
+
+function askEnableBinding(user: VpnUser, hash: string): void {
+  const binding = user.bindings.find((value) => value.line_hash_id === hash);
+  if (binding && !binding.enabled) bindingConfirm.value = { user, hash };
+}
+
+async function confirmEnableBinding(): Promise<void> {
+  const pending = bindingConfirm.value;
+  if (!pending || bindingConfirmBusy.value) return;
+  bindingConfirmBusy.value = true;
+  const { user, hash } = pending;
+  try {
+    if (!canCall(init.value, SERVICES.users, "list")) throw new Error("this session cannot read identities, so the binding's current flow override is unknown");
+    const result = await pluginCall<{ users: VpnUser[] }>(SERVICES.users, "list");
+    const fresh = (result.users ?? []).find((value) => value.id === user.id);
+    const binding = fresh?.bindings.find((value) => value.line_hash_id === hash);
+    if (!fresh || !binding) {
+      tellOutcome(user, `Nothing was turned on: ${user.email} is no longer bound to ${lineTitle(hash)} since this page last read it.`, "error", user.id, LINES);
+      await loadCurrent(true);
+      return;
+    }
+    if (binding.enabled) {
+      tellOutcome(user, `The binding to ${lineTitle(hash)} is already on; nothing was sent.`, "success", user.id, LINES);
+      await loadCurrent(true);
+      return;
+    }
+    bindingConfirm.value = undefined;
+    await rebindLine(fresh, hash, binding.flow_override,
+      `The binding to ${lineTitle(hash)} is on again. The line's credential on the node is unchanged; the link serves the line once that credential is current.`);
+  } catch (cause) {
+    tellOutcome(user, `The binding was not turned on: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
+  } finally {
+    bindingConfirmBusy.value = false;
+    bindingConfirm.value = undefined;
+  }
+  // Turn on, which opened the dialog, is gone with the disabled binding; the
+  // Lines section takes focus rather than the document or the sheet.
+  await nextTick();
+  await nextTick();
+  if (focusUnplaced()) document.getElementById("user-lines")?.focus();
 }
 
 /* ── delete: breaks the Sub-Store subscriptions built for the identity, so the email is typed ── */
@@ -984,6 +1146,7 @@ async function openLineDetails(group: LineGroup, line: Line): Promise<void> {
   lineDetailNodeName.value = group.node_name || group.node_id;
   lineDetailError.value = "";
   lineApprovals.value = [];
+  stopLineWatch();
   lineUsersError.value = "";
   lineUserAdd.value = "";
   lineDetailOpen.value = true;
@@ -1027,6 +1190,7 @@ function restoreLineFocus(hash: string | undefined): void {
 
 function closeLineDetails(): void {
   const hash = lineDetail.value?.line_hash_id;
+  stopLineWatch();
   void nextTick(() => restoreLineFocus(hash));
   lineDetailOpen.value = false;
   lineDetailBusy.value = false;
@@ -1040,7 +1204,39 @@ function closeLineDetails(): void {
 const lineUsersBusy = ref(false);
 const lineUsersError = ref("");
 const lineUserAdd = ref("");
-const lineApprovals = ref<{ id: string; summary: string }[]>([]);
+const lineApprovals = ref<{ id: string; summary: string; state?: WatchState; note?: string }[]>([]);
+/* A line-user plan is followed until the line shows it (planWatch.ts), and
+ * then the lines are read again, so the panel stops saying "pending" by
+ * itself. It needs users-admin link_get; without it the entry stays a plain
+ * "pending approval" with its link to Approvals. */
+let lineWatcher: PlanWatcher | undefined;
+function stopLineWatch(): void {
+  lineWatcher?.dispose();
+  lineWatcher = undefined;
+}
+function watchLinePlan(approvalId: string, userId: string, lineHash: string, op: WatchedOp, summary: string): void {
+  if (!canCall(init.value, SERVICES.admin, "link_get")) return;
+  lineWatcher ??= new PlanWatcher({
+    read: async (id) => {
+      const status = parseLinkStatus(await pluginCall<unknown>(SERVICES.admin, "link_get", { user_id: id }));
+      if (!status) throw new Error("the link status was not readable");
+      return status;
+    },
+    onChange: (plans, applied) => {
+      const byId = new Map(plans.map((plan) => [plan.approvalId, plan]));
+      lineApprovals.value = lineApprovals.value.map((item) => {
+        const plan = byId.get(item.id);
+        return plan ? { ...item, state: plan.state, note: plan.note } : item;
+      });
+      if (applied.length) {
+        notice.value = applied.length === 1 ? "The approved plan is applied; the line was read again." : `${applied.length} approved plans are applied; the lines were read again.`;
+        void loadCurrent(true);
+        for (const userId of new Set(applied.map((plan) => plan.userId))) rereadLink(userId);
+      }
+    },
+  });
+  lineWatcher.watch({ approvalId, userId, lineHash, op, summary });
+}
 
 const lineDetailBoundUsers = computed(() => {
   const line = lineDetail.value;
@@ -1063,7 +1259,7 @@ interface LinePlanResult {
   approval?: { id: string; plan?: string };
 }
 
-function recordLineApproval(result: LinePlanResult, fallback: string): void {
+function recordLineApproval(result: LinePlanResult, fallback: string): string | undefined {
   let summary = fallback;
   try {
     summary = JSON.parse(result.approval?.plan ?? "{}").summary ?? fallback;
@@ -1071,6 +1267,7 @@ function recordLineApproval(result: LinePlanResult, fallback: string): void {
     summary = fallback;
   }
   if (result.approval?.id) lineApprovals.value = [{ id: result.approval.id, summary }, ...lineApprovals.value];
+  return result.approval?.id ? summary : undefined;
 }
 
 async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", userId: string): Promise<void> {
@@ -1080,8 +1277,9 @@ async function planLineUser(op: "plan_add" | "plan_update" | "plan_remove", user
   lineUsersError.value = "";
   try {
     const result = await pluginCall<LinePlanResult>(SERVICES.admin, op, { user_id: userId, line_hash_id: line.line_hash_id });
-    recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
-    notice.value = "On-node action queued. Approve it in the Approvals console, then rediscover";
+    const summary = recordLineApproval(result, op === "plan_add" ? "queue user add" : op === "plan_update" ? "queue user update" : "queue user remove");
+    if (summary && result.approval?.id) watchLinePlan(result.approval.id, userId, line.line_hash_id, op, summary);
+    notice.value = "On-node action queued. Approve it in Approvals; this panel reads the line again once it is applied";
     await loadCurrent(true);
   } catch (cause) {
     lineUsersError.value = safeErrorMessage(cause, "The on-node action could not be planned");
@@ -1162,8 +1360,9 @@ async function rotateCredential(): Promise<void> {
     const outcome = rotateOutcome(user.email, result);
     if (outcome.secret) rotateRevealed.value = { email: user.email, protocol: result.protocol, secret: outcome.secret };
     rotateUser.value = undefined;
-    tellOutcome(user, outcome.text);
+    tellOutcome(user, outcome.text, "success", user.id, CREDENTIALS);
     await loadCurrent(true);
+    rereadLink(user.id);
   } catch (cause) {
     rotateError.value = safeErrorMessage(cause, "The credential could not be rotated");
   } finally {
@@ -1269,6 +1468,8 @@ const overlayStyle = computed(() => ({ "--overlay-anchor-top": `${overlayAnchorT
 // in the stylesheet as well as here.
 const openOverlayKey = computed(() => {
   if (rotateRevealed.value) return "rotate-revealed";
+  if (linkConfirm.value) return "link-confirm";
+  if (bindingConfirm.value) return "binding-confirm";
   if (deleteTarget.value) return "delete";
   if (rotateUser.value) return "rotate";
   if (rolloutOpen.value) return "rollout";
@@ -1292,7 +1493,9 @@ function closeTopOverlay(): void {
   // rotateRevealed is deliberately not dismissible here: it is the one-time
   // display of a secret, and losing it to a stray Escape means rotating again.
   if (rotateRevealed.value) return;
-  if (deleteTarget.value) deleteTarget.value = undefined;
+  if (linkConfirm.value) linkConfirm.value = undefined;
+  else if (bindingConfirm.value) bindingConfirm.value = undefined;
+  else if (deleteTarget.value) deleteTarget.value = undefined;
   else if (rotateUser.value) rotateUser.value = undefined;
   else if (rolloutOpen.value) closeRollout();
   else if (userDialogOpen.value) userDialogOpen.value = false;
@@ -1362,8 +1565,16 @@ function syncSheetModal(): void {
   sheetModal.value = !!narrowQuery?.matches;
 }
 
+/* A revealed link is not left on a screen nobody is looking at: switching tab
+ * or window, or locking the screen, hides it (the frame shares the console's
+ * visibility). */
+function onVisibilityChange(): void {
+  if (document.visibilityState === "hidden") identityLink.pageHidden();
+}
+
 onMounted(() => {
   document.addEventListener("pointerdown", recordAnchor, true);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("keydown", onKeydown);
   narrowQuery = window.matchMedia?.("(max-width: 767.98px)");
   syncSheetModal();
@@ -1372,9 +1583,12 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", recordAnchor, true);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("keydown", onKeydown);
   narrowQuery?.removeEventListener("change", syncSheetModal);
   stateSender?.dispose();
+  stopLineWatch();
+  void identityLink.open("");
   bridge?.dispose();
 });
 </script>
@@ -1707,6 +1921,38 @@ onBeforeUnmount(() => {
         <footer><button class="button button-secondary" type="button" @click="closeRollout">Done</button></footer>
       </template>
     </section></div>
+    <div v-if="bindingConfirm" class="overlay-scrim" data-overlay="binding-confirm" :style="overlayStyle" @mousedown.self="bindingConfirm = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="binding-confirm-title" aria-describedby="binding-confirm-impact">
+      <header><div><h2 id="binding-confirm-title">Turn on the binding to {{ lineTitle(bindingConfirm.hash) }}</h2><p>What this changes for {{ bindingConfirm.user.email }}:</p></div><button class="icon-button" type="button" aria-label="Close" @click="bindingConfirm = undefined"><X :size="17" /></button></header>
+      <ul id="binding-confirm-impact" class="impact-list">
+        <li>The line is bound to this identity again in Lattice. Its subscription link serves the line from the next fetch once the line holds the identity's current credential, to every device that has the link.</li>
+        <li>There is no Undo: this page cannot turn a binding off again. Remove takes the line off the identity entirely.</li>
+        <li>The binding keeps the flow override stored for it now, and nothing is sent to a node.</li>
+      </ul>
+      <footer><button class="button button-secondary" type="button" data-autofocus @click="bindingConfirm = undefined">Cancel</button><button class="button button-primary" type="button" :disabled="bindingConfirmBusy" data-testid="binding-confirm" @click="confirmEnableBinding"><LoaderCircle v-if="bindingConfirmBusy" class="spin" :size="15" /> Turn on</button></footer></section></div>
+
+    <div v-if="linkConfirm" class="overlay-scrim" data-overlay="link-confirm" :style="overlayStyle" @mousedown.self="linkConfirm = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="link-confirm-title" aria-describedby="link-confirm-impact">
+      <header><div><h2 id="link-confirm-title">{{ linkConfirmTitle }}</h2><p>{{ linkConfirm.action === 'clear-expiry' ? 'What this changes:' : 'What this breaks:' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="linkConfirm = undefined"><X :size="17" /></button></header>
+      <ul v-if="linkConfirm.action === 'clear-expiry' && linkConfirm.expired" id="link-confirm-impact" class="impact-list">
+        <li>The link expired on {{ linkConfirm.expiresAt }}. Removing the expiry makes this same URL serve real servers again on its next fetch, to everyone who ever received it, including any device it was meant to stop.</li>
+        <li>Rotate and remove expiry issues a new URL first, so the old one keeps getting nothing, then removes the expiry. Reveal the new link after step-up and hand it out again. Rotating alone would leave the new URL expired too.</li>
+        <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
+      </ul>
+      <ul v-else-if="linkConfirm.action === 'clear-expiry'" id="link-confirm-impact" class="impact-list">
+        <li>The expiry on {{ linkConfirm.expiresAt }} is removed, and the link never expires: it serves until it is paused, rotated or revoked.</li>
+        <li>This page cannot set an expiry again; only the server's link API can.</li>
+        <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
+      </ul>
+      <ul v-else id="link-confirm-impact" class="impact-list">
+        <li>Every client using the current link stops updating at once. Its next refresh gets nothing, and it keeps the servers it already has.</li>
+        <li v-if="linkConfirm.action === 'rotate'">A new link is issued now. Reveal it after step-up and hand it to every device again.</li>
+        <li v-else>No link is issued afterwards. Issue a new one when this identity should have a link again.</li>
+        <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
+      </ul>
+      <footer>
+        <button class="button button-secondary" type="button" data-autofocus @click="linkConfirm = undefined">Cancel</button>
+        <button v-if="linkConfirm.action === 'clear-expiry' && linkConfirm.expired" class="button button-secondary" type="button" :disabled="linkConfirmBusy" data-testid="link-confirm-rotate-first" @click="confirmLinkAction('rotate-first')">Rotate and remove expiry</button>
+        <button class="button button-danger" type="button" :disabled="linkConfirmBusy" data-testid="link-confirm" @click="confirmLinkAction()"><LoaderCircle v-if="linkConfirmBusy" class="spin" :size="15" /> {{ linkConfirm.action === 'rotate' ? 'Rotate link' : linkConfirm.action === 'revoke' ? 'Revoke link' : 'Remove expiry' }}</button>
+      </footer></section></div>
     <div v-if="deleteTarget" class="overlay-scrim" data-overlay="delete" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-impact">
       <header><div><h2 id="delete-title">Delete {{ deleteTarget.email }}</h2><p>What this breaks:</p></div><button class="icon-button" type="button" aria-label="Close" @click="deleteTarget = undefined"><X :size="17" /></button></header>
       <ul id="delete-impact" class="impact-list"><li v-for="line in deleteImpact" :key="line">{{ line }}</li></ul>
@@ -1807,8 +2053,15 @@ onBeforeUnmount(() => {
             <select v-model="lineUserAdd"><option value="">Select an identity to add</option><option v-for="user in lineDetailBindableUsers" :key="user.id" :value="user.id">{{ user.email }}</option></select>
             <button class="button button-primary" type="button" :disabled="!lineUserAdd || lineUsersBusy" @click="bindAndApplyToLine"><Plus :size="15" /> Queue add</button>
           </div>
-          <ul v-if="lineApprovals.length" class="detail-list">
-            <li v-for="item in lineApprovals" :key="item.id"><span class="mono">{{ item.id }}</span>: {{ item.summary }} <em>(pending approval)</em></li>
+          <ul v-if="lineApprovals.length" class="link-plans" data-testid="line-approvals">
+            <li v-for="item in lineApprovals" :key="item.id">
+              <span>
+                <span class="status-dot wrap" :data-tone="item.state === 'applied' ? 'healthy' : item.state === 'pending' || !item.state ? 'warning' : undefined">{{ item.summary }}</span>
+                <small>{{ item.note || (item.state === 'applied' ? 'applied; the line was read again' : item.state === 'pending' ? 'waiting for approval and apply; this panel reads the line again when it lands' : 'pending approval') }}<LoaderCircle v-if="item.state === 'pending'" class="spin" :size="11" aria-hidden="true" /></small>
+              </span>
+              <button v-if="hostOrigin" class="button button-secondary button-compact" type="button" @click="openApproval(item.id)">Review in Approvals</button>
+              <span v-else class="mono">{{ item.id }}</span>
+            </li>
           </ul>
         </section>
 
@@ -1834,13 +2087,20 @@ onBeforeUnmount(() => {
       :unbind-busy="unbindBusy"
       :outcome="userOutcome"
       :focus-bindings="bindingsFocus"
+      :link="showLinkSection ? identityLink : undefined"
+      :host-origin="hostOrigin"
       @close="closeUserPanel()"
       @edit="openEditUser"
       @rotate="openRotate"
       @bind="bindLine"
       @unbind="unbindLine"
+      @enable-binding="askEnableBinding"
       @delete="askDeleteUser"
       @dismiss="userOutcome = undefined"
+      @rotate-link="(user) => (linkConfirm = { user, action: 'rotate' })"
+      @revoke-link="(user) => (linkConfirm = { user, action: 'revoke' })"
+      @clear-link-expiry="askClearLinkExpiry"
+      @review="openApproval"
     />
 
     <ProfileSheet

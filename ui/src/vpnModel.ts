@@ -138,6 +138,17 @@ export interface VpnUser {
   last_7d?: number[];
   last_seen_at?: string;
   allocated_nodes?: AllocatedNode[];
+  /** The identity's subscription link as every identity view carries it:
+   *  route facts, never the token. Absent when none is issued, and from a
+   *  server older than identity links. */
+  link?: {
+    slug: string;
+    enabled: boolean;
+    issued_at: string;
+    rotated_at?: string;
+    expires_at?: string;
+    update_interval_hours: number;
+  } | null;
 }
 
 export function formatBytes(value: number | undefined): string {
