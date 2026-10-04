@@ -687,8 +687,9 @@ export interface UserOutcome {
   tone: "success" | "error";
   /** Puts back what the action changed; the note offers it as Undo. */
   undo?: () => void;
-  /** Where the identity's panel says it: in the Lines section for a binding, at the top otherwise. */
-  section?: "lines";
+  /** Where the identity's panel says it: beside the section the action was in
+   *  (Lines for a binding, Credentials for a rotation), at the top otherwise. */
+  section?: "lines" | "credentials";
 }
 
 /**

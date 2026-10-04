@@ -25,4 +25,18 @@ describe("vpn-core refresh policy", () => {
       expect(source).not.toContain("setInterval");
     }
   });
+
+  it("reads the open identity's link again after anything that changes what it serves", () => {
+    const source = readFileSync(fileURLToPath(new URL("./App.vue", import.meta.url)), "utf8");
+    const body = (name: string) => {
+      const start = source.indexOf(`function ${name}(`);
+      expect(start, name).toBeGreaterThan(-1);
+      return source.slice(start, source.indexOf("\n}\n", start));
+    };
+    // A rotation leaves the protocol's lines out; a binding adds, removes or
+    // restores one; an applied line plan brings one back.
+    for (const name of ["rotateCredential", "bindLine", "unbindLine", "rebindLine", "watchLinePlan"]) {
+      expect(body(name), name).toContain("rereadLink(");
+    }
+  });
 });

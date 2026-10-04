@@ -124,6 +124,7 @@ describe("lines left out", () => {
     expect(linkFix({ line_hash_id: "a", fix: "plan_update" })).toEqual({ action: "plan_update", label: "Update on line" });
     expect(linkFix({ line_hash_id: "a", fix: "wait_for_template" })?.action).toBeUndefined();
     expect(linkFix({ line_hash_id: "a" })).toBeUndefined();
+    expect(linkFix({ line_hash_id: "a", reason: "binding_disabled" })).toEqual({ label: "turn the binding on in Lines below" });
     expect(lineTitle({ line_hash_id: "lh_1", node_name: "n1", line_name: "VLESS" })).toBe("n1 / VLESS");
     expect(lineTitle({ line_hash_id: "lh_1" })).toBe("lh_1");
   });

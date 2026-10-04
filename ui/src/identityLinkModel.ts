@@ -393,6 +393,9 @@ export interface LinkFixView {
  * work elsewhere, and say so.
  */
 export function linkFix(line: LinkLine): LinkFixView | undefined {
+  // The server names no fix for a binding turned off in Lattice; Turn on in
+  // the Lines section is the way back.
+  if (line.reason === "binding_disabled" && !line.fix) return { label: "turn the binding on in Lines below" };
   switch (line.fix) {
     case "plan_add": return { action: "plan_add", label: "Add to line" };
     case "plan_update": return { action: "plan_update", label: "Update on line" };

@@ -714,6 +714,15 @@ function tellOutcome(user: Pick<VpnUser, "id">, text: string, tone: UserOutcome[
   userOutcome.value = { userId: user.id, anchor, text, tone, ...extra };
 }
 const LINES: Pick<UserOutcome, "section"> = { section: "lines" };
+const CREDENTIALS: Pick<UserOutcome, "section"> = { section: "credentials" };
+
+/* A rotation, a binding change or an applied line plan changes what the
+ * identity's link serves (a rotated credential leaves every line of its
+ * protocol out until that line is planned and applied again), so the open
+ * panel reads its link again instead of keeping the answer from before. */
+function rereadLink(userId: string): void {
+  if (identityLink.userId.value === userId) void identityLink.refresh();
+}
 
 const nextExpiryNote = computed(() => {
   const next = userSummary.value.expiring[0];
@@ -901,6 +910,7 @@ async function bindLine(user: VpnUser, hash: string): Promise<void> {
     await pluginCall(SERVICES.admin, "bind", { user_id: user.id, line_hash_id: hash });
     tellOutcome(user, `${user.email} is bound to ${lineTitle(hash)}. The node gets the credential when that line is planned and applied.`, "success", user.id, LINES);
     await loadCurrent(true);
+    rereadLink(user.id);
   } catch (cause) {
     tellOutcome(user, `The binding was not added: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
   } finally {
@@ -922,6 +932,7 @@ async function unbindLine(user: VpnUser, hash: string): Promise<void> {
     const undo = canBindUser.value ? () => void rebindLine(user, hash, before?.flow_override) : undefined;
     tellOutcome(user, `${user.email} is no longer bound to ${lineTitle(hash)}. A Sub-Store subscription that gives this identity that line fails to render until the line is bound again. The credential stays on the node until the line is planned and applied again.`, "success", user.id, { ...LINES, undo });
     await loadCurrent(true);
+    rereadLink(user.id);
   } catch (cause) {
     tellOutcome(user, `The binding was not removed: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
   } finally {
@@ -929,18 +940,29 @@ async function unbindLine(user: VpnUser, hash: string): Promise<void> {
   }
 }
 
-async function rebindLine(user: VpnUser, hash: string, flowOverride?: string): Promise<void> {
+async function rebindLine(user: VpnUser, hash: string, flowOverride?: string, done = `${user.email} is bound to ${lineTitle(hash)} again. Nothing on the node changed in between.`): Promise<void> {
   if (!hash || bindingBusy.value || !canBindUser.value) return;
   bindingBusy.value = true;
   try {
     await pluginCall(SERVICES.admin, "bind", { user_id: user.id, line_hash_id: hash, ...(flowOverride ? { flow_override: flowOverride } : {}) });
-    tellOutcome(user, `${user.email} is bound to ${lineTitle(hash)} again. Nothing on the node changed in between.`, "success", user.id, LINES);
+    tellOutcome(user, done, "success", user.id, LINES);
     await loadCurrent(true);
+    rereadLink(user.id);
   } catch (cause) {
     tellOutcome(user, `The binding was not restored: ${safeErrorMessage(cause, "the server gave no reason")}`, "error", user.id, LINES);
   } finally {
     bindingBusy.value = false;
   }
+}
+
+/* A binding turned off in Lattice is turned on again by binding the line once
+ * more (users-admin bind sets enabled), with the flow override it already has,
+ * because bind replaces the override with whatever it is sent. */
+function enableBinding(user: VpnUser, hash: string): void {
+  const binding = user.bindings.find((value) => value.line_hash_id === hash);
+  if (!binding || binding.enabled) return;
+  void rebindLine(user, hash, binding.flow_override,
+    `The binding to ${lineTitle(hash)} is on again. The line's credential on the node is unchanged; the link serves the line once that credential is current.`);
 }
 
 /* ── delete: breaks the Sub-Store subscriptions built for the identity, so the email is typed ── */
@@ -1119,6 +1141,7 @@ function watchLinePlan(approvalId: string, userId: string, lineHash: string, op:
       if (applied.length) {
         notice.value = applied.length === 1 ? "The approved plan is applied; the line was read again." : `${applied.length} approved plans are applied; the lines were read again.`;
         void loadCurrent(true);
+        for (const userId of new Set(applied.map((plan) => plan.userId))) rereadLink(userId);
       }
     },
   });
@@ -1247,8 +1270,9 @@ async function rotateCredential(): Promise<void> {
     const outcome = rotateOutcome(user.email, result);
     if (outcome.secret) rotateRevealed.value = { email: user.email, protocol: result.protocol, secret: outcome.secret };
     rotateUser.value = undefined;
-    tellOutcome(user, outcome.text);
+    tellOutcome(user, outcome.text, "success", user.id, CREDENTIALS);
     await loadCurrent(true);
+    rereadLink(user.id);
   } catch (cause) {
     rotateError.value = safeErrorMessage(cause, "The credential could not be rotated");
   } finally {
@@ -1946,6 +1970,7 @@ onBeforeUnmount(() => {
       @rotate="openRotate"
       @bind="bindLine"
       @unbind="unbindLine"
+      @enable-binding="enableBinding"
       @delete="askDeleteUser"
       @dismiss="userOutcome = undefined"
       @rotate-link="(user) => (linkConfirm = { user, action: 'rotate' })"
