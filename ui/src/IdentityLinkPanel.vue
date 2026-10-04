@@ -42,6 +42,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   rotate: [];
   revoke: [];
+  /** Remove the link's expiry: the page confirms it first. */
+  "clear-expiry": [];
   review: [approvalId: string];
 }>();
 
@@ -104,10 +106,6 @@ async function focusAfter(target: () => HTMLElement | null | undefined): Promise
   await nextTick();
   if (!focusIsOurs()) return;
   (target() ?? heading.value)?.focus();
-}
-
-async function removeExpiry(): Promise<void> {
-  if (await props.link.clearExpiry()) await focusAfter(() => heading.value);
 }
 
 async function issueLink(): Promise<void> {
@@ -237,7 +235,7 @@ const PLAN_STATE: Record<string, string> = {
           <dt>Link expires</dt>
           <dd>
             {{ expiryText(summary.expires_at) }}
-            <button v-if="summary.expires_at && can('link_set')" class="link-more" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-clear-expiry" @click="busy || removeExpiry()">Remove expiry</button>
+            <button v-if="summary.expires_at && can('link_set')" class="link-more" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-clear-expiry" @click="busy || emit('clear-expiry')">Remove expiry</button>
           </dd>
         </div>
         <div v-if="status.subscription_userinfo"><dt>Clients see</dt><dd :title="`Subscription-Userinfo: ${status.subscription_userinfo}`">{{ userinfoText(status.subscription_userinfo, status.answer) }}</dd></div>

@@ -59,6 +59,7 @@ const emit = defineEmits<{
   dismiss: [];
   "rotate-link": [user: VpnUser];
   "revoke-link": [user: VpnUser];
+  "clear-link-expiry": [user: VpnUser];
   review: [approvalId: string];
 }>();
 
@@ -199,6 +200,7 @@ watch(() => props.focusBindings, async (value) => {
           :host-origin="hostOrigin"
           @rotate="emit('rotate-link', user)"
           @revoke="emit('revoke-link', user)"
+          @clear-expiry="emit('clear-link-expiry', user)"
           @review="(id) => emit('review', id)"
         />
 

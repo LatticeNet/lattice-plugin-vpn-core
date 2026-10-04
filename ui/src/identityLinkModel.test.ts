@@ -83,7 +83,8 @@ describe("what a fetch gets now", () => {
     const expired = linkHeadline(status({ answer: "decoy", answer_reason: "link_expired", link: { ...status().link!, expires_at: "2026-10-01T00:00:00Z" } }));
     expect(expired).toMatchObject({ key: "expired", tone: "error" });
     expect(expired.detail).toMatch(/expired on/);
-    expect(expired.detail).toMatch(/Removing its expiry serves it again/);
+    expect(expired.detail).toMatch(/Rotate and remove expiry gives a new URL/);
+    expect(expired.detail).toMatch(/Remove expiry makes this URL, held by everyone who received it, serve again/);
   });
 
   it("names the placeholder and why for each reason the server gives", () => {

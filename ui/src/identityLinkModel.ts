@@ -255,7 +255,7 @@ export function linkHeadline(status: LinkStatus): LinkHeadline {
       key: "expired",
       tone: "error",
       title: "Link expired",
-      detail: `The link expired${when} and answers like an unknown URL. Removing its expiry serves it again.`,
+      detail: `The link expired${when} and answers like an unknown URL. Rotate and remove expiry gives a new URL that serves; Remove expiry makes this URL, held by everyone who received it, serve again.`,
     };
   }
   const placeholder = status.placeholder ? `one entry named "${status.placeholder}"` : "one placeholder entry";

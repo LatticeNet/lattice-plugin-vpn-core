@@ -203,9 +203,38 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
       enabled ? "Link resumed: clients get their servers again on the next refresh." : "Link paused: it answers like an unknown URL until you resume it.");
   }
 
-  /** The link stops expiring (users-admin link_set clear_expiry). */
+  /** Whether the link's expiry has passed, by the server's answer. */
+  function linkExpired(): boolean {
+    return status.value?.answer_reason === "link_expired";
+  }
+
+  /**
+   * The link stops expiring (users-admin link_set clear_expiry). The page
+   * confirms first: on an expired link this makes the same URL, held by
+   * everyone who ever received it, serve real servers again.
+   */
   function clearExpiry(): Promise<boolean> {
-    return write("expiry", "link_set", { clear_expiry: true }, "Link expiry removed: the link serves again on the next fetch.");
+    return write("expiry", "link_set", { clear_expiry: true }, linkExpired()
+      ? "Link expiry removed: this URL serves its lines again on the next fetch, to everyone who holds it."
+      : "Link expiry removed: the link no longer expires.");
+  }
+
+  /*
+   * The other way back for an expired link: a new token first, so the old URL
+   * keeps getting nothing, then no expiry. The server keeps a link's expiry
+   * across a rotation, so a rotation alone would leave the new URL expired
+   * too. If the second step fails the link stays rotated and expired, which
+   * serves nothing to anyone.
+   */
+  async function rotateAndClearExpiry(): Promise<boolean> {
+    forgetReveal();
+    if (!(await write("rotate", "link_rotate", {}, ""))) return false;
+    const cleared = await write("expiry", "link_set", { clear_expiry: true },
+      "New link issued and its expiry removed: the old URL keeps getting nothing. Reveal the new one to hand it out.");
+    if (!cleared && outcome.value?.tone === "error") {
+      outcome.value = { tone: "error", text: `The link was rotated, but its expiry was not removed, so the new URL is expired too: ${outcome.value.text}` };
+    }
+    return cleared;
   }
 
   async function rotate(): Promise<boolean> {
@@ -360,6 +389,7 @@ export function useIdentityLink(deps: IdentityLinkDeps) {
     issue,
     setEnabled,
     clearExpiry,
+    rotateAndClearExpiry,
     rotate,
     revoke,
     reveal,

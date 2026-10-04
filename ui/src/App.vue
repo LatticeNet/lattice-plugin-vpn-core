@@ -789,19 +789,56 @@ watch(
 );
 const showLinkSection = computed(() => canCall(init.value, SERVICES.admin, "link_get"));
 
-const linkConfirm = ref<{ user: VpnUser; action: "rotate" | "revoke" }>();
+/*
+ * Rotate, revoke and removing the link's expiry are confirmed in the page's
+ * overlay stack. Removing the expiry reveals nothing, so it needs no step-up,
+ * but on an expired link it makes the same URL, held by everyone who ever
+ * received it, serve real servers again; the dialog offers rotating first as
+ * the other way back.
+ */
+type LinkConfirm =
+  | { user: VpnUser; action: "rotate" | "revoke" }
+  | { user: VpnUser; action: "clear-expiry"; expired: boolean; expiresAt: string };
+const linkConfirm = ref<LinkConfirm>();
 const linkConfirmBusy = ref(false);
-async function confirmLinkAction(): Promise<void> {
+const linkConfirmTitle = computed(() => {
+  const pending = linkConfirm.value;
+  if (!pending) return "";
+  if (pending.action === "clear-expiry") return `Remove the expiry of the link for ${pending.user.email}`;
+  return `${pending.action === "rotate" ? "Rotate" : "Revoke"} the link for ${pending.user.email}`;
+});
+
+function askClearLinkExpiry(user: VpnUser): void {
+  const status = identityLink.status.value;
+  if (!status?.link?.expires_at) return;
+  const at = new Date(Date.parse(status.link.expires_at));
+  linkConfirm.value = {
+    user,
+    action: "clear-expiry",
+    expired: status.answer_reason === "link_expired",
+    expiresAt: Number.isFinite(at.getTime()) ? formatDay(at) : "its set date",
+  };
+}
+
+async function confirmLinkAction(choice: "main" | "rotate-first" = "main"): Promise<void> {
   const pending = linkConfirm.value;
   if (!pending || linkConfirmBusy.value) return;
   linkConfirmBusy.value = true;
   try {
     if (pending.action === "rotate") await identityLink.rotate();
-    else await identityLink.revoke();
+    else if (pending.action === "revoke") await identityLink.revoke();
+    else if (choice === "rotate-first") await identityLink.rotateAndClearExpiry();
+    else await identityLink.clearExpiry();
   } finally {
     linkConfirmBusy.value = false;
     linkConfirm.value = undefined;
   }
+  if (pending.action !== "clear-expiry") return;
+  // Remove expiry, which opened the dialog, is gone with the expiry; the
+  // section's heading takes focus rather than the document.
+  await nextTick();
+  await nextTick();
+  if (document.activeElement === document.body) document.getElementById("user-link-title")?.focus();
 }
 
 /* The console opens the approval read only; deciding stays the operator's click there. */
@@ -1830,14 +1867,27 @@ onBeforeUnmount(() => {
       </template>
     </section></div>
     <div v-if="linkConfirm" class="overlay-scrim" data-overlay="link-confirm" :style="overlayStyle" @mousedown.self="linkConfirm = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="link-confirm-title" aria-describedby="link-confirm-impact">
-      <header><div><h2 id="link-confirm-title">{{ linkConfirm.action === 'rotate' ? `Rotate the link for ${linkConfirm.user.email}` : `Revoke the link for ${linkConfirm.user.email}` }}</h2><p>What this breaks:</p></div><button class="icon-button" type="button" aria-label="Close" @click="linkConfirm = undefined"><X :size="17" /></button></header>
-      <ul id="link-confirm-impact" class="impact-list">
+      <header><div><h2 id="link-confirm-title">{{ linkConfirmTitle }}</h2><p>{{ linkConfirm.action === 'clear-expiry' ? 'What this changes:' : 'What this breaks:' }}</p></div><button class="icon-button" type="button" aria-label="Close" @click="linkConfirm = undefined"><X :size="17" /></button></header>
+      <ul v-if="linkConfirm.action === 'clear-expiry' && linkConfirm.expired" id="link-confirm-impact" class="impact-list">
+        <li>The link expired on {{ linkConfirm.expiresAt }}. Removing the expiry makes this same URL serve real servers again on its next fetch, to everyone who ever received it, including any device it was meant to stop.</li>
+        <li>Rotate and remove expiry issues a new URL first, so the old one keeps getting nothing, then removes the expiry. Reveal the new link after step-up and hand it out again. Rotating alone would leave the new URL expired too.</li>
+        <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
+      </ul>
+      <ul v-else-if="linkConfirm.action === 'clear-expiry'" id="link-confirm-impact" class="impact-list">
+        <li>The link expires on {{ linkConfirm.expiresAt }}. Without the expiry it never expires: it serves until it is paused, rotated or revoked.</li>
+        <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
+      </ul>
+      <ul v-else id="link-confirm-impact" class="impact-list">
         <li>Every client using the current link stops updating at once. Its next refresh gets nothing, and it keeps the servers it already has.</li>
         <li v-if="linkConfirm.action === 'rotate'">A new link is issued now. Reveal it after step-up and hand it to every device again.</li>
         <li v-else>No link is issued afterwards. Issue a new one when this identity should have a link again.</li>
         <li>The identity's credential and its lines do not change, and nothing is sent to a node.</li>
       </ul>
-      <footer><button class="button button-secondary" type="button" data-autofocus @click="linkConfirm = undefined">Cancel</button><button class="button button-danger" type="button" :disabled="linkConfirmBusy" data-testid="link-confirm" @click="confirmLinkAction"><LoaderCircle v-if="linkConfirmBusy" class="spin" :size="15" /> {{ linkConfirm.action === 'rotate' ? 'Rotate link' : 'Revoke link' }}</button></footer></section></div>
+      <footer>
+        <button class="button button-secondary" type="button" data-autofocus @click="linkConfirm = undefined">Cancel</button>
+        <button v-if="linkConfirm.action === 'clear-expiry' && linkConfirm.expired" class="button button-secondary" type="button" :disabled="linkConfirmBusy" data-testid="link-confirm-rotate-first" @click="confirmLinkAction('rotate-first')">Rotate and remove expiry</button>
+        <button class="button button-danger" type="button" :disabled="linkConfirmBusy" data-testid="link-confirm" @click="confirmLinkAction()"><LoaderCircle v-if="linkConfirmBusy" class="spin" :size="15" /> {{ linkConfirm.action === 'rotate' ? 'Rotate link' : linkConfirm.action === 'revoke' ? 'Revoke link' : 'Remove expiry' }}</button>
+      </footer></section></div>
     <div v-if="deleteTarget" class="overlay-scrim" data-overlay="delete" :style="overlayStyle" @mousedown.self="deleteTarget = undefined"><section tabindex="-1" class="modal modal-small" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-impact">
       <header><div><h2 id="delete-title">Delete {{ deleteTarget.email }}</h2><p>What this breaks:</p></div><button class="icon-button" type="button" aria-label="Close" @click="deleteTarget = undefined"><X :size="17" /></button></header>
       <ul id="delete-impact" class="impact-list"><li v-for="line in deleteImpact" :key="line">{{ line }}</li></ul>
@@ -1984,6 +2034,7 @@ onBeforeUnmount(() => {
       @dismiss="userOutcome = undefined"
       @rotate-link="(user) => (linkConfirm = { user, action: 'rotate' })"
       @revoke-link="(user) => (linkConfirm = { user, action: 'revoke' })"
+      @clear-link-expiry="askClearLinkExpiry"
       @review="openApproval"
     />
 

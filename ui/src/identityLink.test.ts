@@ -271,3 +271,42 @@ describe("filing a plan for a left-out line", () => {
     expect(link.pendingPlan("lh_2")).toBeUndefined();
   });
 });
+
+describe("the link's expiry", () => {
+  const expiring = (expired: boolean) => status("vu_a", {
+    link: { slug: "u-abcdefghij", enabled: true, issued_at: "2026-09-24T08:00:00Z", expires_at: expired ? "2026-10-01T00:00:00Z" : "2026-12-01T00:00:00Z", update_interval_hours: 2 },
+    ...(expired ? { answer: "decoy", answer_reason: "link_expired" } : {}),
+  });
+
+  it("says what removing it does, by whether it had passed", async () => {
+    for (const expired of [true, false]) {
+      const link = useIdentityLink(deps({ link_get: () => expiring(expired), link_set: () => status("vu_a") }).value);
+      await link.open("vu_a");
+      expect(await link.clearExpiry()).toBe(true);
+      expect(link.outcome.value?.text).toMatch(expired ? /this URL serves its lines again.*everyone who holds it/ : /no longer expires/);
+    }
+  });
+
+  it("rotates before it removes the expiry, and says so when only the rotation landed", async () => {
+    const order: string[] = [];
+    const ok = deps({
+      link_get: () => expiring(true),
+      link_rotate: () => { order.push("rotate"); return expiring(true); },
+      link_set: (payload) => { order.push(`set:${String(payload.clear_expiry)}`); return status("vu_a"); },
+    });
+    const link = useIdentityLink(ok.value);
+    await link.open("vu_a");
+    expect(await link.rotateAndClearExpiry()).toBe(true);
+    expect(order).toEqual(["rotate", "set:true"]);
+    expect(link.outcome.value?.text).toMatch(/old URL keeps getting nothing/);
+
+    const half = useIdentityLink(deps({
+      link_get: () => expiring(true),
+      link_rotate: () => expiring(true),
+      link_set: () => { throw new Error("upstream refused users-admin/link_set: 503"); },
+    }).value);
+    await half.open("vu_a");
+    expect(await half.rotateAndClearExpiry()).toBe(false);
+    expect(half.outcome.value).toMatchObject({ tone: "error", text: expect.stringMatching(/rotated, but its expiry was not removed.*503/) });
+  });
+});

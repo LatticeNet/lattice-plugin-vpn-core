@@ -120,7 +120,7 @@ describe("the identity's link section", () => {
   it("offers Remove expiry for a link with one", async () => {
     const expired = await render(fakeLink({ status: { ...ACTIVE, answer: "decoy", answer_reason: "link_expired", link: { ...ACTIVE.link, expires_at: "2026-10-01T00:00:00Z" } } }));
     expect(expired).toContain('data-testid="link-clear-expiry"');
-    expect(expired).toContain("Removing its expiry serves it again");
+    expect(expired).toContain("Rotate and remove expiry gives a new URL that serves");
     expect(await render(fakeLink({ status: ACTIVE }))).not.toContain('data-testid="link-clear-expiry"');
   });
 

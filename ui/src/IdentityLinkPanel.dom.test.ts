@@ -31,7 +31,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function mount(over: Partial<Record<string, (payload: Record<string, unknown>) => unknown>> = {}, copied = true) {
+async function mount(over: Partial<Record<string, (payload: Record<string, unknown>) => unknown>> = {}, copied = true, events: Record<string, () => void> = {}) {
   const answers: Record<string, (payload: Record<string, unknown>) => unknown> = {
     link_get: () => status(),
     link_reveal: () => ({ kind: "identity", id: "vu_a", slug: "u-abcdefghij", token: TOKEN, path: `/sub/u-abcdefghij/${TOKEN}` }),
@@ -46,7 +46,7 @@ async function mount(over: Partial<Record<string, (payload: Record<string, unkno
   await link.open("vu_a");
   const host = document.createElement("div");
   document.body.append(host);
-  const app = createApp({ render: () => h(IdentityLinkPanel, { link, email: "alice@example.invalid", now: Date.parse("2026-10-04T08:00:00Z"), hostOrigin: "https://console.example" }) });
+  const app = createApp({ render: () => h(IdentityLinkPanel, { link, email: "alice@example.invalid", now: Date.parse("2026-10-04T08:00:00Z"), hostOrigin: "https://console.example", ...events }) });
   app.mount(host);
   await settle();
   const q = <T extends HTMLElement = HTMLElement>(id: string) => host.querySelector<T>(`[data-testid="${id}"]`);
@@ -184,13 +184,14 @@ describe("focus follows the action", () => {
 });
 
 describe("the served lines and the link's expiry", () => {
-  it("shows the served lines on request and removes an expiry through link_set", async () => {
+  it("shows the served lines on request, and asks the page to confirm Remove expiry instead of calling", async () => {
     let sent: Record<string, unknown> | undefined;
+    let asked = 0;
     const expiring = { link: { slug: "u-abcdefghij", enabled: true, issued_at: "2026-09-24T08:00:00Z", expires_at: "2026-10-01T00:00:00Z", update_interval_hours: 2 }, answer: "decoy", answer_reason: "link_expired" };
-    const { q, host } = await mount({
+    const { q, host, link } = await mount({
       link_get: () => status(expiring),
       link_set: (payload) => { sent = payload; return status(); },
-    });
+    }, true, { onClearExpiry: () => { asked += 1; } });
     const toggle = q("link-served-toggle")!;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(host.textContent).not.toContain("VLESS-REALITY-31010");
@@ -200,9 +201,14 @@ describe("the served lines and the link's expiry", () => {
     expect(host.textContent).toContain("VLESS-REALITY-31010");
     q("link-clear-expiry")!.click();
     await settle();
+    expect(asked).toBe(1);
+    expect(sent).toBeUndefined();
+    // The page's confirm then calls the state.
+    await link.clearExpiry();
+    await settle();
     expect(sent).toEqual({ user_id: "vu_a", clear_expiry: true });
     expect(q("link-clear-expiry")).toBeNull();
-    expect(q("link-live")!.textContent).toMatch(/expiry removed/);
+    expect(q("link-live")!.textContent).toMatch(/serves its lines again on the next fetch, to everyone who holds it/);
   });
 });
 
