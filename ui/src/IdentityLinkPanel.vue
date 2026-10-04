@@ -78,6 +78,49 @@ const footPlans = computed(() => {
 });
 
 const section = ref<HTMLElement>();
+const heading = ref<HTMLElement>();
+const revealButton = ref<HTMLButtonElement>();
+const copyButton = ref<HTMLButtonElement>();
+const clientsSummary = ref<HTMLElement>();
+
+/* Every outcome is read out from one live region that is always in the
+ * page; the notes on screen are not live themselves, so nothing is said twice
+ * and a note inserted with its text is not missed. */
+const announcement = computed(() => props.link.outcome.value?.text ?? "");
+
+/*
+ * Focus follows the action. An element that is removed or replaced takes
+ * focus to <body>, which leaves a keyboard or screen reader user nowhere, so
+ * after each change focus goes to the control that now acts on the result.
+ * It moves only when focus was lost or is in this section, never away from
+ * something the operator is using elsewhere.
+ */
+function focusIsOurs(): boolean {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  return !active || active === document.body || !!section.value?.contains(active);
+}
+async function focusAfter(target: () => HTMLElement | null | undefined): Promise<void> {
+  await nextTick();
+  if (!focusIsOurs()) return;
+  (target() ?? heading.value)?.focus();
+}
+
+async function issueLink(): Promise<void> {
+  if (await props.link.issue()) await focusAfter(() => revealButton.value);
+}
+async function retry(): Promise<void> {
+  await props.link.refresh();
+  await focusAfter(() => heading.value);
+}
+function dismiss(target: () => HTMLElement | null | undefined): void {
+  props.link.dismiss();
+  void focusAfter(target);
+}
+function rowControl(lineHash: string): HTMLElement | null | undefined {
+  const row = rowOf(lineHash);
+  return row?.querySelector<HTMLElement>('[data-testid="link-pending"]') ?? row?.querySelector<HTMLElement>('[data-testid="link-fix"]');
+}
+
 function rowOf(lineHash: string): HTMLElement | undefined {
   return [...(section.value?.querySelectorAll<HTMLElement>("li[data-line]") ?? [])].find((row) => row.dataset.line === lineHash);
 }
@@ -87,8 +130,7 @@ function rowOf(lineHash: string): HTMLElement | undefined {
 async function fileFix(line: LinkLine, action: FixAction): Promise<void> {
   await props.link.fix(line, action);
   await nextTick();
-  const row = rowOf(line.line_hash_id);
-  (row?.querySelector<HTMLElement>('[data-testid="link-pending"]') ?? row?.querySelector<HTMLElement>('[data-testid="link-fix"]'))?.focus();
+  rowControl(line.line_hash_id)?.focus();
 }
 const revealOutcome = computed(() => (placedOutcome.value?.place === "reveal" ? placedOutcome.value : undefined));
 const clientsOutcome = computed(() => (placedOutcome.value?.place === "clients" ? placedOutcome.value : undefined));
@@ -132,11 +174,15 @@ watch(() => props.link.userId.value, () => {
   qrOpen.value = false;
   allIncluded.value = false;
 });
-watch(url, (value) => {
+watch(url, (value, before) => {
+  // Revealed: Copy is what acts on the link now. Gone (Hide, five minutes,
+  // a changed link, the page hidden): Reveal brings it back.
+  if (value && !before) void focusAfter(() => copyButton.value);
   if (value) return;
   qrOpen.value = false;
   manualOpen.value = false;
   manualUrl.value = "";
+  if (before) void focusAfter(() => revealButton.value);
 });
 
 function expiryText(at?: string): string {
@@ -155,7 +201,8 @@ const PLAN_STATE: Record<string, string> = {
 
 <template>
   <section ref="section" class="detail-section link-section" aria-labelledby="user-link-title" data-testid="identity-link">
-    <h3 id="user-link-title">Subscription link</h3>
+    <h3 id="user-link-title" ref="heading" tabindex="-1">Subscription link</h3>
+    <p class="sr-only" role="status" aria-live="polite" data-testid="link-live">{{ announcement }}</p>
 
     <p v-if="link.load.value === 'loading'" class="empty-inline" role="status"><LoaderCircle class="spin" :size="13" aria-hidden="true" /> Reading the link for {{ email }}</p>
 
@@ -166,7 +213,7 @@ const PLAN_STATE: Record<string, string> = {
     <div v-else-if="link.load.value === 'error'" class="alert" role="alert">
       <CircleAlert :size="17" aria-hidden="true" />
       <span><strong>The link status could not be read</strong>{{ link.error.value }}</span>
-      <button class="button button-secondary button-compact" type="button" @click="link.refresh()"><RefreshCw :size="13" aria-hidden="true" /> Retry</button>
+      <button class="button button-secondary button-compact" type="button" @click="retry"><RefreshCw :size="13" aria-hidden="true" /> Retry</button>
     </div>
 
     <template v-else-if="status && headline">
@@ -191,13 +238,13 @@ const PLAN_STATE: Record<string, string> = {
       <!-- The link itself: behind the console's step-up, held here a few minutes. -->
       <div v-if="summary" class="link-reveal">
         <template v-if="!url">
-          <button v-if="can('link_reveal')" class="button button-secondary button-compact" type="button" :disabled="!!busy" data-testid="link-reveal" @click="link.reveal()">
+          <button v-if="can('link_reveal')" ref="revealButton" class="button button-secondary button-compact" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-reveal" @click="link.reveal()">
             <LoaderCircle v-if="busy === 'reveal'" class="spin" :size="13" aria-hidden="true" /><Eye v-else :size="13" aria-hidden="true" />
             {{ busy === 'reveal' ? 'Waiting for step-up in the console' : 'Reveal link' }}
           </button>
-          <div v-if="revealOutcome" class="outcome-note" :data-tone="revealOutcome.tone" role="status" data-testid="link-outcome">
+          <div v-if="revealOutcome" class="outcome-note" :data-tone="revealOutcome.tone" data-testid="link-outcome">
             <span>{{ revealOutcome.text }}</span>
-            <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
+            <button class="icon-button" type="button" aria-label="Dismiss" @click="dismiss(() => copyButton ?? revealButton)"><X :size="14" /></button>
           </div>
           <p class="field-help">{{ can('link_reveal') ? 'Revealing asks the console for your step-up and is recorded in the audit log. The link stays here for five minutes.' : 'This session cannot reveal links.' }}</p>
         </template>
@@ -205,14 +252,14 @@ const PLAN_STATE: Record<string, string> = {
           <div class="link-url">
             <code class="mono" data-testid="link-url">{{ maskedUrl(url) }}</code>
             <span class="icon-actions">
-              <button class="button button-primary button-compact" type="button" data-testid="link-copy" @click="copyLink(url, 'Link', 'reveal')"><Copy :size="13" aria-hidden="true" /> Copy</button>
+              <button ref="copyButton" class="button button-primary button-compact" type="button" data-testid="link-copy" @click="copyLink(url, 'Link', 'reveal')"><Copy :size="13" aria-hidden="true" /> Copy</button>
               <button class="button button-secondary button-compact" type="button" :aria-pressed="qrOpen" data-testid="link-qr" @click="toggleQr"><QrCode :size="13" aria-hidden="true" /> {{ qrOpen ? 'Hide QR' : 'QR code' }}</button>
               <button class="icon-button" type="button" aria-label="Hide the link" title="Hide the link" @click="link.forgetReveal()"><EyeOff :size="15" /></button>
             </span>
           </div>
-          <div v-if="revealOutcome" class="outcome-note" :data-tone="revealOutcome.tone" role="status" data-testid="link-outcome">
+          <div v-if="revealOutcome" class="outcome-note" :data-tone="revealOutcome.tone" data-testid="link-outcome">
             <span>{{ revealOutcome.text }}</span>
-            <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
+            <button class="icon-button" type="button" aria-label="Dismiss" @click="dismiss(() => copyButton ?? revealButton)"><X :size="14" /></button>
           </div>
           <figure v-if="qr" ref="qrFigure" class="link-qr" data-testid="link-qr-code">
             <svg :viewBox="`0 0 ${qr.size} ${qr.size}`" role="img" :aria-label="`QR code of the subscription link for ${email}`" shape-rendering="crispEdges">
@@ -222,15 +269,15 @@ const PLAN_STATE: Record<string, string> = {
             <figcaption>Scan it from the client's import screen. It is the same credential as the link.</figcaption>
           </figure>
           <details class="link-clients">
-            <summary>Links for a specific client</summary>
+            <summary ref="clientsSummary">Links for a specific client</summary>
             <div>
               <button v-for="client in clients" :key="client.id" class="button button-secondary button-compact" type="button" @click="copyLink(client.url, `Link for ${client.label}`, 'clients')">
                 <Copy :size="12" aria-hidden="true" /> {{ client.label }}
               </button>
             </div>
-            <div v-if="clientsOutcome" class="outcome-note" :data-tone="clientsOutcome.tone" role="status" data-testid="link-clients-outcome">
+            <div v-if="clientsOutcome" class="outcome-note" :data-tone="clientsOutcome.tone" data-testid="link-clients-outcome">
               <span>{{ clientsOutcome.text }}</span>
-              <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
+              <button class="icon-button" type="button" aria-label="Dismiss" @click="dismiss(() => clientsSummary)"><X :size="14" /></button>
             </div>
             <p v-if="convertNote(status.formats)" class="field-help">{{ convertNote(status.formats) }}</p>
           </details>
@@ -270,9 +317,9 @@ const PLAN_STATE: Record<string, string> = {
               >{{ linkFix(line)!.label }}</button>
               <small v-else-if="!linkFix(line)!.action" class="link-fix-note">{{ linkFix(line)!.label }}</small>
             </template>
-            <div v-if="lineOutcome?.lineHash === line.line_hash_id" class="outcome-note link-row-note" :data-tone="lineOutcome.tone" role="status" data-testid="link-line-outcome">
+            <div v-if="lineOutcome?.lineHash === line.line_hash_id" class="outcome-note link-row-note" :data-tone="lineOutcome.tone" data-testid="link-line-outcome">
               <span>{{ lineOutcome.text }}</span>
-              <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
+              <button class="icon-button" type="button" aria-label="Dismiss" @click="dismiss(() => rowControl(line.line_hash_id))"><X :size="14" /></button>
             </div>
           </li>
         </ul>
@@ -289,26 +336,25 @@ const PLAN_STATE: Record<string, string> = {
         </li>
       </ul>
 
-      <div v-if="footOutcome" class="outcome-note" :data-tone="footOutcome.tone" role="status" data-testid="link-outcome">
+      <div v-if="footOutcome" class="outcome-note" :data-tone="footOutcome.tone" data-testid="link-outcome">
         <span>{{ footOutcome.text }}</span>
-        <button class="icon-button" type="button" aria-label="Dismiss" @click="link.dismiss()"><X :size="14" /></button>
+        <button class="icon-button" type="button" aria-label="Dismiss" @click="dismiss(() => heading)"><X :size="14" /></button>
       </div>
 
       <div class="link-actions">
-        <button v-if="!status.issued && can('link_issue')" class="button button-primary button-compact" type="button" :disabled="!!busy" data-testid="link-issue" @click="link.issue()">
+        <button v-if="!status.issued && can('link_issue')" class="button button-primary button-compact" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-issue" @click="issueLink">
           <LoaderCircle v-if="busy === 'issue'" class="spin" :size="13" aria-hidden="true" /> Issue link
         </button>
         <template v-if="summary">
-          <button v-if="summary.enabled && can('link_set')" class="button button-secondary button-compact" type="button" :disabled="!!busy" @click="link.setEnabled(false)">
-            <LoaderCircle v-if="busy === 'pause'" class="spin" :size="13" aria-hidden="true" /><Pause v-else :size="13" aria-hidden="true" /> Pause link
+          <!-- One button whose label changes, so focus stays on it across Pause and Resume. -->
+          <button v-if="can('link_set')" class="button button-secondary button-compact" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-pause" @click="link.setEnabled(!summary.enabled)">
+            <LoaderCircle v-if="busy === 'pause' || busy === 'resume'" class="spin" :size="13" aria-hidden="true" /><Pause v-else-if="summary.enabled" :size="13" aria-hidden="true" /><Play v-else :size="13" aria-hidden="true" />
+            {{ summary.enabled ? 'Pause link' : 'Resume link' }}
           </button>
-          <button v-else-if="!summary.enabled && can('link_set')" class="button button-secondary button-compact" type="button" :disabled="!!busy" @click="link.setEnabled(true)">
-            <LoaderCircle v-if="busy === 'resume'" class="spin" :size="13" aria-hidden="true" /><Play v-else :size="13" aria-hidden="true" /> Resume link
-          </button>
-          <button v-if="can('link_rotate')" class="button button-secondary button-compact" type="button" :disabled="!!busy" data-testid="link-rotate" @click="emit('rotate')">
+          <button v-if="can('link_rotate')" class="button button-secondary button-compact" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-rotate" @click="busy || emit('rotate')">
             <RotateCw :size="13" aria-hidden="true" /> Rotate link
           </button>
-          <button v-if="can('link_revoke')" class="button button-secondary button-compact destructive" type="button" :disabled="!!busy" data-testid="link-revoke" @click="emit('revoke')">
+          <button v-if="can('link_revoke')" class="button button-secondary button-compact destructive" type="button" :aria-disabled="busy ? 'true' : undefined" data-testid="link-revoke" @click="busy || emit('revoke')">
             <Trash2 :size="13" aria-hidden="true" /> Revoke link
           </button>
         </template>

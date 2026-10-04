@@ -121,3 +121,64 @@ describe("a plan filed from a left-out line", () => {
     expect(host.textContent).toContain("Plan filed, waiting for approval");
   });
 });
+
+describe("focus follows the action", () => {
+  it("goes to Copy after a reveal, says the reveal, and returns to Reveal when the link is hidden", async () => {
+    const { q, host } = await mount();
+    const reveal = q("link-reveal")!;
+    reveal.focus();
+    reveal.click();
+    await settle();
+    expect(document.activeElement).toBe(q("link-copy"));
+    expect(q("link-live")!.textContent).toMatch(/Link revealed/);
+    host.querySelector<HTMLButtonElement>('[aria-label="Hide the link"]')!.click();
+    await settle();
+    expect(document.activeElement).toBe(q("link-reveal"));
+  });
+
+  it("stays on Reveal while the console's step-up is open", async () => {
+    let release!: (value: unknown) => void;
+    const { q } = await mount({ link_reveal: () => new Promise((resolve) => { release = resolve; }) });
+    const reveal = q("link-reveal")!;
+    reveal.focus();
+    reveal.click();
+    await settle();
+    expect(reveal.getAttribute("aria-disabled")).toBe("true");
+    expect(reveal.hasAttribute("disabled")).toBe(false);
+    expect(document.activeElement).toBe(reveal);
+    release({ kind: "identity", id: "vu_a", slug: "u-abcdefghij", token: TOKEN, path: `/sub/u-abcdefghij/${TOKEN}` });
+    await settle();
+    expect(document.activeElement).toBe(q("link-copy"));
+  });
+
+  it("goes to Reveal after Issue", async () => {
+    let issued = false;
+    const { q } = await mount({
+      link_get: () => (issued ? status() : status({ issued: false, link: undefined, answer: "decoy", answer_reason: "not_issued" })),
+      link_issue: () => { issued = true; return status(); },
+    });
+    const issue = q("link-issue")!;
+    issue.focus();
+    issue.click();
+    await settle();
+    expect(document.activeElement).toBe(q("link-reveal"));
+  });
+
+  it("keeps Pause and Resume on one button, so focus stays on it", async () => {
+    let enabled = true;
+    const { q } = await mount({
+      link_set: (payload) => {
+        enabled = payload.enabled === true;
+        return status({ link: { slug: "u-abcdefghij", enabled, issued_at: "2026-09-24T08:00:00Z", update_interval_hours: 2 }, ...(enabled ? {} : { answer: "decoy", answer_reason: "link_disabled" }) });
+      },
+    });
+    const pause = q("link-pause")!;
+    expect(pause.textContent).toContain("Pause link");
+    pause.focus();
+    pause.click();
+    await settle();
+    expect(q("link-pause")).toBe(pause);
+    expect(pause.textContent).toContain("Resume link");
+    expect(document.activeElement).toBe(pause);
+  });
+});
