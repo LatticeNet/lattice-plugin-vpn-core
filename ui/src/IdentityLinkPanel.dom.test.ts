@@ -205,3 +205,29 @@ describe("the served lines and the link's expiry", () => {
     expect(q("link-live")!.textContent).toMatch(/expiry removed/);
   });
 });
+
+describe("the revealed token leaves the panel only through Copy", () => {
+  it("posts nothing, stores nothing and changes no address while revealed, QR'd and copied", async () => {
+    const posted = vi.spyOn(window, "postMessage");
+    const replaced = vi.spyOn(history, "replaceState");
+    const pushed = vi.spyOn(history, "pushState");
+    const logged = vi.spyOn(console, "log");
+    const { q, host, deps } = await mount();
+    const before = location.href;
+    q("link-reveal")!.click();
+    await settle();
+    q("link-qr")!.click();
+    q("link-copy")!.click();
+    host.querySelector<HTMLButtonElement>(".link-clients button")!.click();
+    await settle();
+    const seen = JSON.stringify([posted.mock.calls, replaced.mock.calls, pushed.mock.calls, logged.mock.calls]);
+    expect(seen).not.toContain(TOKEN);
+    expect(location.href).toBe(before);
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    // Only the two presses copied, each the link it named.
+    expect(vi.mocked(deps.copy).mock.calls.map(([text]) => text)).toEqual([
+      `https://console.example/sub/u-abcdefghij/${TOKEN}`,
+      `https://console.example/sub/u-abcdefghij/${TOKEN}`,
+    ]);
+  });
+});
