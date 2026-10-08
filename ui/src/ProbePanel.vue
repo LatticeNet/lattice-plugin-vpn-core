@@ -56,6 +56,7 @@ const sizeNote = computed(() => (read.value.kind === "empty" ? "" : `${formatKB(
 const blocker = computed(() => {
   if (p.unavailable.value) return "The probe is not answering, so tests cannot run.";
   if (p.targetsState.value === "loading" || p.targetsState.value === "idle") return "Reading the probe's targets.";
+  if (p.targetsState.value === "error") return "The probe's targets could not be read, so tests cannot run.";
   if (!p.targets.value.length) return "The probe offers no targets, so tests cannot run.";
   return "";
 });

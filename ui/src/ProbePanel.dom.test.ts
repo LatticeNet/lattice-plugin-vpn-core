@@ -233,6 +233,7 @@ describe("the Probe layer's states", () => {
     let fail = true;
     const { q } = await mount({ answers: { targets: () => (fail ? Promise.reject(new Error("upstream 502")) : probeHandlers("ok")["probe/targets"]!({})) } });
     expect(q("probe-targets")?.textContent).toMatch(/upstream 502/);
+    expect(q("probe-result")?.closest(".probe-layout")?.textContent).toMatch(/targets could not be read, so tests cannot run/);
     fail = false;
     [...q("probe-targets")!.querySelectorAll("button")].find((button) => button.textContent?.includes("Try again"))!.click();
     await settle();
