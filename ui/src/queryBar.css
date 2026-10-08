@@ -83,9 +83,10 @@
 .pc-query-stale { color: var(--muted-foreground, #65707b); }
 
 /* The rows under a query that does not read answer an earlier one: the page
-   sets data-stale (and inert) on the panel while the query is invalid, as
-   the console dims its list, so nobody acts on rows whose query they cannot
-   see. Only the bar's pages set the attribute. */
+   sets data-stale (and inert) on the panel while the query is invalid and
+   the panel shows rows, as the console dims its list, so nobody acts on rows
+   whose query they cannot see. A no-match state stays live, so its Clear the
+   query works. Only the bar's pages set the attribute. */
 .data-panel[data-stale="true"] { opacity: 0.55; transition: opacity 200ms ease-out; }
 
 @media (max-width: 720px) {

@@ -227,6 +227,11 @@ const queryRows = computed(() => usageQueryRows(sortedLines.value, lineLabel, us
 const lineQuery = useListQuery(queryRows, USAGE_QUERY_SCHEMA, computed(() => props.search));
 watch(() => props.search, () => { page.value = 1; });
 const linePage = computed(() => pageRows(lineQuery.rows.value, page.value, PAGE_SIZE));
+/* While the query does not read, the rows answer an earlier one, so the panel
+ * is dimmed and inert and nobody acts on a row for a query they cannot see.
+ * Only while it shows rows: when the last query that read kept none, the
+ * panel holds the no-match state, and its Clear the query must stay live. */
+const linesStale = computed(() => lineQuery.invalid.value && linePage.value.rows.length > 0);
 
 /* ── by user ───────────────────────────────────────────────────────────── */
 const underAttributed = computed(() => hasTraffic.value && attribution.value.share < ATTRIBUTION_FLOOR);
@@ -481,7 +486,7 @@ function setView(value: UsageView): void {
         @update:model-value="(value: string) => emit('search', value)"
       />
     </div>
-    <section class="data-panel" :data-stale="lineQuery.invalid.value ? 'true' : undefined" :inert="lineQuery.invalid.value || undefined">
+    <section class="data-panel" :data-stale="linesStale ? 'true' : undefined" :inert="linesStale || undefined">
       <header class="panel-header">
         <div>
           <h2 id="usage-lines-heading">By line</h2>
@@ -612,7 +617,7 @@ function setView(value: UsageView): void {
       <div v-else-if="lines.length" class="empty-state">
         <Gauge :size="24" aria-hidden="true" />
         <strong>No row matches this query</strong>
-        <p>Nothing in {{ lines.length }} rows for {{ periodLabel(period).toLowerCase() }} matches <span class="mono">{{ search.trim() }}</span>. A bare word searches node, line, tag, identity, role and attribution; the field's help lists the fields to filter and sort by.</p>
+        <p>Nothing in {{ lines.length }} rows for {{ periodLabel(period).toLowerCase() }} matches <span class="mono">{{ lineQuery.active.value.source.trim() }}</span>. A bare word searches node, line, tag, identity, role and attribution; the field's help lists the fields to filter and sort by.</p>
         <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('search', '')">Clear the query</button></div>
       </div>
       <div v-else class="empty-state">

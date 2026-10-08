@@ -68,6 +68,11 @@ const rows = computed<LineGroupRow[]>(() => (flat.value ? [] : groupLines(props.
 const flatRows = computed<LineEntry[]>(() => (flat.value ? query.rows.value : []));
 const totalLines = computed(() => props.groups.reduce((sum, group) => sum + group.lines.length, 0));
 const matching = computed(() => query.rows.value.length);
+/* While the query does not read, the rows answer an earlier one, so the panel
+ * is dimmed and inert and nobody acts on a row for a query they cannot see.
+ * Only while it shows rows: when the last query that read kept none, the
+ * panel holds the no-match state, and its Clear the query must stay live. */
+const stale = computed(() => query.invalid.value && (flat.value ? flatRows.value.length : rows.value.length) > 0);
 
 /* Groups open by default; the operator folds what they are done with. */
 const folded = ref(new Set<string>());
@@ -153,7 +158,7 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
       @update:model-value="(value: string) => emit('update:search', value)"
     />
   </div>
-  <section class="data-panel lines-panel" aria-labelledby="lines-title" :data-stale="query.invalid.value ? 'true' : undefined" :inert="query.invalid.value || undefined">
+  <section class="data-panel lines-panel" aria-labelledby="lines-title" :data-stale="stale ? 'true' : undefined" :inert="stale || undefined">
     <header class="panel-header lines-header">
       <div>
         <h2 id="lines-title">Lines</h2>
@@ -256,7 +261,7 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
     <div v-else-if="searching" class="empty-state">
       <Radar :size="26" aria-hidden="true" />
       <strong>No line matches this query</strong>
-      <p>Nothing in {{ totalLines }} lines across {{ groups.length }} nodes matches <span class="mono">{{ search.trim() }}</span>. A bare word searches node, line name, protocol, host, status, outbound reference and error text; the field's help lists the fields to filter and sort by.</p>
+      <p>Nothing in {{ totalLines }} lines across {{ groups.length }} nodes matches <span class="mono">{{ query.active.value.source.trim() }}</span>. A bare word searches node, line name, protocol, host, status, outbound reference and error text; the field's help lists the fields to filter and sort by.</p>
       <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('update:search', '')">Clear the query</button></div>
     </div>
     <div v-else class="empty-state">

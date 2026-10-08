@@ -44,6 +44,11 @@ const PAGE = 50;
 const page = ref(1);
 watch(() => props.search, () => { page.value = 1; });
 const pager = computed(() => pageRows(shown.value, page.value, PAGE));
+/* While the query does not read, the rows answer an earlier one, so the panel
+ * is dimmed and inert and nobody acts on a row for a query they cannot see.
+ * Only while it shows rows: when the last query that read kept none, the
+ * panel holds the no-match state, and its Clear the query must stay live. */
+const stale = computed(() => query.invalid.value && pager.value.rows.length > 0);
 
 function issueText(profile: Profile): { text: string; tone: string; more: number } | undefined {
   const issues = profileIssues(profile);
@@ -72,8 +77,8 @@ function issueText(profile: Profile): { text: string; tone: string; more: number
     class="data-panel profiles-panel"
     :data-compact="compact || undefined"
     aria-labelledby="profiles-title"
-    :data-stale="query.invalid.value ? 'true' : undefined"
-    :inert="query.invalid.value || undefined"
+    :data-stale="stale ? 'true' : undefined"
+    :inert="stale || undefined"
   >
     <header class="panel-header lines-header">
       <div>
@@ -123,7 +128,7 @@ function issueText(profile: Profile): { text: string; tone: string; more: number
     <div v-else-if="profiles.length" class="empty-state">
       <ServerCog :size="26" aria-hidden="true" />
       <strong>No node profile matches this query</strong>
-      <p>Nothing in {{ profiles.length }} node profiles matches <span class="mono">{{ search.trim() }}</span>. A bare word searches node, core, version, config path, collector and what needs a look; the field's help lists the fields to filter and sort by.</p>
+      <p>Nothing in {{ profiles.length }} node profiles matches <span class="mono">{{ query.active.value.source.trim() }}</span>. A bare word searches node, core, version, config path, collector and what needs a look; the field's help lists the fields to filter and sort by.</p>
       <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('update:search', '')">Clear the query</button></div>
     </div>
     <div v-else class="empty-state">

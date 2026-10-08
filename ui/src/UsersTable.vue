@@ -128,6 +128,11 @@ const PAGE = 50;
 const page = ref(1);
 watch(() => [props.search, props.groupBy, props.view, props.sort.key, props.sort.reverse], () => { page.value = 1; });
 const table = computed(() => pageUserTable(flat.value ? { flat: matched.value } : { groups: groups.value }, page.value, PAGE, folded.value));
+/* While the query does not read, the rows answer an earlier one, so the panel
+ * is dimmed and inert and nobody acts on a row for a query they cannot see.
+ * Only while it shows rows: when the last query that read kept none, the
+ * panel holds the no-match state, and its Clear the query must stay live. */
+const stale = computed(() => query.invalid.value && table.value.rows.length > 0);
 
 /* A panel opened from a link, or from an attention item, shows its row: turn
  * to the page that holds it, and unfold its group. */
@@ -288,7 +293,7 @@ defineExpose({ anchorBefore });
       @update:model-value="(value: string) => emit('update:search', value)"
     />
   </div>
-  <section class="data-panel users-panel" aria-labelledby="users-title" :data-stale="query.invalid.value ? 'true' : undefined" :inert="query.invalid.value || undefined">
+  <section class="data-panel users-panel" aria-labelledby="users-title" :data-stale="stale ? 'true' : undefined" :inert="stale || undefined">
     <header class="panel-header lines-header">
       <div>
         <h2 id="users-title">Identities</h2>
@@ -398,7 +403,7 @@ defineExpose({ anchorBefore });
     <div v-else-if="searching" class="empty-state">
       <UserRound :size="26" aria-hidden="true" />
       <strong>No identity matches this query</strong>
-      <p>Nothing in {{ inScope.length }} identities matches <span class="mono">{{ search.trim() }}</span>. A bare word searches email, name, group, comment, protocol and id; the field's help lists the fields to filter and sort by.</p>
+      <p>Nothing in {{ inScope.length }} identities matches <span class="mono">{{ query.active.value.source.trim() }}</span>. A bare word searches email, name, group, comment, protocol and id; the field's help lists the fields to filter and sort by.</p>
       <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('update:search', '')">Clear the query</button></div>
     </div>
     <div v-else-if="view !== 'all'" class="empty-state">
