@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { applyQuery, compileQuery } from "@latticenet/plugin-bridge/query";
 
-import { filterLineGroups, pageRows, sortLineRows, type LineGroup, type LineRow } from "./vpnModel";
+import { LINE_QUERY_SCHEMA, lineQueryRows } from "./querySchemas";
+import { pageRows, sortLineRows, type LineGroup, type LineRow } from "./vpnModel";
 
 const line = (nodeID: string, name: string, users: number) => ({
   id: `${nodeID}-${name}`,
@@ -76,11 +78,13 @@ describe("the fleet table pages a set that is already searched and sorted", () =
     expect(sorted.slice(100, 111)).toEqual(last.rows);
   });
 
-  it("searches the whole fleet before the page is cut", () => {
-    const matched = rowsOf(filterLineGroups(fleet, "edge-07"));
+  it("queries the whole fleet before the page is cut", () => {
+    const compiled = compileQuery("node:=edge-07", LINE_QUERY_SCHEMA);
+    if (!compiled.ok) throw new Error(compiled.error.code);
+    const matched = applyQuery(lineQueryRows(fleet), compiled.query);
     const page = pageRows(matched, 1, 50);
     expect(page.total).toBe(matched.length);
-    expect(page.total).toBeLessThan(111);
-    expect(page.rows.every((row) => (row.group.node_name ?? "").includes("edge-07"))).toBe(true);
+    expect(page.total).toBe(5);
+    expect(page.rows.every((row) => row.group.node_name === "edge-07")).toBe(true);
   });
 });

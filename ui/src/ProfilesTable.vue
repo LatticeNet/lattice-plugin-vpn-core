@@ -3,9 +3,13 @@
  * Node Profiles, the collection. What every node shares is said once in the
  * header; the table keeps the columns that differ and puts the nodes with a
  * problem first. A row opens the node's profile in the side panel.
+ *
+ * The query bar filters and sorts the rows (querySchemas.ts); with no `sort:`
+ * they keep that order. Its text is the page's `q`.
  */
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { ServerCog } from "@lucide/vue";
+import { PcQueryBar, useListQuery } from "@latticenet/plugin-bridge/chassis";
 
 import {
   collectorText,
@@ -19,22 +23,32 @@ import {
   sortProfiles,
   type Profile,
 } from "./profilesModel";
+import { PROFILE_QUERY_EXAMPLES, PROFILE_QUERY_SCHEMA } from "./querySchemas";
 import { pageRows } from "./vpnModel";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   profiles: Profile[];
   openProfile?: string;
-}>();
-const emit = defineEmits<{ open: [profile: Profile] }>();
+  search?: string;
+}>(), { openProfile: undefined, search: "" });
+const emit = defineEmits<{ open: [profile: Profile]; "update:search": [value: string] }>();
 
 const head = computed(() => profileHead(props.profiles));
 const sorted = computed(() => sortProfiles(props.profiles));
+const query = useListQuery(sorted, PROFILE_QUERY_SCHEMA, computed(() => props.search));
+const shown = computed(() => query.rows.value);
 const compact = computed(() => Object.values(head.value.show).filter(Boolean).length <= 2);
 const exceptions = computed(() => sorted.value.filter((profile) => profileIssues(profile).length).length);
 
 const PAGE = 50;
 const page = ref(1);
-const pager = computed(() => pageRows(sorted.value, page.value, PAGE));
+watch(() => props.search, () => { page.value = 1; });
+const pager = computed(() => pageRows(shown.value, page.value, PAGE));
+/* While the query does not read, the rows answer an earlier one, so the panel
+ * is dimmed and inert and nobody acts on a row for a query they cannot see.
+ * Only while it shows rows: when the last query that read kept none, the
+ * panel holds the no-match state, and its Clear the query must stay live. */
+const stale = computed(() => query.invalid.value && pager.value.rows.length > 0);
 
 function issueText(profile: Profile): { text: string; tone: string; more: number } | undefined {
   const issues = profileIssues(profile);
@@ -46,18 +60,37 @@ function issueText(profile: Profile): { text: string; tone: string; more: number
 <template>
   <!-- With every shared value in the header, production leaves two columns:
        the panel narrows to them instead of stretching them to opposite edges. -->
-  <section class="data-panel profiles-panel" :data-compact="compact || undefined" aria-labelledby="profiles-title">
+  <!-- Outside the panel: the panel clips its overflow, and the field's menu and help hang below it. -->
+  <div v-if="profiles.length" class="query-toolbar">
+    <PcQueryBar
+      :model-value="search"
+      :query="query"
+      :count="{ shown: shown.length, total: profiles.length }"
+      label="Search, filter and sort node profiles"
+      placeholder="Search, or -collector:ok sort:name"
+      storage-key="vpn-core.profiles"
+      :examples="PROFILE_QUERY_EXAMPLES"
+      @update:model-value="(value: string) => emit('update:search', value)"
+    />
+  </div>
+  <section
+    class="data-panel profiles-panel"
+    :data-compact="compact || undefined"
+    aria-labelledby="profiles-title"
+    :data-stale="stale ? 'true' : undefined"
+    :inert="stale || undefined"
+  >
     <header class="panel-header lines-header">
       <div>
         <h2 id="profiles-title">Node profiles</h2>
         <p v-if="profiles.length" class="lines-state">
-          <span v-if="exceptions" class="status-dot" data-tone="warning">{{ exceptions }} {{ exceptions === 1 ? 'node needs' : 'nodes need' }} a look, listed first</span>
+          <span v-if="exceptions" class="status-dot" data-tone="warning">{{ exceptions }} {{ exceptions === 1 ? 'node needs' : 'nodes need' }} a look<template v-if="!query.sorted.value && !query.active.value.score">, listed first</template></span>
           <strong v-else>{{ profiles.length }} {{ profiles.length === 1 ? 'node' : 'nodes' }}, nothing to fix</strong>
         </p>
         <p v-if="head.shared.length" class="users-notes">Every node: {{ head.shared.join(' · ') }}</p>
       </div>
     </header>
-    <div v-if="profiles.length" class="table-wrap">
+    <div v-if="pager.rows.length" class="table-wrap">
       <table class="lines-table profiles-table">
         <thead><tr>
           <th class="sticky-first line-col">Node</th>
@@ -91,6 +124,12 @@ function issueText(profile: Profile): { text: string; tone: string; more: number
           </tr>
         </tbody>
       </table>
+    </div>
+    <div v-else-if="profiles.length" class="empty-state">
+      <ServerCog :size="26" aria-hidden="true" />
+      <strong>No node profile matches this query</strong>
+      <p>Nothing in {{ profiles.length }} node profiles matches <span class="mono">{{ query.active.value.source.trim() }}</span>. A bare word searches node, core, version, config path, collector and what needs a look; the field's help lists the fields to filter and sort by.</p>
+      <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('update:search', '')">Clear the query</button></div>
     </div>
     <div v-else class="empty-state">
       <ServerCog :size="26" aria-hidden="true" />

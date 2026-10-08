@@ -138,7 +138,7 @@ describe("a revealed link leaves the frame only as the one clipboard message", (
     // The page writes its state to the console's address while the link is
     // held: a search, then closing the identity.
     const states = () => posted.filter((entry) => entry.message.type === "lattice.plugin.state");
-    const search = q<HTMLInputElement>('input[aria-label="Search identities"]')!;
+    const search = q<HTMLInputElement>('input[aria-label="Search, filter and sort identities"]')!;
     search.value = "cdcd";
     search.dispatchEvent(new Event("input"));
     await until(() => states().some((entry) => entry.message.state?.q === "cdcd"), "the search in page state", 4_000);

@@ -1,0 +1,109 @@
+/* The query field (plugin-bridge PcQueryBar) on this sheet's scale.
+ *
+ * vpn-core does not load the bridge's chassis.css, and must not: that sheet
+ * declares the console's radius, spacing and type values on :root under
+ * names this sheet also reads (--radius-sm is 3px there and 5px here), plus
+ * fallbacks for colours the host does not send this page. Loading it would
+ * restyle every panel, table and modal vpn-core draws.
+ *
+ * So this is a port of the chassis's PcQueryBar rules (chassis.css, "The
+ * query field") and nothing else: the same selectors, measures and states,
+ * read onto styles.css's tokens with its fallbacks (constraint 3 there).
+ * Every selector sits under .pc-query, except the toolbar row the bar
+ * stands in and the dimmed panel under a query that does not read, so
+ * nothing outside the bar can change. queryBar.test.ts holds both: every
+ * class PcQueryBar draws has a rule here, and no rule reaches past it.
+ *
+ * Where the chassis reads a console token this page has a value for, the
+ * page's value wins, so the field sits with the page's own controls: a 6px
+ * field radius like its buttons and inputs, its muted hover, its menu
+ * shadow, its warning tone for an error.
+ */
+
+.query-toolbar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-3); }
+
+.pc-query {
+  /* The chassis's name: PcQueryBar reads it inline to pad the field's end. */
+  --pc-query-button: 28px;
+  --query-ring: color-mix(in srgb, var(--ring, #2c77b8) 22%, transparent);
+  --query-overlay-shadow: 0 10px 30px color-mix(in srgb, var(--primary, #1769aa) 6%, rgba(10, 14, 18, 0.28));
+  --query-duration: var(--duration-fast, 100ms);
+
+  display: flex; flex: 1 1 360px; flex-direction: column; min-width: 0; max-width: 560px;
+}
+.pc-query .pc-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+.pc-query-box { position: relative; }
+.pc-query-icon { position: absolute; top: 50%; left: 10px; display: flex; color: var(--muted-foreground, #65707b); pointer-events: none; transform: translateY(-50%); }
+.pc-query .pc-query-input { display: block; width: 100%; min-width: 0; height: 34px; border: 1px solid var(--border, #cfd4da); border-radius: var(--radius); padding: 0 var(--sp-2) 0 32px; color: var(--foreground, #17191c); background: var(--card, #fff); font-family: var(--font-mono); font-size: var(--text-sm); outline: 0; transition: border-color var(--query-duration) ease-out, box-shadow var(--query-duration) ease-out; }
+.pc-query .pc-query-input::placeholder { color: var(--muted-foreground, #65707b); }
+.pc-query .pc-query-input:focus-visible { border-color: var(--ring, #2c77b8); box-shadow: 0 0 0 3px var(--query-ring); outline: 0; }
+.pc-query[data-invalid="true"] .pc-query-input { border-color: var(--tone-warn); }
+.pc-query[data-invalid="true"] .pc-query-input:focus-visible { border-color: var(--tone-warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-warn) 30%, transparent); }
+.pc-query-end { position: absolute; top: 50%; right: 3px; display: flex; align-items: center; transform: translateY(-50%); }
+.pc-query-count { margin-right: 6px; color: var(--muted-foreground, #65707b); font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.pc-query .pc-query-button { position: relative; display: grid; width: var(--pc-query-button); height: 28px; place-items: center; border: 0; border-radius: var(--radius-sm); padding: 0; color: var(--muted-foreground, #65707b); background: transparent; transition: color var(--query-duration) ease-out, background-color var(--query-duration) ease-out; }
+.pc-query .pc-query-button:hover, .pc-query .pc-query-button[aria-expanded="true"] { color: var(--foreground, #17191c); background: var(--muted, #eef0f2); }
+.pc-query .pc-query-button:focus-visible { outline-offset: -2px; }
+.pc-query-menu { position: absolute; top: calc(100% + 4px); right: 0; left: 0; z-index: 10; max-height: 288px; margin: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); padding: var(--sp-1); color: var(--foreground, #17191c); background: var(--card, #fff); box-shadow: var(--query-overlay-shadow); list-style: none; }
+.pc-query-menu[hidden] { display: none; }
+.pc-query-menu-heading { padding: var(--sp-1) var(--sp-2) 2px; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); font-weight: 600; }
+.pc-query-option { display: flex; height: 32px; align-items: center; gap: var(--sp-3); border-radius: var(--radius-sm); padding: 0 var(--sp-2); cursor: pointer; font-size: var(--text-sm); }
+.pc-query-option:hover { background: var(--muted, #eef0f2); }
+.pc-query-option[aria-selected="true"] { color: var(--foreground, #17191c); background: var(--tone-info-surface); box-shadow: inset 2px 0 0 var(--primary, #1769aa); }
+.pc-query-option-icon { display: flex; flex: 0 0 auto; color: var(--muted-foreground, #65707b); }
+.pc-query-option-label { flex: 0 1 auto; min-width: 0; overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.pc-query-option-hint { flex: 1 1 0; min-width: 0; overflow: hidden; text-align: right; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.pc-query-help { position: absolute; top: calc(100% + 6px); right: 0; z-index: 10; width: min(480px, calc(100vw - 2 * var(--sp-2))); max-height: 544px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); padding: var(--sp-3); color: var(--foreground, #17191c); background: var(--card, #fff); box-shadow: var(--query-overlay-shadow); font-size: var(--text-sm); line-height: 1.45; }
+.pc-query-help:focus-visible { outline: 0; }
+.pc-query-help p { margin: 0; }
+.pc-query-help-title { font-size: var(--text-md); font-weight: 650; }
+.pc-query-help .pc-query-help-heading { margin-top: var(--sp-3); color: var(--muted-foreground, #65707b); font-weight: 600; }
+.pc-query-help .pc-query-help-note { margin-top: var(--sp-2); color: var(--muted-foreground, #65707b); }
+.pc-query-help-note strong { font-weight: 600; }
+.pc-query-help-flags { color: var(--foreground, #17191c); font-family: var(--font-mono); }
+.pc-query-help-grid { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 3px var(--sp-3); margin: var(--sp-1) 0 0; }
+.pc-query-help-grid dt { color: var(--foreground, #17191c); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.pc-query-help-grid[data-kind="syntax"] dt { white-space: pre; }
+.pc-query-help-grid dd { margin: 0; color: var(--muted-foreground, #65707b); }
+.pc-query-help-examples { display: grid; gap: 6px; margin: var(--sp-1) 0 0; padding: 0; list-style: none; }
+.pc-query-help-examples li { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; }
+.pc-query-help-examples span { color: var(--muted-foreground, #65707b); }
+.pc-query .pc-query-example { border: 0; border-radius: var(--radius-sm); padding: 0; color: var(--tone-info); background: transparent; font-family: var(--font-mono); text-align: left; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.pc-query .pc-query-example:hover { text-decoration: underline; }
+/* Empty, the status line takes no room but stays in the tree as a live region. */
+.pc-query-status { min-width: 0; font-size: var(--text-sm); }
+.pc-query-status:not(:empty) { padding-top: var(--sp-1); }
+.pc-query-status p { margin: 0; }
+.pc-query-error { color: var(--tone-warn); }
+.pc-query-column { color: var(--muted-foreground, #65707b); }
+.pc-query .pc-query-suggestion { margin-left: var(--sp-1); border: 0; border-radius: var(--radius-sm); padding: 0; color: var(--foreground, #17191c); background: transparent; font-family: var(--font-mono); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.pc-query .pc-query-suggestion:hover { color: var(--tone-info); }
+.pc-query-snippet { overflow: hidden; color: var(--muted-foreground, #65707b); font-family: var(--font-mono); text-overflow: ellipsis; white-space: pre; }
+.pc-query-snippet mark { border-radius: 2px; padding: 0 1px; color: var(--foreground, #17191c); background: color-mix(in srgb, var(--tone-warn) 25%, transparent); text-decoration: underline wavy var(--tone-warn); text-underline-offset: 2px; }
+.pc-query-stale { color: var(--muted-foreground, #65707b); }
+
+/* The rows under a query that does not read answer an earlier one: the page
+   sets data-stale (and inert) on the panel while the query is invalid and
+   the panel shows rows, as the console dims its list, so nobody acts on rows
+   whose query they cannot see. A no-match state stays live, so its Clear the
+   query works. Only the bar's pages set the attribute. */
+.data-panel[data-stale="true"] { opacity: 0.55; transition: opacity 200ms ease-out; }
+
+@media (max-width: 720px) {
+  .pc-query { max-width: none; }
+}
+@media (max-width: 620px) {
+  .query-toolbar { flex-direction: column; align-items: stretch; }
+  .query-toolbar > .pc-query { flex: 0 0 auto; }
+}
+@media (pointer: coarse) {
+  /* The end buttons: 36px wide and a 44px tall hit area, inside the 34px line. */
+  .pc-query { --pc-query-button: 36px; }
+  .pc-query .pc-query-button::after { content: ""; position: absolute; inset: -8px 0; }
+  .pc-query-option { height: 40px; }
+  .pc-query .pc-query-suggestion, .pc-query .pc-query-example { position: relative; }
+  .pc-query .pc-query-suggestion::after, .pc-query .pc-query-example::after { content: ""; position: absolute; inset: -12px -4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pc-query .pc-query-input, .pc-query .pc-query-button, .data-panel[data-stale="true"] { transition: none; }
+}

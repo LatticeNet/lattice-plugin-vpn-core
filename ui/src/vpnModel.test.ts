@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  filterLineGroups,
   formatBytes,
   formatLineDomain,
   formatLineEndpoint,
@@ -27,13 +26,6 @@ const groups: LineGroup[] = [{
 }];
 
 describe("vpnModel", () => {
-  it("filters against node and line fields without mutating the source", () => {
-    expect(filterLineGroups(groups, "reality")).toHaveLength(1);
-    expect(filterLineGroups(groups, "direct")).toHaveLength(0);
-    expect(filterLineGroups(groups, "tokyo")).toHaveLength(0);
-    expect(groups[0].lines).toHaveLength(1);
-  });
-
   it("formats traffic values and classifies failures", () => {
     expect(formatBytes(1024 * 1024)).toBe("1.0 MiB");
     expect(lineStatus({ ...groups[0].lines[0], last_error: "probe failed" })).toBe("error");
@@ -59,8 +51,6 @@ describe("vpnModel", () => {
     expect(formatLineEndpoint(line)).toBe("vpn.example.com:443");
     expect(formatLineListen(line)).toBe("0.0.0.0:443");
     expect(formatLineDomain(line)).toBe("reality.example.net");
-    expect(filterLineGroups([{ ...groups[0], lines: [line] }], "direct")).toHaveLength(1);
-    expect(filterLineGroups([{ ...groups[0], lines: [line] }], "certificate mismatch")).toHaveLength(1);
   });
 
   it("keeps a missing public endpoint distinct from the listen address", () => {

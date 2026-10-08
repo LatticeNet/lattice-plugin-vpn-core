@@ -6,19 +6,31 @@
  * Grouping by group or by state puts aggregates in every member column of
  * the group row. A column blank on every identity leaves the table and the
  * header says the fact once; the most common state recedes so the exceptions
- * read first. Searching flattens the table, because the operator asked for
- * identities. Each row has one affordance, opening the identity's panel, and
- * one menu for the rest. The outcome of an action sits under the row it
- * changed, not at the top of a page the operator scrolled away from.
+ * read first. A query that filters or sorts flattens the table, because the
+ * operator asked for identities. Each row has one affordance, opening the
+ * identity's panel, and one menu for the rest. The outcome of an action sits
+ * under the row it changed, not at the top of a page the operator scrolled
+ * away from.
+ *
+ * The column sort is the page's order and the query works on it: a `sort:`
+ * term replaces it, and bare words rank the matches above it. A header click
+ * takes the order back by dropping the query's `sort:` terms (withoutSorts),
+ * as the console's tables do; while bare words rank the rows, which no
+ * column order outranks, the click writes the column's `sort:` term into the
+ * query instead, so the order on screen is always the one the header shows.
  */
 import { computed, ref, watch } from "vue";
 import { ChevronRight, Ellipsis, UserRound, X } from "@lucide/vue";
+import { PcQueryBar, useListQuery } from "@latticenet/plugin-bridge/chassis";
+import { withoutSorts } from "@latticenet/plugin-bridge/query";
 
 import RowMenu, { type RowMenuItem } from "./RowMenu.vue";
 import { linkBadge } from "./identityLinkModel";
+import { USER_QUERY_EXAMPLES, usersQuerySchema } from "./querySchemas";
 import { quotaState } from "./usageModel";
 import {
   USERS_GROUP_BY,
+  USER_SORT_KEYS,
   expiryOf,
   expiryRelative,
   formatDay,
@@ -29,7 +41,6 @@ import {
   isProblem,
   pageUserTable,
   rowsHoldUser,
-  searchUsers,
   sortUsers,
   userColumns,
   usedLabel,
@@ -89,12 +100,15 @@ const commonState = computed(() => [...summary.value.states].filter((state) => !
  * the head and once, under the worst, when the table is grouped by status. */
 const multiCondition = computed(() => props.users.filter((user) => identityConditions(user, props.now).length > 1).length);
 
-const searching = computed(() => props.search.trim().length > 0);
 const inScope = computed(() => props.users.filter((user) => inView(user, props.view, props.now)));
-const matched = computed(() => searchUsers(inScope.value, props.search));
-const sorted = computed(() => sortUsers(matched.value, props.sort, props.now));
+/* The column sort is the page's order; the query keeps it unless it sorts. */
+const ordered = computed(() => sortUsers(inScope.value, props.sort, props.now));
+const query = useListQuery(ordered, usersQuerySchema(() => props.now), computed(() => props.search));
+/* The query asks for something: a filter, a bare word or a sort. */
+const searching = computed(() => query.filtering.value);
+const matched = computed(() => query.rows.value);
 const flat = computed(() => searching.value || props.groupBy === "none");
-const groups = computed(() => (flat.value ? [] : groupUsers(sorted.value, props.groupBy, props.now)));
+const groups = computed(() => (flat.value ? [] : groupUsers(matched.value, props.groupBy, props.now)));
 
 /* Groups open by default; the operator folds what they are done with. */
 const folded = ref(new Set<string>());
@@ -113,7 +127,12 @@ function foldAll(): void {
 const PAGE = 50;
 const page = ref(1);
 watch(() => [props.search, props.groupBy, props.view, props.sort.key, props.sort.reverse], () => { page.value = 1; });
-const table = computed(() => pageUserTable(flat.value ? { flat: sorted.value } : { groups: groups.value }, page.value, PAGE, folded.value));
+const table = computed(() => pageUserTable(flat.value ? { flat: matched.value } : { groups: groups.value }, page.value, PAGE, folded.value));
+/* While the query does not read, the rows answer an earlier one, so the panel
+ * is dimmed and inert and nobody acts on a row for a query they cannot see.
+ * Only while it shows rows: when the last query that read kept none, the
+ * panel holds the no-match state, and its Clear the query must stay live. */
+const stale = computed(() => query.invalid.value && table.value.rows.length > 0);
 
 /* A panel opened from a link, or from an attention item, shows its row: turn
  * to the page that holds it, and unfold its group. */
@@ -122,7 +141,7 @@ watch(() => props.openUser, (id) => {
   const holder = groups.value.find((group) => group.users.some((user) => user.id === id));
   if (holder && folded.value.has(holder.key)) toggle(holder.key);
   for (let candidate = 1; candidate <= table.value.pages; candidate += 1) {
-    if (rowsHoldUser(pageUserTable(flat.value ? { flat: sorted.value } : { groups: groups.value }, candidate, PAGE, folded.value).rows, id)) {
+    if (rowsHoldUser(pageUserTable(flat.value ? { flat: matched.value } : { groups: groups.value }, candidate, PAGE, folded.value).rows, id)) {
       page.value = candidate;
       return;
     }
@@ -137,17 +156,49 @@ const outcomeAfter = computed(() => {
 });
 
 // ── sorting ──────────────────────────────────────────────────────────────
+/* Each column as a query field, with the column's natural direction. */
+const COLUMN_SORT: Record<UserSortKey, { field: string; desc: boolean }> = {
+  identity: { field: "email", desc: false },
+  group: { field: "group", desc: false },
+  status: { field: "status", desc: false },
+  expires: { field: "expires", desc: false },
+  quota: { field: "quota", desc: true },
+  lines: { field: "lines", desc: true },
+  used: { field: "traffic", desc: true },
+};
+/* Bare words rank the matches; a column order only breaks their ties. */
+const ranked = computed(() => !!query.active.value.score);
+/* The order on screen as a column: the query's first `sort:` term when it
+ * names a column, none when the query orders some other way, else the
+ * page's column sort. */
+const shownSort = computed<UserSort | undefined>(() => {
+  if (!query.sorted.value && !ranked.value) return props.sort;
+  const first = query.active.value.sorts[0];
+  const key = first && USER_SORT_KEYS.find((candidate) => COLUMN_SORT[candidate].field === first.field.key);
+  return key ? { key, reverse: first.desc !== COLUMN_SORT[key].desc } : undefined;
+});
+
 function sortBy(key: UserSortKey): void {
-  emit("update:sort", props.sort.key === key ? { key, reverse: !props.sort.reverse } : { key, reverse: false });
+  const current = shownSort.value;
+  const next: UserSort = current?.key === key ? { key, reverse: !current.reverse } : { key, reverse: false };
+  if (ranked.value) {
+    const { field, desc } = COLUMN_SORT[key];
+    emit("update:search", `${withoutSorts(props.search)} sort:${desc !== next.reverse ? "-" : ""}${field}`.trim());
+    return;
+  }
+  if (query.sorted.value) emit("update:search", withoutSorts(props.search));
+  emit("update:sort", next);
 }
 /* The plugin's sort marks: both ways until chosen, then the direction. */
 function mark(key: UserSortKey): string {
-  if (props.sort.key !== key) return "\u2195";
-  return props.sort.reverse ? "\u2193" : "\u2191";
+  const sort = shownSort.value;
+  if (sort?.key !== key) return "\u2195";
+  return sort.reverse ? "\u2193" : "\u2191";
 }
 function ariaSort(key: UserSortKey): "ascending" | "descending" | "none" {
-  if (props.sort.key !== key) return "none";
-  return props.sort.reverse ? "descending" : "ascending";
+  const sort = shownSort.value;
+  if (sort?.key !== key) return "none";
+  return sort.reverse ? "descending" : "ascending";
 }
 
 // ── cells ────────────────────────────────────────────────────────────────
@@ -229,7 +280,20 @@ defineExpose({ anchorBefore });
 </script>
 
 <template>
-  <section class="data-panel users-panel" aria-labelledby="users-title">
+  <!-- Outside the panel: the panel clips its overflow, and the field's menu and help hang below it. -->
+  <div v-if="users.length" class="query-toolbar">
+    <PcQueryBar
+      :model-value="search"
+      :query="query"
+      :count="{ shown: matched.length, total: inScope.length }"
+      label="Search, filter and sort identities"
+      placeholder="Search, or status:expiring sort:expires"
+      storage-key="vpn-core.users"
+      :examples="USER_QUERY_EXAMPLES"
+      @update:model-value="(value: string) => emit('update:search', value)"
+    />
+  </div>
+  <section class="data-panel users-panel" aria-labelledby="users-title" :data-stale="stale ? 'true' : undefined" :inert="stale || undefined">
     <header class="panel-header lines-header">
       <div>
         <h2 id="users-title">Identities</h2>
@@ -246,14 +310,13 @@ defineExpose({ anchorBefore });
           <span class="segmented-label">Group by</span>
           <button v-for="value in USERS_GROUP_BY" :key="value" type="button" class="segmented-option" :aria-pressed="groupBy === value" :disabled="searching" @click="emit('update:groupBy', value)">{{ value }}</button>
         </div>
-        <input class="search-input" type="search" :value="search" aria-label="Search identities" placeholder="Search email, name or group" @input="emit('update:search', ($event.target as HTMLInputElement).value)" />
       </div>
     </header>
     <p v-if="view !== 'all'" class="panel-inline-note" data-tone="neutral">
       <span>{{ viewSentence(view, inScope.length) }} Only they are listed.</span>
       <button class="button button-secondary button-compact" type="button" @click="emit('update:view', 'all')">Show all {{ users.length }}</button>
     </p>
-    <p v-if="searching && matched.length" class="panel-inline-note" data-tone="neutral">{{ matched.length }} of {{ inScope.length }} identities match<template v-if="groupBy !== 'none'">, listed flat. Clear the search to group them again</template>.</p>
+    <p v-if="searching && matched.length" class="panel-inline-note" data-tone="neutral">{{ matched.length }} of {{ inScope.length }} identities match<template v-if="groupBy !== 'none'">, listed flat. Clear the query to group them again</template>.</p>
     <p v-else-if="groupBy === 'status' && multiCondition" class="panel-inline-note" data-tone="neutral">{{ multiCondition }} {{ multiCondition === 1 ? 'identity is' : 'identities are' }} in two conditions and {{ multiCondition === 1 ? 'is' : 'are' }} listed under the worse one.</p>
 
     <div v-if="outcome && outcomeAfter === ''" class="outcome-note" :data-tone="outcome.tone" role="status">
@@ -339,9 +402,9 @@ defineExpose({ anchorBefore });
     </div>
     <div v-else-if="searching" class="empty-state">
       <UserRound :size="26" aria-hidden="true" />
-      <strong>No identity matches that search</strong>
-      <p>Nothing in {{ inScope.length }} identities matches <span class="mono">{{ search.trim() }}</span>. The search covers email, name, group, comment, protocol and id.</p>
-      <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('update:search', '')">Clear the search</button></div>
+      <strong>No identity matches this query</strong>
+      <p>Nothing in {{ inScope.length }} identities matches <span class="mono">{{ query.active.value.source.trim() }}</span>. A bare word searches email, name, group, comment, protocol and id; the field's help lists the fields to filter and sort by.</p>
+      <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('update:search', '')">Clear the query</button></div>
     </div>
     <div v-else-if="view !== 'all'" class="empty-state">
       <UserRound :size="26" aria-hidden="true" />

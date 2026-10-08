@@ -19,12 +19,18 @@
  * Relay hubs count egress a second time as it enters them; the overview says
  * so in one sentence and never adds it, and node totals, which do count every
  * hop, say so on the By node layer.
+ *
+ * By line carries the query bar (querySchemas.ts): node, user, line, role,
+ * attribution and bytes. Its text is the page's `q`, kept in the address
+ * while By line is the layer on screen.
  */
 import { vRevealSelected } from "./layerTabs";
 import { computed, ref, watch } from "vue";
 import { Activity, ChevronRight, Gauge, Users, Waypoints } from "@lucide/vue";
+import { PcQueryBar, useListQuery } from "@latticenet/plugin-bridge/chassis";
 
 import DailyBars from "./DailyBars.vue";
+import { USAGE_QUERY_EXAMPLES, USAGE_QUERY_SCHEMA, usageQueryRows, type UsageQueryRow } from "./querySchemas";
 import Sparkline from "./Sparkline.vue";
 import {
   ATTRIBUTION_FLOOR,
@@ -92,11 +98,14 @@ const props = withDefaults(defineProps<{
   observedTitle?: string;
   /** The console can be asked to open Users. */
   canOpenUsers?: boolean;
-}>(), { view: "overview", stack: "exit", observedAge: "", observedTitle: "", canOpenUsers: false, series: undefined, previous: undefined, from: undefined, to: undefined });
+  /** The By line query, the page's `q`. */
+  search?: string;
+}>(), { view: "overview", stack: "exit", observedAge: "", observedTitle: "", canOpenUsers: false, series: undefined, previous: undefined, from: undefined, to: undefined, search: "" });
 const emit = defineEmits<{
   period: [value: UsagePeriod];
   view: [value: UsageView];
   stack: [value: StackBy];
+  search: [value: string];
   openUsers: [];
 }>();
 
@@ -196,8 +205,9 @@ function userLabel(row: UsageLineRow): string {
 /* Evidence opens per row rather than in an overlay: the operator is comparing
  * rows, and a dialog would hide the table they are comparing against. */
 const openRows = ref(new Set<string>());
-function rowKey(row: UsageLineRow, index: number): string {
-  return `${row.node_id}:${row.line_hash_id ?? row.tag}:${index}`;
+/* Keyed by the row's place in the read, so an open row stays open while the query narrows around it. */
+function rowKey(row: UsageQueryRow): string {
+  return `${row.node_id}:${row.line_hash_id ?? row.tag}:${row.index}`;
 }
 function toggleRow(key: string): void {
   const next = new Set(openRows.value);
@@ -212,7 +222,16 @@ const PAGE_SIZE = 30;
 const page = ref(1);
 const sortedLines = computed(() =>
   [...props.lines].sort((a, b) => (b.used_bytes || 0) - (a.used_bytes || 0)));
-const linePage = computed(() => pageRows(sortedLines.value, page.value, PAGE_SIZE));
+/* The query works on the ranked rows; with no `sort:` they keep that rank. */
+const queryRows = computed(() => usageQueryRows(sortedLines.value, lineLabel, userLabel));
+const lineQuery = useListQuery(queryRows, USAGE_QUERY_SCHEMA, computed(() => props.search));
+watch(() => props.search, () => { page.value = 1; });
+const linePage = computed(() => pageRows(lineQuery.rows.value, page.value, PAGE_SIZE));
+/* While the query does not read, the rows answer an earlier one, so the panel
+ * is dimmed and inert and nobody acts on a row for a query they cannot see.
+ * Only while it shows rows: when the last query that read kept none, the
+ * panel holds the no-match state, and its Clear the query must stay live. */
+const linesStale = computed(() => lineQuery.invalid.value && linePage.value.rows.length > 0);
 
 /* ── by user ───────────────────────────────────────────────────────────── */
 const underAttributed = computed(() => hasTraffic.value && attribution.value.share < ATTRIBUTION_FLOOR);
@@ -453,152 +472,173 @@ function setView(value: UsageView): void {
   </div>
 
   <!-- ── By line ──────────────────────────────────────────────────────── -->
-  <section v-else-if="view === 'line'" class="data-panel" role="tabpanel" aria-labelledby="usage-lines-heading">
-    <header class="panel-header">
-      <div>
-        <h2 id="usage-lines-heading">By line</h2>
-        <p>Every attributed slice of traffic, and the evidence behind each one.</p>
+  <div v-else-if="view === 'line'" class="layer-body" role="tabpanel" aria-labelledby="usage-lines-heading">
+    <!-- Outside the panel: the panel clips its overflow, and the field's menu and help hang below it. -->
+    <div v-if="lines.length" class="query-toolbar">
+      <PcQueryBar
+        :model-value="search"
+        :query="lineQuery"
+        :count="{ shown: lineQuery.rows.value.length, total: lines.length }"
+        label="Search, filter and sort usage rows"
+        placeholder="Search, or user:alice sort:-bytes"
+        storage-key="vpn-core.usage-lines"
+        :examples="USAGE_QUERY_EXAMPLES"
+        @update:model-value="(value: string) => emit('search', value)"
+      />
+    </div>
+    <section class="data-panel" :data-stale="linesStale ? 'true' : undefined" :inert="linesStale || undefined">
+      <header class="panel-header">
+        <div>
+          <h2 id="usage-lines-heading">By line</h2>
+          <p>Every attributed slice of traffic, and the evidence behind each one.</p>
+        </div>
+        <span v-if="linePage.total" class="count">{{ linePage.from }}-{{ linePage.to }} of {{ linePage.total }}</span>
+      </header>
+
+      <div v-if="linePage.rows.length" class="table-wrap">
+        <table class="usage-lines" style="min-width: 900px">
+          <thead>
+            <tr>
+              <th class="chevron-cell"><span class="sr-only">Evidence</span></th>
+              <th>Node</th><th>Line</th><th>Role</th><th>Identity</th>
+              <th>Attribution</th><th class="num">Traffic</th><th>Counts</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="row in linePage.rows" :key="rowKey(row)">
+              <tr class="usage-row" :data-open="openRows.has(rowKey(row)) || undefined">
+                <td class="chevron-cell">
+                  <button
+                    class="icon-button"
+                    type="button"
+                    :aria-expanded="openRows.has(rowKey(row))"
+                    :aria-label="`Evidence for ${lineLabel(row)} on ${row.node_name || row.node_id}`"
+                    @click="toggleRow(rowKey(row))"
+                  >
+                    <ChevronRight class="row-chevron" :size="15" aria-hidden="true" />
+                  </button>
+                </td>
+                <td>
+                  <strong :title="row.node_name || row.node_id">{{ row.node_name || row.node_id }}</strong>
+                  <small :title="row.node_id">{{ row.node_id }}</small>
+                </td>
+                <td>
+                  <strong :title="lineLabel(row)">{{ lineLabel(row) }}</strong>
+                  <small v-if="row.line_hash_id" class="mono" :title="row.line_hash_id">{{ row.line_hash_id }}</small>
+                  <small v-else class="cell-note">inbound tag only; no line on this node carries it</small>
+                </td>
+                <td><span class="badge" :data-tone="EGRESS_ROLES.has(row.role) ? 'info' : undefined">{{ roleLabel(row.role) }}</span></td>
+                <td>
+                  <template v-if="row.user_id">
+                    <strong :title="userLabel(row)">{{ userLabel(row) }}</strong>
+                    <small :title="row.user_id">{{ row.user_id }}</small>
+                  </template>
+                  <span v-else class="status-dot" data-tone="warning">unknown</span>
+                </td>
+                <td>
+                  <span class="badge" :data-tone="attributionTone(row) === 'healthy' ? 'success' : attributionTone(row) === 'error' ? 'error' : attributionTone(row) === 'info' ? 'info' : 'warning'">
+                    {{ attributionLabel(row) }}
+                  </span>
+                  <small v-if="row.attribution_proof" class="cell-note">{{ row.attribution_proof === 'proof' ? 'proven' : 'inferred' }}</small>
+                </td>
+                <td class="num">
+                  <span class="mono">{{ formatBytes(row.used_bytes) }}</span>
+                  <small class="cell-note" :data-tone="row.estimate ? 'warning' : undefined">{{ measurementLabel(row) }}</small>
+                </td>
+                <td>
+                  <span class="status-dot" :data-tone="row.counted ? 'healthy' : 'neutral'">
+                    {{ row.counted ? 'to this identity' : 'not to a quota' }}
+                  </span>
+                </td>
+              </tr>
+              <tr v-if="openRows.has(rowKey(row))" class="evidence-row">
+                <td :colspan="8">
+                  <div class="evidence-grid">
+                    <div>
+                      <span>Why this attribution</span>
+                      <p>{{ row.attribution_reason || 'The server recorded no reason for this row.' }}</p>
+                    </div>
+                    <div>
+                      <span>Traffic split</span>
+                      <p class="mono">up {{ formatBytes(row.uplink) }} / down {{ formatBytes(row.downlink) }}</p>
+                      <p v-if="row.estimate" class="evidence-warn">
+                        This figure is the inbound counter minus the upstream relay counters, floored at
+                        zero. It is a subtraction, not a number the box reported.
+                      </p>
+                    </div>
+                    <div v-if="upstreamLines(row).length">
+                      <span>Already counted at</span>
+                      <p>
+                        These bytes reached this line through a relay and the entry line's counter
+                        already carries them, so they do not reach a quota twice.
+                      </p>
+                      <p v-for="hash in upstreamLines(row)" :key="hash" class="mono evidence-hash" :title="hash">
+                        {{ names.get(hash) || hash }}<span v-if="names.get(hash)"> ({{ hash }})</span>
+                      </p>
+                    </div>
+                    <div v-if="row.candidates?.length">
+                      <span>Candidates the server would not choose between</span>
+                      <p>
+                        The traffic is real. Any of these identities could own it, and no evidence
+                        picks one, so it is reported unattributed rather than guessed onto an account.
+                      </p>
+                      <p v-for="candidate in row.candidates" :key="candidate" class="mono evidence-hash" :title="candidate">
+                        {{ emailByUser.get(candidate) || candidate }}
+                      </p>
+                    </div>
+                    <div v-if="!row.user_id && !row.candidates?.length">
+                      <span>No identity</span>
+                      <p>
+                        {{ row.attribution === 'unknown_line'
+                          ? 'No line on this node carries this inbound tag, so the traffic cannot be placed on a line or an account. The tag is shown as reported.'
+                          : 'This traffic was measured and no identity could be attached to it. It is real usage with an unknown owner, not zero usage.' }}
+                      </p>
+                    </div>
+                    <div>
+                      <span>Inbound tag</span>
+                      <p class="mono evidence-hash" :title="row.tag">{{ row.tag || 'not reported' }}</p>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
       </div>
-      <span v-if="linePage.total" class="count">{{ linePage.from }}-{{ linePage.to }} of {{ linePage.total }}</span>
-    </header>
 
-    <div v-if="linePage.rows.length" class="table-wrap">
-      <table class="usage-lines" style="min-width: 900px">
-        <thead>
-          <tr>
-            <th class="chevron-cell"><span class="sr-only">Evidence</span></th>
-            <th>Node</th><th>Line</th><th>Role</th><th>Identity</th>
-            <th>Attribution</th><th class="num">Traffic</th><th>Counts</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template v-for="(row, index) in linePage.rows" :key="rowKey(row, index)">
-            <tr class="usage-row" :data-open="openRows.has(rowKey(row, index)) || undefined">
-              <td class="chevron-cell">
-                <button
-                  class="icon-button"
-                  type="button"
-                  :aria-expanded="openRows.has(rowKey(row, index))"
-                  :aria-label="`Evidence for ${lineLabel(row)} on ${row.node_name || row.node_id}`"
-                  @click="toggleRow(rowKey(row, index))"
-                >
-                  <ChevronRight class="row-chevron" :size="15" aria-hidden="true" />
-                </button>
-              </td>
-              <td>
-                <strong :title="row.node_name || row.node_id">{{ row.node_name || row.node_id }}</strong>
-                <small :title="row.node_id">{{ row.node_id }}</small>
-              </td>
-              <td>
-                <strong :title="lineLabel(row)">{{ lineLabel(row) }}</strong>
-                <small v-if="row.line_hash_id" class="mono" :title="row.line_hash_id">{{ row.line_hash_id }}</small>
-                <small v-else class="cell-note">inbound tag only; no line on this node carries it</small>
-              </td>
-              <td><span class="badge" :data-tone="EGRESS_ROLES.has(row.role) ? 'info' : undefined">{{ roleLabel(row.role) }}</span></td>
-              <td>
-                <template v-if="row.user_id">
-                  <strong :title="userLabel(row)">{{ userLabel(row) }}</strong>
-                  <small :title="row.user_id">{{ row.user_id }}</small>
-                </template>
-                <span v-else class="status-dot" data-tone="warning">unknown</span>
-              </td>
-              <td>
-                <span class="badge" :data-tone="attributionTone(row) === 'healthy' ? 'success' : attributionTone(row) === 'error' ? 'error' : attributionTone(row) === 'info' ? 'info' : 'warning'">
-                  {{ attributionLabel(row) }}
-                </span>
-                <small v-if="row.attribution_proof" class="cell-note">{{ row.attribution_proof === 'proof' ? 'proven' : 'inferred' }}</small>
-              </td>
-              <td class="num">
-                <span class="mono">{{ formatBytes(row.used_bytes) }}</span>
-                <small class="cell-note" :data-tone="row.estimate ? 'warning' : undefined">{{ measurementLabel(row) }}</small>
-              </td>
-              <td>
-                <span class="status-dot" :data-tone="row.counted ? 'healthy' : 'neutral'">
-                  {{ row.counted ? 'to this identity' : 'not to a quota' }}
-                </span>
-              </td>
-            </tr>
-            <tr v-if="openRows.has(rowKey(row, index))" class="evidence-row">
-              <td :colspan="8">
-                <div class="evidence-grid">
-                  <div>
-                    <span>Why this attribution</span>
-                    <p>{{ row.attribution_reason || 'The server recorded no reason for this row.' }}</p>
-                  </div>
-                  <div>
-                    <span>Traffic split</span>
-                    <p class="mono">up {{ formatBytes(row.uplink) }} / down {{ formatBytes(row.downlink) }}</p>
-                    <p v-if="row.estimate" class="evidence-warn">
-                      This figure is the inbound counter minus the upstream relay counters, floored at
-                      zero. It is a subtraction, not a number the box reported.
-                    </p>
-                  </div>
-                  <div v-if="upstreamLines(row).length">
-                    <span>Already counted at</span>
-                    <p>
-                      These bytes reached this line through a relay and the entry line's counter
-                      already carries them, so they do not reach a quota twice.
-                    </p>
-                    <p v-for="hash in upstreamLines(row)" :key="hash" class="mono evidence-hash" :title="hash">
-                      {{ names.get(hash) || hash }}<span v-if="names.get(hash)"> ({{ hash }})</span>
-                    </p>
-                  </div>
-                  <div v-if="row.candidates?.length">
-                    <span>Candidates the server would not choose between</span>
-                    <p>
-                      The traffic is real. Any of these identities could own it, and no evidence
-                      picks one, so it is reported unattributed rather than guessed onto an account.
-                    </p>
-                    <p v-for="candidate in row.candidates" :key="candidate" class="mono evidence-hash" :title="candidate">
-                      {{ emailByUser.get(candidate) || candidate }}
-                    </p>
-                  </div>
-                  <div v-if="!row.user_id && !row.candidates?.length">
-                    <span>No identity</span>
-                    <p>
-                      {{ row.attribution === 'unknown_line'
-                        ? 'No line on this node carries this inbound tag, so the traffic cannot be placed on a line or an account. The tag is shown as reported.'
-                        : 'This traffic was measured and no identity could be attached to it. It is real usage with an unknown owner, not zero usage.' }}
-                    </p>
-                  </div>
-                  <div>
-                    <span>Inbound tag</span>
-                    <p class="mono evidence-hash" :title="row.tag">{{ row.tag || 'not reported' }}</p>
-                  </div>
-                </div>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
+      <div v-else-if="failed" class="empty-state">
+        <Gauge :size="24" aria-hidden="true" />
+        <strong>Usage could not be read for this period</strong>
+        <p>
+          The request failed, so this table is empty because nothing arrived, not because nothing
+          happened. Retry above; the figures on this page stay unknown until a read succeeds.
+        </p>
+      </div>
+      <div v-else-if="lines.length" class="empty-state">
+        <Gauge :size="24" aria-hidden="true" />
+        <strong>No row matches this query</strong>
+        <p>Nothing in {{ lines.length }} rows for {{ periodLabel(period).toLowerCase() }} matches <span class="mono">{{ lineQuery.active.value.source.trim() }}</span>. A bare word searches node, line, tag, identity, role and attribution; the field's help lists the fields to filter and sort by.</p>
+        <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('search', '')">Clear the query</button></div>
+      </div>
+      <div v-else class="empty-state">
+        <Gauge :size="24" aria-hidden="true" />
+        <strong>No traffic in {{ periodLabel(period).toLowerCase() }}</strong>
+        <p>No line reported traffic for this period. The overview says whether that is a quiet fleet or an unmeasured one.</p>
+      </div>
 
-    <div v-else-if="failed" class="empty-state">
-      <Gauge :size="24" aria-hidden="true" />
-      <strong>Usage could not be read for this period</strong>
-      <p>
-        The request failed, so this table is empty because nothing arrived, not because nothing
-        happened. Retry above; the figures on this page stay unknown until a read succeeds.
+      <footer v-if="linePage.pages > 1" class="table-pagination" aria-label="Usage line pagination">
+        <span>Rows {{ linePage.from }} to {{ linePage.to }} of {{ linePage.total }}<template v-if="!lineQuery.sorted.value && !lineQuery.active.value.score">, ranked by traffic across every one of them</template></span>
+        <button class="button button-secondary button-compact" type="button" :disabled="linePage.page === 1" @click="page = linePage.page - 1">Previous</button>
+        <span>Page {{ linePage.page }} of {{ linePage.pages }}</span>
+        <button class="button button-secondary button-compact" type="button" :disabled="linePage.page === linePage.pages" @click="page = linePage.page + 1">Next</button>
+      </footer>
+
+      <p v-if="!canDrillDown && sortedLines.length" class="permission-note panel-note">
+        This session cannot run per-identity usage queries, so the rows above are the whole of the
+        evidence available here. They are the same figures the query would return for this period.
       </p>
-    </div>
-    <div v-else class="empty-state">
-      <Gauge :size="24" aria-hidden="true" />
-      <strong>No traffic in {{ periodLabel(period).toLowerCase() }}</strong>
-      <p>No line reported traffic for this period. The overview says whether that is a quiet fleet or an unmeasured one.</p>
-    </div>
-
-    <footer v-if="linePage.pages > 1" class="table-pagination" aria-label="Usage line pagination">
-      <span>Rows {{ linePage.from }} to {{ linePage.to }} of {{ linePage.total }}, ranked by traffic across every one of them</span>
-      <button class="button button-secondary button-compact" type="button" :disabled="linePage.page === 1" @click="page = linePage.page - 1">Previous</button>
-      <span>Page {{ linePage.page }} of {{ linePage.pages }}</span>
-      <button class="button button-secondary button-compact" type="button" :disabled="linePage.page === linePage.pages" @click="page = linePage.page + 1">Next</button>
-    </footer>
-
-    <p v-if="!canDrillDown && sortedLines.length" class="permission-note panel-note">
-      This session cannot run per-identity usage queries, so the rows above are the whole of the
-      evidence available here. They are the same figures the query would return for this period.
-    </p>
-  </section>
+    </section>
+  </div>
 
   <!-- ── By user ──────────────────────────────────────────────────────── -->
   <div v-else class="layer-body" role="tabpanel" aria-label="By user">

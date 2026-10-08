@@ -153,9 +153,9 @@ function buildBanks(group: LineGroup, lines: readonly Line[], hashToNode: Map<st
 /**
  * Node rows for the fleet lens, from groups that are already searched.
  *
- * The caller filters lines first (`filterLineGroups`) so a search narrows a
- * node to its matching lines and a node with no match disappears; the row
- * counts and verdicts then speak for what is on screen.
+ * A caller that narrows the lines first passes only the groups it kept, so a
+ * node with no match disappears; the row counts and verdicts then speak for
+ * what is on screen.
  */
 export function buildNodeRows(groups: readonly LineGroup[]): NodeRow[] {
   const hashToNode = nodeOfHash(groups);

@@ -58,12 +58,14 @@ describe("encoding this plugin's state", () => {
     ["usage", state({ usageView: "node", period: "30d" }), { view: "node", period: "30d" }],
     ["usage", state({ usageView: "overview", stack: "role", period: "today" }), { period: "today", stack: "role" }],
     ["usage", state({ usageView: "user", period: "all" }), { view: "user", period: "all" }],
+    ["usage", state({ usageView: "line", q: "-user:* sort:-bytes" }), { view: "line", q: "-user:* sort:-bytes" }],
     ["users", state(), {}],
     ["users", state({ usersView: "expiring", usersGroup: "status", q: "metix", usersSort: { key: "expires", reverse: true }, open: "u_1" }), { show: "expiring", group: "status", q: "metix", sort: "-expires", open: "u_1" }],
     ["users", state({ usersView: "over_quota" }), { show: "over_quota" }],
     ["users", state({ usersGroup: "group", usersSort: { key: "used", reverse: false } }), { group: "group", sort: "used" }],
     ["profiles", state(), {}],
     ["profiles", state({ open: "node-hkg-edge-01" }), { open: "node-hkg-edge-01" }],
+    ["profiles", state({ q: "-collector:ok", open: "node-hkg-edge-01" }), { q: "-collector:ok", open: "node-hkg-edge-01" }],
   ];
 
   it.each(cases)("round-trips the %s state %#", (route, value, encoded) => {
@@ -88,7 +90,9 @@ describe("encoding this plugin's state", () => {
     expect(Object.keys(encodePageState("lines", busy))).toEqual(["view", "group", "q", "open"]);
     expect(Object.keys(encodePageState("usage", busy))).toEqual(["view", "period", "stack"]);
     expect(encodePageState("users", busy)).toEqual({ show: "unbound", group: "status", q: "hr", sort: "quota", open: "lh_9" });
-    expect(encodePageState("profiles", busy)).toEqual({ open: "lh_9" });
+    expect(encodePageState("profiles", busy)).toEqual({ q: "hr", open: "lh_9" });
+    // Usage keeps the query only on By line, the layer that has the bar.
+    expect(encodePageState("usage", { ...busy, usageView: "line" })).toEqual({ view: "line", period: "30d", stack: "role", q: "hr" });
   });
 
   it("names the open New identity form on Users only, so a link can land on it", () => {
