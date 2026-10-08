@@ -66,9 +66,9 @@ jobs:
 
       - name: validate manifest against released server
         env:
-          # alpha-0.2.2a108 release commit 76bcf5a (live in production on 2026-10-03).
+          # alpha-0.2.2a122 release commit 0133390, the first server that knows the vpn:probe scope.
           # Move ONLY to another released tag's commit.
-          LATTICE_CHECK_REF: v0.2.4-0.20261003181846-76bcf5a2b74b
+          LATTICE_CHECK_REF: v0.2.4-0.20261008200845-01333905e310
         run: go run "github.com/LatticeNet/lattice-server/cmd/lattice-plugin-manifest-check@${LATTICE_CHECK_REF}" manifest.json
 
       - name: build runtime binaries

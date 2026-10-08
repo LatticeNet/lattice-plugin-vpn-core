@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.11.0-alpha.3",
+  "version": "0.11.0-alpha.4",
   "publisher": "latticenet",
-  "signature_ed25519": "EDSFWVTZ5A+q4YkmWUVRReTy2Ghmd57aWA1GL14G5KtjRf+01DOQ/sj3zhGfwB2RgLvK6g3zDhrf3/z8F1c+Cw==",
+  "signature_ed25519": "",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "974f0f976dcef4b68b698735181fc2748a2fea662c4d0e93e3cbd480fc7c56c2"
+    "digest_sha256": "17d01c0535786f712ecfbd45f883509ad1148f568ea5076cf7b950ba0cc670d9"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -384,6 +384,33 @@
           "effect": "read",
           "scopes": [
             "vpncore:read"
+          ]
+        }
+      ],
+      "backing": "core"
+    },
+    {
+      "service": "latticenet.vpn-core/probe",
+      "methods": [
+        {
+          "name": "health",
+          "effect": "read",
+          "scopes": [
+            "vpn:probe"
+          ]
+        },
+        {
+          "name": "targets",
+          "effect": "read",
+          "scopes": [
+            "vpn:probe"
+          ]
+        },
+        {
+          "name": "run",
+          "effect": "write",
+          "scopes": [
+            "vpn:probe"
           ]
         }
       ],

@@ -24,6 +24,7 @@
 import { filterPageState, validPageState, type PageState } from "../src/pageState";
 import { handlers, SCENARIOS, type Scenario } from "./fixtures";
 import { LinkFixtureError } from "./linkFixtures";
+import { probeHandlers, PROBE_SCENARIOS, type ProbeScenario } from "./probeFixtures";
 
 const ROUTES = ["lines", "users", "profiles", "usage"] as const;
 type Route = (typeof ROUTES)[number];
@@ -44,6 +45,7 @@ const INTERFACES = [
   },
   { service: "latticenet.vpn-core/profiles", methods: ["query", "settings", "configure"] },
   { service: "latticenet.vpn-core/usage", methods: ["query"] },
+  { service: "latticenet.vpn-core/probe", methods: ["health", "targets", "run"] },
 ];
 
 /* The console's production theme (teal on slate, lattice-dashboard
@@ -165,7 +167,7 @@ function armMeasure(resolve: (value: Measure) => void): void {
 
 const params = new URLSearchParams(location.search);
 /* The harness's own keys. Everything else in the address is page state. */
-const HARNESS_KEYS = new Set(["route", "scenario", "theme", "width", "frame", "fail", "zoom", "measure", "plugin", "oldhost", "stepup", "deny", "slow"]);
+const HARNESS_KEYS = new Set(["route", "scenario", "theme", "width", "frame", "fail", "zoom", "measure", "plugin", "oldhost", "stepup", "deny", "slow", "probe"]);
 let frameEpoch = 0;
 let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
@@ -200,6 +202,12 @@ const stepUp = params.get("stepup") ?? "ok";
 /* `deny=link` refuses every link method the way the server refuses a session
  * without vpncore:admin or with a node allowlist: 403 capability_denied. */
 const denyLinks = params.get("deny") === "link";
+/* `deny=probe` leaves the probe service out of init, as the console does for a
+ * session without vpn:probe. `probe=<scenario>` picks what the probe answers
+ * (probeFixtures.ts); the default works. */
+const denyProbe = params.get("deny") === "probe";
+const probeScenario = (PROBE_SCENARIOS as readonly string[]).includes(params.get("probe") ?? "") ? (params.get("probe") as ProbeScenario) : "ok";
+const interfaces = denyProbe ? INTERFACES.filter((contract) => !contract.service.endsWith("/probe")) : INTERFACES;
 /* `slow=users-admin/link_get` holds that call for two minutes, so its loading
  * state can be looked at. */
 const slowCalls = new Set(params.getAll("slow"));
@@ -250,6 +258,8 @@ function writeAddress(): void {
   for (const key of slowCalls) query.append("slow", key);
   if (stepUp !== "ok") query.set("stepup", stepUp);
   if (denyLinks) query.set("deny", "link");
+  if (denyProbe) query.set("deny", "probe");
+  if (probeScenario !== "ok") query.set("probe", probeScenario);
   if (zoom) query.set("zoom", zoom);
   if (oldHost) query.set("oldhost", "1");
   for (const [key, value] of Object.entries(pageState)) query.set(key, value);
@@ -283,7 +293,7 @@ window.addEventListener("message", (event) => {
       post({
         type: "lattice.host.init", version: "1", pluginId: PLUGIN_ID,
         pluginVersion: "0.0.0-dev", pluginRoute: route, locale: "en",
-        colorScheme: dark ? "dark" : "light", designTokens: tokens(), interfaces: INTERFACES,
+        colorScheme: dark ? "dark" : "light", designTokens: tokens(), interfaces,
         ...(oldHost ? {} : { pageState: { ...pageState } }),
       });
       readySeen = true;
@@ -332,7 +342,7 @@ window.addEventListener("message", (event) => {
       return;
     }
     case "lattice.plugin.call": {
-      const table = handlers(scenario);
+      const table = { ...handlers(scenario), ...probeHandlers(probeScenario) };
       const key = `${String(data.service).split("/").pop()}/${data.method}`;
       const handler = table[key];
       const isLink = String(data.method).startsWith("link_");
@@ -349,7 +359,7 @@ window.addEventListener("message", (event) => {
       }
       // Latency, so loading and skeleton states are visible rather than theoretical.
       // A reveal waits as long as the console's step-up prompt takes a person.
-      const latency = slowCalls.has(key) ? 120_000 : data.method === "link_reveal" ? 1_100 : 320;
+      const latency = slowCalls.has(key) ? 120_000 : data.method === "link_reveal" ? 1_100 : key === "probe/run" ? 1_400 : 320;
       window.setTimeout(() => {
         const period = (data.payload as { period?: unknown } | undefined)?.period;
         if (scenario === "failing" || failCalls.has(key) || (typeof period === "string" && failCalls.has(`${key}@${period}`))) {

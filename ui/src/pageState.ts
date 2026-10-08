@@ -85,8 +85,8 @@ export function pageStateKey(state: PageState): string {
 
 // ── this plugin's state ──────────────────────────────────────────────────
 
-export type LinesView = "overview" | "lines" | "topology" | "attention";
-export const LINES_VIEWS: readonly LinesView[] = ["overview", "lines", "topology", "attention"];
+export type LinesView = "overview" | "lines" | "topology" | "attention" | "probe";
+export const LINES_VIEWS: readonly LinesView[] = ["overview", "lines", "topology", "attention", "probe"];
 /* `lens` is the older spelling from the lens switch; a saved link keeps working. */
 const LEGACY_LENS: Record<string, LinesView> = { fleet: "lines", topology: "topology", attention: "attention" };
 
