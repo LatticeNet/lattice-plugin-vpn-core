@@ -388,6 +388,33 @@
         }
       ],
       "backing": "core"
+    },
+    {
+      "service": "latticenet.vpn-core/probe",
+      "methods": [
+        {
+          "name": "health",
+          "effect": "read",
+          "scopes": [
+            "vpn:probe"
+          ]
+        },
+        {
+          "name": "targets",
+          "effect": "read",
+          "scopes": [
+            "vpn:probe"
+          ]
+        },
+        {
+          "name": "run",
+          "effect": "write",
+          "scopes": [
+            "vpn:probe"
+          ]
+        }
+      ],
+      "backing": "core"
     }
   ]
 }

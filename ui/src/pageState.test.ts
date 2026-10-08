@@ -54,6 +54,8 @@ describe("encoding this plugin's state", () => {
     ["lines", state({ linesView: "lines", group: "exit", q: "DMIT", open: "lh_0042" }), { view: "lines", group: "exit", q: "DMIT", open: "lh_0042" }],
     ["lines", state({ linesView: "topology", group: "none" }), { view: "topology", group: "none" }],
     ["lines", state({ linesView: "attention", open: "lh_0001" }), { view: "attention", open: "lh_0001" }],
+    // The Probe layer is named and nothing else: the paste never reaches the address.
+    ["lines", state({ linesView: "probe" }), { view: "probe" }],
     ["usage", state(), {}],
     ["usage", state({ usageView: "node", period: "30d" }), { view: "node", period: "30d" }],
     ["usage", state({ usageView: "overview", stack: "role", period: "today" }), { period: "today", stack: "role" }],
@@ -116,6 +118,7 @@ describe("encoding this plugin's state", () => {
     expect(decodePageState({ lens: "fleet" }).linesView).toBe("lines");
     expect(decodePageState({ lens: "topology" }).linesView).toBe("topology");
     expect(decodePageState({ view: "attention", lens: "fleet" }).linesView).toBe("attention");
+    expect(decodePageState({ view: "probe" })).toMatchObject({ linesView: "probe", usageView: "overview" });
     // One `view` names a Lines layer or a Usage layer; the route decides which counts.
     expect(decodePageState({ view: "node" })).toMatchObject({ linesView: "overview", usageView: "node" });
     // One `group` names a Lines grouping or a Users grouping, the same way.

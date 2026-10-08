@@ -12,7 +12,9 @@ The released version is the one in `manifest.json`.
 The plugin owns four Extensions pages and their interaction logic:
 
 - Lines: every inbound the fleet reports, managed or merely observed, plus the
-  chain topology between them.
+  chain topology between them, and the Probe layer, where an operator pastes a
+  sing-box outbound (or a chain of them) and tests it from the control plane
+  through lattice-probe.
 - Users: identities, their protocol credentials, and which lines they are bound
   to.
 - Node Profiles: what core each node runs, what it discovered, and the sing-box
@@ -54,6 +56,11 @@ through plan, approval, a bounded agent task, and audit.
   neither queues nor executes a host task, so the node keeps running its old
   settings until someone runs that command.
 - A node-restricted access token cannot open these fleet-global plugin views.
+- Probe calls (`latticenet.vpn-core/probe` health, targets and run) require
+  `vpn:probe`. A pasted outbound carries credentials, so it leaves the frame
+  only as the run call's payload: never page state, the address, storage or a
+  log, and the page never draws it outside the textarea. Results stay in page
+  memory.
 
 ## Scope migration and rollback
 
@@ -101,7 +108,9 @@ the height the plugin reports, so overlay anchoring behaves as it does in the
 console. There is no `dev` script in `ui/package.json`, so start it with
 `npx vite --open /dev.html` from `ui`. It takes `?route=`, `?scenario=`,
 `?width=`, `?theme=` and `?measure=1`; the scenarios are `production`,
-`offfleet`, `rich`, `dense`, `empty` and `failing`.
+`offfleet`, `rich`, `dense`, `empty` and `failing`. `?probe=` picks what the
+probe answers on the Probe layer (`ui/dev/probeFixtures.ts` lists one scenario
+per state) and `?deny=probe` plays a session without `vpn:probe`.
 
 ## Reproducible bundle
 

@@ -47,6 +47,9 @@ import UsersTable from "./UsersTable.vue";
 import ProfileSheet from "./ProfileSheet.vue";
 import ProfilesTable from "./ProfilesTable.vue";
 import { profileHead, type Profile, type ProfilePluginConfig, type ProfileSettings } from "./profilesModel";
+import ProbePanel from "./ProbePanel.vue";
+import { useProbe } from "./probe";
+import { PROBE_SERVICE, type ProbeMethod } from "./probeModel";
 import {
   expiryDate,
   expiryInput,
@@ -106,6 +109,7 @@ const SERVICES = {
   admin: "latticenet.vpn-core/users-admin",
   profiles: "latticenet.vpn-core/profiles",
   usage: "latticenet.vpn-core/usage",
+  probe: PROBE_SERVICE,
 } as const;
 
 interface UsageByUser {
@@ -511,6 +515,7 @@ async function planLineChainRemoval(sourceLineUUID: string): Promise<void> {
 
 async function loadCurrent(background = false): Promise<void> {
   if (!init.value) return;
+  if (background && probeLayer.value) probe.refresh();
   if (background) refreshing.value = true;
   else loading.value = true;
   error.value = "";
@@ -789,6 +794,27 @@ watch(
   (id) => void identityLink.open(id),
 );
 const showLinkSection = computed(() => canCall(init.value, SERVICES.admin, "link_get"));
+
+/* ── the Probe layer ─────────────────────────────────────────────────── */
+/* One instance for the page, so leaving the layer and coming back keeps the
+ * paste and the last result. It reads the probe only once the layer is
+ * shown: an operator who never opens it never calls the probe. */
+const probe = useProbe({
+  call: <T,>(method: ProbeMethod, payload: Record<string, unknown>, timeoutMs?: number) => {
+    if (!bridge || !canCall(init.value, SERVICES.probe, method)) {
+      return { promise: Promise.reject(new Error(`This session is not allowed to run ${method}, so nothing was sent to the probe.`)), cancel: () => {} };
+    }
+    return bridge.call<T>(SERVICES.probe, method, payload, timeoutMs);
+  },
+  can: (method) => canCall(init.value, SERVICES.probe, method),
+});
+const probeLayer = computed(() => route.value === "lines" && linesView.value === "probe");
+watch(() => probeLayer.value && !!init.value, (shown) => {
+  if (shown) probe.open();
+}, { immediate: true });
+/* The probe does not need the fleet's lines, so its layer stays usable while
+ * they load or when their read failed. */
+const probeOnly = computed(() => probeLayer.value && !bootError.value && !!init.value);
 
 /*
  * Rotate, revoke and removing the link's expiry are confirmed in the page's
@@ -1590,6 +1616,7 @@ onBeforeUnmount(() => {
   stateSender?.dispose();
   stopLineWatch();
   void identityLink.open("");
+  probe.dispose();
   bridge?.dispose();
 });
 </script>
@@ -1641,7 +1668,7 @@ onBeforeUnmount(() => {
       <button class="icon-button" type="button" aria-label="Dismiss notice" title="Dismiss notice" @click="notice = ''"><X :size="15" /></button>
     </div>
 
-    <div v-if="loading" class="stack" role="status" :aria-label="`Loading ${routeMeta.title.toLowerCase()}`">
+    <div v-if="loading && !probeOnly" class="stack" role="status" :aria-label="`Loading ${routeMeta.title.toLowerCase()}`">
       <div class="skeleton-strip" aria-hidden="true">
         <div v-for="cell in 4" :key="cell"><span class="skeleton-bar short" /><span class="skeleton-bar tall" /></div>
       </div>
@@ -1655,7 +1682,7 @@ onBeforeUnmount(() => {
       <p class="empty-inline"><LoaderCircle class="spin" :size="14" /> Loading {{ routeMeta.title.toLowerCase() }}</p>
     </div>
 
-    <div v-else-if="(bootError || error) && !hasRouteData" class="empty-state failure-state" role="alert">
+    <div v-else-if="(bootError || error) && !hasRouteData && !probeOnly" class="empty-state failure-state" role="alert">
       <CircleAlert :size="26" aria-hidden="true" />
       <strong>{{ bootError ? 'This page has no console session' : `${routeMeta.title} could not be read` }}</strong>
       <p class="failure-reason">{{ bootError || error }}</p>
@@ -1664,7 +1691,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else-if="route === 'lines'">
-      <p class="proof-line" aria-live="polite">
+      <p v-if="!probeLayer || hasRouteData" class="proof-line" aria-live="polite">
         <span v-if="refreshedAt" :title="observed.title.value">observed {{ observed.age.value }} ago</span>
         <span v-else>not observed yet</span>
         <span>· {{ fleetSummary.nodes }} {{ fleetSummary.nodes === 1 ? 'node reports' : 'nodes report' }}</span>
@@ -1673,13 +1700,15 @@ onBeforeUnmount(() => {
         <span>· {{ livenessLine }}</span>
         <span v-if="refreshing">· refreshing</span>
       </p>
-      <nav v-reveal-selected="linesView" class="layer-tabs" role="tablist" aria-label="Lines layers">
+      <!-- Revealed again once the read lands: its counts widen the row and pushed a later tab (Probe) back out of view on a phone. -->
+      <nav v-reveal-selected="loading ? `${linesView}:loading` : linesView" class="layer-tabs" role="tablist" aria-label="Lines layers">
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'overview'" @click="linesView = 'overview'">Overview</button>
-        <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'lines'" @click="linesView = 'lines'">Lines<span class="lens-count">{{ fleetSummary.lines }}</span></button>
+        <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'lines'" @click="linesView = 'lines'">Lines<span v-if="!loading" class="lens-count">{{ fleetSummary.lines }}</span></button>
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'topology'" @click="linesView = 'topology'">Topology</button>
         <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'attention'" @click="linesView = 'attention'">
           Attention<span v-if="actionable.length" class="lens-count" :data-tone="attentionTone">{{ actionable.length }}</span>
         </button>
+        <button class="layer-tab" role="tab" type="button" :aria-selected="linesView === 'probe'" data-testid="probe-tab" @click="linesView = 'probe'">Probe</button>
       </nav>
       <section v-if="unresolvedDefs.length" class="data-panel overlay-strip" aria-label="Managed line rollout status">
         <div v-for="def in unresolvedDefs" :key="def.line_uuid" class="overlay-def">
@@ -1738,6 +1767,10 @@ onBeforeUnmount(() => {
             <p>The topology layer needs <span class="mono">lines.chains</span>, which this session's token does not carry. The Lines layer still shows every line and the node it dials.</p>
           </div>
         </section>
+      </div>
+
+      <div v-else-if="linesView === 'probe'" class="layer-body" role="tabpanel" aria-label="Probe">
+        <ProbePanel :probe="probe" />
       </div>
 
       <section v-else class="data-panel attention-panel" role="tabpanel" aria-labelledby="attention-title">

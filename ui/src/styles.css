@@ -946,3 +946,134 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
   .link-more { min-height: 44px; }
   .link-clients summary { box-sizing: border-box; min-height: 44px; padding-block: 12px; }
 }
+
+/* ── the Probe layer (ProbePanel.vue) ──────────────────────────────────
+   The form beside its result from 1100px, stacked below. The textarea is the
+   only place the pasted outbound is drawn; everything around it names lines,
+   columns, tags and fields. */
+.probe-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+/* Side by side, the result stays in view while the form below Run scrolls. */
+@media (min-width: 1100px) {
+  .probe-layout { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); }
+  .probe-result { position: sticky; top: var(--sp-4); }
+}
+.probe-editor-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-3); }
+.probe-editor-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--sp-2); margin-left: auto; }
+.probe-editor { display: grid; gap: var(--sp-2); padding: var(--sp-4) var(--sp-4) 0; }
+.probe-textarea { display: block; width: 100%; min-height: 248px; resize: vertical; border: 1px solid var(--border, #cfd4da); border-radius: var(--radius); padding: var(--sp-3); color: var(--foreground, #17191c); background: color-mix(in srgb, var(--muted, #eef0f2) 32%, var(--card, #fff)); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.6; tab-size: 2; outline: 0; }
+.probe-textarea:focus { border-color: var(--ring, #2c77b8); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring, #2c77b8) 22%, transparent); }
+.probe-textarea[aria-invalid="true"] { border-color: var(--tone-danger-border); }
+.probe-textarea[aria-invalid="true"]:focus { border-color: var(--tone-danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone-danger) 18%, transparent); }
+.probe-read { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; flex: 1 1 260px; min-height: 20px; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); line-height: 1.5; }
+.probe-read > svg { flex: 0 0 auto; }
+.probe-read > span { min-width: 0; flex: 1 1 200px; }
+.probe-read[data-tone="error"] { color: var(--tone-danger); }
+.probe-read[data-tone="ok"] { color: var(--tone-ok); }
+.probe-size { color: var(--muted-foreground, #65707b); font-family: var(--font-mono); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.probe-link { border: 0; padding: 0; color: var(--primary, #1769aa); background: transparent; font-size: var(--text-xs); font-weight: 620; text-decoration: underline; text-underline-offset: 2px; }
+.probe-outbounds { display: grid; gap: var(--sp-1); margin: var(--sp-3) var(--sp-4) 0; padding: 0; list-style: none; }
+.probe-outbounds li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); min-width: 0; padding: 6px var(--sp-3); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); font-size: var(--text-xs); }
+.probe-outbounds li[data-tested="true"] { border-color: var(--tone-info-border); background: var(--tone-info-surface); }
+.probe-outbounds strong { font-weight: 650; overflow-wrap: anywhere; }
+.probe-outbounds .muted { font-size: var(--text-2xs); overflow-wrap: anywhere; }
+.probe-outbounds small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); }
+.probe-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); padding: var(--sp-4); }
+.probe-wide { grid-column: 1 / -1; }
+fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
+.probe-targets legend { margin-bottom: var(--sp-1); padding: 0; font-size: var(--text-xs); font-weight: 620; }
+.probe-target-list { display: grid; gap: var(--sp-1); }
+.probe-check { display: flex; min-width: 0; min-height: 34px; align-items: center; gap: var(--sp-2); padding: 6px var(--sp-3); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); background: var(--card, #fff); font-size: var(--text-xs); cursor: pointer; }
+.probe-check:has(input:checked) { border-color: var(--tone-info-border); }
+.probe-check .mono { white-space: nowrap; }
+.probe-check input { width: 15px; height: 15px; min-height: 0; flex: 0 0 auto; margin: 0; padding: 0; }
+.probe-options select, .probe-options input[type="number"] { font-size: var(--text-sm); }
+.probe-check small { min-width: 0; margin-left: auto; overflow: hidden; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.probe-switches { display: grid; align-content: start; gap: var(--sp-3); }
+.probe-switch { display: flex; align-items: flex-start; gap: var(--sp-2); font-size: var(--text-xs); cursor: pointer; }
+.probe-switch input { width: 16px; height: 16px; flex: 0 0 auto; margin: 1px 0 0; }
+.probe-switch span { display: grid; gap: 2px; }
+.probe-switch strong { font-weight: 620; }
+.probe-switch small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); line-height: 1.45; }
+.probe-run { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border, #d9dde2); }
+.probe-run-note { display: inline-flex; min-width: 0; flex: 1 1 220px; align-items: center; gap: var(--sp-1); margin: 0; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); line-height: 1.5; }
+.probe-health { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); font-size: var(--text-xs); }
+.probe-health .mono { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); }
+.probe-result > .explain-panel { margin: var(--sp-4) var(--sp-4) 0; border: 1px solid; border-radius: var(--radius); }
+.probe-result-body { display: grid; gap: var(--sp-4); padding: var(--sp-4); }
+.probe-running, .probe-failure { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); font-size: var(--text-sm); }
+.probe-running { border-style: dashed; color: var(--muted-foreground, #65707b); }
+.probe-running > div, .probe-failure > div { min-width: 0; flex: 1 1 auto; }
+.probe-running strong, .probe-failure strong { display: block; color: var(--foreground, #17191c); font-weight: 650; overflow-wrap: anywhere; }
+.probe-running p, .probe-failure p { margin: var(--sp-1) 0 0; line-height: 1.55; overflow-wrap: anywhere; }
+.probe-failure > svg { flex: 0 0 auto; margin-top: 1px; }
+.probe-failure[data-tone="error"] { color: var(--tone-danger); border-color: var(--tone-danger-border); background: var(--tone-danger-surface); }
+.probe-failure[data-tone="warning"] { color: var(--tone-warn); border-color: var(--tone-warn-border); background: var(--tone-warn-surface); }
+.probe-failure[data-tone="info"] { color: var(--tone-info); border-color: var(--tone-info-border); background: var(--tone-info-surface); }
+.probe-failure p { color: var(--foreground, #17191c); }
+.probe-failure p.muted { color: var(--muted-foreground, #65707b); }
+.probe-verdict { display: grid; gap: var(--sp-1); padding: var(--sp-3) var(--sp-4); border-left: 3px solid var(--tone-danger); border-radius: 0 var(--radius) var(--radius) 0; background: var(--tone-danger-surface); }
+.probe-verdict strong { color: var(--tone-danger); font-size: var(--text-lg); font-weight: 660; }
+.probe-verdict[data-tone="success"] { border-left-color: var(--tone-ok); background: var(--tone-ok-surface); }
+.probe-verdict[data-tone="success"] strong { color: var(--tone-ok); }
+.probe-verdict[data-tone="warning"] { border-left-color: var(--tone-warn); background: var(--tone-warn-surface); }
+.probe-verdict[data-tone="warning"] strong { color: var(--tone-warn); }
+.probe-verdict p { margin: 0; max-width: var(--measure); font-size: var(--text-sm); line-height: 1.55; }
+.probe-error { display: block; margin-top: var(--sp-1); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius-sm); color: var(--foreground, #17191c); background: color-mix(in srgb, var(--card, #fff) 72%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* The four questions a test answers, joined left to right. A segment turns
+   green once the step it leads into passed, so the break is where the line
+   stops being green. */
+.probe-track { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); margin: 0; padding: var(--sp-1) 0 0; list-style: none; }
+.probe-track li { position: relative; display: grid; min-width: 0; justify-items: center; gap: 2px; text-align: center; }
+.probe-track li + li::before { position: absolute; top: 11px; right: calc(50% + 14px); width: calc(100% - 28px + var(--sp-2)); height: 2px; border-radius: 1px; background: var(--border, #d9dde2); content: ""; }
+.probe-track li[data-state="pass"]::before, .probe-track li[data-state="partial"]::before { background: var(--tone-ok); }
+.probe-step-mark { display: grid; width: 24px; height: 24px; place-items: center; border: 2px solid var(--border, #d9dde2); border-radius: 50%; color: var(--card, #fff); background: var(--card, #fff); }
+.probe-track li[data-state="pass"] .probe-step-mark { border-color: var(--tone-ok); background: var(--tone-ok); }
+.probe-track li[data-state="partial"] .probe-step-mark, .probe-track li[data-state="timeout"] .probe-step-mark { border-color: var(--tone-warn); background: var(--tone-warn); }
+.probe-track li[data-state="fail"] .probe-step-mark { border-color: var(--tone-danger); background: var(--tone-danger); }
+.probe-track li[data-state="skip"] .probe-step-mark { border-style: dashed; }
+.probe-track strong { margin-top: var(--sp-1); font-size: var(--text-xs); font-weight: 650; }
+.probe-track small { max-width: 100%; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); line-height: 1.35; overflow-wrap: anywhere; }
+.probe-track li[data-state="skip"] strong { color: var(--muted-foreground, #65707b); font-weight: 600; }
+.probe-track li[data-state="fail"] small { color: var(--tone-danger); }
+.probe-track li[data-state="timeout"] small, .probe-track li[data-state="partial"] small { color: var(--tone-warn); }
+
+.probe-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3) var(--sp-4); margin: 0; padding: var(--sp-3); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); }
+.probe-facts > div { min-width: 0; }
+.probe-facts dt { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-weight: 650; text-transform: uppercase; }
+.probe-facts dd { margin: 2px 0 0; font-size: var(--text-sm); font-weight: 620; font-variant-numeric: tabular-nums; }
+.probe-facts dd small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-weight: 400; overflow-wrap: anywhere; }
+.probe-result .table-wrap { border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); }
+/* Eight columns, six of them short figures: it fits the result column from 1100px and scrolls sideways on a phone. */
+.probe-table { min-width: 540px; }
+.probe-table th, .probe-table td { padding-right: var(--sp-2); padding-left: var(--sp-2); }
+.probe-table th.sticky-first, .probe-table td.sticky-first, .probe-target-error td { padding-left: var(--sp-3); }
+/* Two header rows over a few target rows: nothing to keep in view. */
+.probe-table thead th { position: static; box-shadow: none; }
+.probe-table thead th.sticky-first { position: sticky; }
+.probe-table th.probe-group { border-left: 1px solid var(--border, #d9dde2); text-align: center; }
+.probe-table td.sticky-first strong { white-space: nowrap; }
+/* One tbody per target: the row, and under it the probe's line when it has one. */
+.probe-table tbody tr:last-child td { border-bottom: 1px solid var(--border, #e3e6e9); }
+.probe-table tbody:last-child tr:last-child td { border-bottom: 0; }
+.probe-table tbody tr:has(+ .probe-target-error) td { border-bottom: 0; }
+.probe-no-sample { color: var(--muted-foreground, #65707b); font-size: var(--text-xs); text-align: center; }
+.probe-target-error td { padding-top: 0; font-size: var(--text-xs); }
+/* The line stays inside the window while the table scrolls sideways. */
+.probe-target-error span { position: sticky; left: var(--sp-3); display: inline-block; max-width: min(560px, calc(100vw - 96px)); line-height: 1.5; overflow-wrap: anywhere; }
+.probe-proof { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); margin: 0; color: var(--muted-foreground, #65707b); font-family: var(--font-mono); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+.probe-empty { min-height: 260px; }
+
+@media (max-width: 620px) {
+  .probe-options { grid-template-columns: 1fr; }
+  .probe-run .button { flex: 1 1 auto; }
+  .probe-result > .explain-panel { flex-direction: column; gap: var(--sp-2); }
+}
+@media (pointer: coarse) {
+  .probe-keys { display: none; }
+  .probe-check, .probe-switch, .probe-link { min-height: 44px; }
+  .probe-switch { align-items: center; }
+  .probe-switch input, .probe-check input { width: 20px; height: 20px; }
+  /* At 16px a phone does not zoom the page when the field takes focus. */
+  .probe-textarea, .probe-options select, .probe-options input[type="number"] { font-size: 16px; }
+}
