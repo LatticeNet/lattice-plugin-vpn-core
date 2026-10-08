@@ -17,7 +17,7 @@ const read = (file: string) => readFileSync(fileURLToPath(new URL(file, import.m
 
 describe("a pasted outbound stays in the Probe layer", () => {
   it("is never written to page state, the address, storage, the console log or another message", () => {
-    for (const file of ["./probe.ts", "./ProbePanel.vue", "./probeModel.ts"]) {
+    for (const file of ["./probe.ts", "./ProbePanel.vue", "./probeModel.ts", "./textareaCaret.ts"]) {
       const source = read(file);
       expect(source, file).not.toMatch(/sendState|history\.|location\.|localStorage|sessionStorage|indexedDB|console\.(log|info|warn|error|debug)/);
       expect(source, file).not.toMatch(/postMessage|\.copy\(/);
@@ -30,6 +30,13 @@ describe("a pasted outbound stays in the Probe layer", () => {
       expect(read(file), file).not.toMatch(/\.draft\b|useProbe|\bprobe\.[a-z]/);
     }
     expect(read("./App.vue")).not.toMatch(/probe\.draft|probe\.request|probe\.read\b/);
+  });
+
+  it("is laid out for Show in editor only with its letters and digits masked", () => {
+    // The unseen copy that measures where a fault is drawn holds the masked value, never el.value itself.
+    const caret = read("./textareaCaret.ts");
+    expect(caret).toMatch(/const masked = maskForLayout\(el\.value\);/);
+    expect(caret).not.toMatch(/textContent = el\.value/);
   });
 
   it("is never quoted from the engine's own parse error", () => {

@@ -252,11 +252,11 @@ describe("the run request", () => {
   });
 
   it("sends the outbounds field for field, with every option the probe reads", () => {
-    const built = buildProbeRequest(chainRead, options({ test: "relay", targets: ["apple-success", "gstatic-204"], samples: 3, udp: false }), TARGETS);
+    const built = buildProbeRequest(chainRead, options({ test: "exit", targets: ["apple-success", "gstatic-204"], samples: 3, udp: false }), TARGETS);
     if (!built.ok) throw new Error(built.message);
     expect(built.request).toEqual({
       outbounds: [exit, relay],
-      test: "relay",
+      test: "exit",
       // In the probe's order, not the click order.
       targets: ["gstatic-204", "apple-success"],
       samples: 3,
@@ -266,6 +266,24 @@ describe("the run request", () => {
       timeout_ms: PROBE_TIMEOUT_MS,
     });
     expect(built.bytes).toBe(utf8Length(JSON.stringify(built.request)));
+  });
+
+  it("sends only the tested outbound and the hops it passes through, in paste order", () => {
+    const ids = (built: ReturnType<typeof buildProbeRequest>) => (built.ok ? built.request.outbounds.map((item) => item.tag) : built.message);
+    // Testing the first hop alone leaves the exit behind, whatever is wrong with it.
+    expect(ids(buildProbeRequest(chainRead, options({ test: "relay" }), TARGETS))).toEqual(["relay"]);
+    expect(ids(buildProbeRequest(chainRead, options({ test: "exit" }), TARGETS))).toEqual(["exit", "relay"]);
+    expect(ids(buildProbeRequest(readDraft(JSON.stringify([relay, exit])), options({ test: "exit" }), TARGETS))).toEqual(["relay", "exit"]);
+    // Independent exits: one tested, the others neither sent nor checked by the probe.
+    const hk = { type: "trojan", tag: "hk-exit", server: "198.51.100.10", server_port: 443, password: "hk-only-secret" };
+    const jp = { type: "trojan", tag: "jp-exit", server: "198.51.100.11", server_port: 443, password: "jp-only-secret" };
+    const lab = { type: "shadowsocks", tag: "lab-box", server: "10.0.0.5", server_port: 8388, method: "aes-128-gcm", password: "lab-only-secret" };
+    const set = buildProbeRequest(readDraft(JSON.stringify([hk, jp, lab])), options({ test: "hk-exit" }), TARGETS);
+    expect(ids(set)).toEqual(["hk-exit"]);
+    const body = set.ok ? JSON.stringify(set.request) : "";
+    expect(body).toContain("hk-only-secret");
+    expect(body).not.toMatch(/jp-only-secret|lab-only-secret|10\.0\.0\.5/);
+    expect(set.ok && set.bytes).toBe(utf8Length(body));
   });
 
   it("gives the probe its default deadline, its maximum for a download, and waits past the server's 36 s", () => {
@@ -358,9 +376,22 @@ describe("what an answer means", () => {
       expect(verdictOf(result({ stage, valid: stage !== "decode" && stage !== "create" })).title, stage).toMatch(title);
     }
     expect(verdictOf(result({ stage: "timeout" })).tone).toBe("warning");
-    expect(verdictOf(result({ stage: "timeout" }), 30_000).detail).toMatch(/^The probe stopped after 30 s,/);
+    expect(verdictOf(result({ stage: "timeout" }), { timeoutMs: 30_000 }).detail).toMatch(/^The probe stopped after 30 s,/);
     expect(verdictOf(result({ stage: "handshake" })).tone).toBe("error");
     expect(verdictOf(result({ stage: "quic_retry" })).title).toMatch(/stage quic_retry/);
+  });
+
+  it("does not say works when an asked-for UDP query or download failed", () => {
+    const udpDown = result({ udp: { ok: false, error: "read udp: i/o timeout" } });
+    expect(verdictOf(udpDown, { udp: true })).toMatchObject({ tone: "warning", title: "Works for HTTP, UDP failed", detail: expect.stringMatching(/^Every request through it answered\. The DNS query over UDP did not answer/) });
+    expect(verdictOf(result(), { throughput: true })).toMatchObject({ tone: "warning", title: "Works for HTTP, the download failed" });
+    expect(verdictOf(udpDown, { udp: true, throughput: true }).title).toBe("Works for HTTP, UDP and the download failed");
+    expect(verdictOf(result({ udp: { ok: false, error: "" }, targets: [{ id: "a", ok: 3, of: 5, error: "" }] }), { udp: true }))
+      .toMatchObject({ tone: "warning", title: "Works with losses, and UDP failed", detail: expect.stringContaining("3 of 5 requests") });
+    // Not asked, or not relayed by the protocol (no udp answer at all), is no failure.
+    expect(verdictOf(udpDown).tone).toBe("success");
+    expect(verdictOf(result(), { udp: true })).toMatchObject({ tone: "success", title: "Works" });
+    expect(verdictOf(result({ throughput: { bytes: 1_000_000, seconds: 0.2, mbps: 40 } }), { throughput: true }).tone).toBe("success");
   });
 
   const states = (value: ProbeResult) => stageTrack(value).map((step) => step.state);
@@ -416,10 +447,23 @@ describe("the figures beside the verdict", () => {
       .toMatchObject({ value: "Failed", note: "i/o timeout" });
   });
 
+  it("marks a failed or missing figure with a tone, and leaves measured ones plain", () => {
+    const tones = (value: ProbeResult, asked = { udp: true, throughput: true }) =>
+      Object.fromEntries(resultFacts(value, asked).map((fact) => [fact.key, fact.tone]));
+    expect(tones(full)).toEqual({ server: undefined, exit: undefined, udp: undefined, throughput: undefined });
+    expect(tones(result({ udp: { ok: false, error: "read udp: i/o timeout" } }))).toEqual({ server: undefined, exit: "warning", udp: "error", throughput: "error" });
+    expect(resultFacts(result(), { udp: false, throughput: true }).find((fact) => fact.key === "throughput"))
+      .toMatchObject({ value: "Failed", note: "the download did not finish", tone: "error" });
+    // A protocol that relays no UDP was not failed by the line.
+    expect(tones(result(), { udp: true, throughput: false }).udp).toBeUndefined();
+    expect(tones(result({ stage: "timeout" }), { udp: true, throughput: true })).toMatchObject({ udp: "warning", throughput: "warning" });
+    expect(tones(result({ stage: "server", server: { address: "x:1", reachable: false, network: "tcp" } })).server).toBe("error");
+  });
+
   it("lists nothing past the failing stage", () => {
     expect(keys(resultFacts(result({ stage: "handshake", targets: [] }), { udp: true, throughput: true }))).toEqual(["server"]);
     expect(resultFacts(result({ stage: "server", server: { address: "203.0.113.7:443", reachable: false, network: "tcp" } }), { udp: true, throughput: true }))
-      .toEqual([{ key: "server", label: "Server", value: "203.0.113.7:443", mono: true, note: "no answer over tcp" }]);
+      .toEqual([{ key: "server", label: "Server", value: "203.0.113.7:443", mono: true, note: "no answer over tcp", tone: "error" }]);
     expect(resultFacts(result({ stage: "decode", valid: false, server: undefined }), { udp: true, throughput: true })).toEqual([]);
     expect(resultFacts(result({ stage: "timeout" }), { udp: true, throughput: false }).find((fact) => fact.key === "udp")?.note).toBe("the test ran out of time first");
   });

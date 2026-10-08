@@ -7,15 +7,17 @@
  * forwards to lattice-probe over its unix socket): health and targets when
  * the layer first opens, run when the operator asks.
  *
- * The pasted outbound is held in `draft` only. It leaves the frame once per
- * run, as that call's payload, and never enters page state, the address,
- * storage, a log, or any message this page builds. Results live in page
- * memory and go with the page.
+ * The pasted outbound is held in `draft`, and for UNDO_CLEAR_MS after Clear
+ * in the Undo slot. The tested outbound and its hops leave the frame once
+ * per run, as that call's payload; nothing pasted enters page state, the
+ * address, storage, a log, or any message this page builds. Results live in
+ * page memory and go with the page.
  */
-import { computed, ref, shallowRef } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 
 import {
   buildProbeRequest,
+  chainPath,
   classifyRunError,
   keepTestTag,
   outboundLabel,
@@ -63,6 +65,8 @@ export interface Tested {
 }
 
 const READ_TIMEOUT_MS = 10_000;
+/** How long Clear can be undone before the paste is gone for good. */
+export const UNDO_CLEAR_MS = 10_000;
 
 export function useProbe(deps: ProbeDeps) {
   const now = deps.now ?? (() => Date.now());
@@ -73,6 +77,8 @@ export function useProbe(deps: ProbeDeps) {
   /** The operator's pick, kept while the paste still has that tag. */
   const chosenTest = ref("");
   const test = computed(() => keepTestTag(outbounds.value, chosenTest.value));
+  /** The tags a run sends: the tested outbound and the hops it passes through. */
+  const sent = computed(() => new Set(chainPath(outbounds.value, test.value).tags));
   const chosenTargets = ref<string[]>([]);
   const samples = ref(SAMPLES_DEFAULT);
   const udp = ref(true);
@@ -235,15 +241,55 @@ export function useProbe(deps: ProbeDeps) {
     phase.value = "failed";
   }
 
-  /** Forget the paste and the result. */
+  /*
+   * Clear sets the textarea's value from here, so the browser's own undo
+   * cannot bring a hand-edited paste back. The Undo slot can, until the next
+   * edit or UNDO_CLEAR_MS, whichever is first; then the paste is gone.
+   */
+  const undoable = ref(false);
+  let undoDraft = "";
+  let undoTest = "";
+  let undoTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function dropUndo(): void {
+    if (undoTimer !== undefined) clearTimeout(undoTimer);
+    undoTimer = undefined;
+    undoDraft = "";
+    undoTest = "";
+    undoable.value = false;
+  }
+  // Anything typed or pasted after Clear is the new draft; the old one is not offered back over it.
+  watch(draft, (value) => {
+    if (value) dropUndo();
+  });
+
+  /** Forget the paste and the result. The paste can come back with undoClear for a few seconds. */
   function clear(): void {
     cancel();
+    dropUndo();
+    if (draft.value) {
+      undoDraft = draft.value;
+      undoTest = chosenTest.value;
+      undoable.value = true;
+      undoTimer = setTimeout(dropUndo, UNDO_CLEAR_MS);
+    }
     draft.value = "";
     chosenTest.value = "";
     result.value = undefined;
     tested.value = undefined;
     failure.value = undefined;
     phase.value = "idle";
+  }
+
+  /** Put back the paste Clear took, while it still can. */
+  function undoClear(): boolean {
+    if (!undoable.value) return false;
+    const text = undoDraft;
+    const pick = undoTest;
+    dropUndo();
+    draft.value = text;
+    chosenTest.value = pick;
+    return true;
   }
 
   /** Re-indent a paste that reads, so a minified outbound can be checked by eye. */
@@ -256,6 +302,7 @@ export function useProbe(deps: ProbeDeps) {
 
   function dispose(): void {
     cancel();
+    dropUndo();
     draft.value = "";
   }
 
@@ -265,6 +312,7 @@ export function useProbe(deps: ProbeDeps) {
     outbounds,
     chosenTest,
     test,
+    sent,
     chosenTargets,
     samples,
     udp,
@@ -293,6 +341,8 @@ export function useProbe(deps: ProbeDeps) {
     run,
     cancel,
     clear,
+    undoable,
+    undoClear,
     format,
     dispose,
   };

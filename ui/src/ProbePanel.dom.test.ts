@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick } from "vue";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ProbePanel from "./ProbePanel.vue";
-import { useProbe, type ProbeDeps } from "./probe";
+import { UNDO_CLEAR_MS, useProbe, type ProbeDeps } from "./probe";
 import type { ProbeMethod } from "./probeModel";
 import { probeHandlers, SAMPLE_CHAIN, type ProbeScenario } from "../dev/probeFixtures";
 
@@ -22,7 +22,11 @@ const settle = async () => {
 
 afterEach(() => {
   document.body.innerHTML = "";
+  vi.useRealTimers();
 });
+
+/** True when `first` comes before `second` in the document, the order a reader and a screen reader meet them. */
+const before = (first: Element, second: Element) => !!(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 
 interface MountOptions {
   scenario?: ProbeScenario;
@@ -80,10 +84,16 @@ describe("the Probe layer's states", () => {
     expect(q<HTMLInputElement>("probe-throughput")!.checked).toBe(false);
   });
 
-  it("probe unavailable: says why, keeps the editor, and will not run", async () => {
+  it("probe unavailable: says why above the editor, keeps the editor, and will not run", async () => {
     const { q, paste, calls } = await mount({ scenario: "unavailable" });
     expect(q("probe-unavailable")?.textContent).toMatch(/not running on this control plane/);
     expect(q("probe-unavailable")?.textContent).toMatch(/probe\.sock/);
+    // Stacked on a phone, the reason comes before the form, not under it.
+    expect(before(q("probe-unavailable")!, q("probe-editor")!)).toBe(true);
+    const healthReads = calls.filter((call) => call.method === "health").length;
+    [...q("probe-unavailable")!.querySelectorAll("button")].find((button) => button.textContent?.includes("Check again"))!.click();
+    await settle();
+    expect(calls.filter((call) => call.method === "health")).toHaveLength(healthReads + 1);
     expect(q("probe-health")?.textContent).toMatch(/Probe unavailable/);
     await paste(JSON.stringify(RELAY));
     expect(q<HTMLButtonElement>("probe-run")!.disabled).toBe(true);
@@ -194,14 +204,37 @@ describe("the Probe layer's states", () => {
     expect(second.textContent).not.toMatch(/0\.0/);
   });
 
-  it("rate limited: says so with the server's retry time, and offers to run again", async () => {
+  it("rate limited: says so with the server's retry time, and does not invite a run it would refuse", async () => {
     const { q, paste, run } = await mount({ scenario: "limited" });
     await paste(JSON.stringify(RELAY));
     await run();
     expect(q("probe-failure")?.dataset.kind).toBe("rate_limited");
     expect(q("probe-failure")?.textContent).toMatch(/Rate limited/);
     expect(q("probe-failure")?.textContent).toMatch(/next run is allowed in 14 minutes/);
-    expect(q("probe-failure")?.textContent).toMatch(/Run again/);
+    expect(q("probe-failure")?.textContent).not.toMatch(/Run again/);
+  });
+
+  it("a health read that failed is said above the editor too", async () => {
+    const { q } = await mount({ answers: { health: () => Promise.reject(new Error("upstream 502")) } });
+    expect(q("probe-health-error")?.textContent).toMatch(/upstream 502/);
+    expect(before(q("probe-health-error")!, q("probe-editor")!)).toBe(true);
+  });
+
+  it("an HTTP pass with a failed UDP query and download is a warning, and the failed figures say so", async () => {
+    const { q, paste, run } = await mount({ scenario: "degraded" });
+    await paste(JSON.stringify(SAMPLE_CHAIN));
+    q<HTMLInputElement>("probe-throughput")!.click();
+    await settle();
+    await run();
+    const verdict = q("probe-verdict")!;
+    expect(verdict.dataset.stage).toBe("ok");
+    expect(verdict.dataset.tone).toBe("warning");
+    expect(verdict.querySelector("strong")?.textContent).toBe("Works for HTTP, UDP and the download failed");
+    const udp = q("probe-facts")!.querySelector<HTMLElement>("[data-fact=udp]")!;
+    expect(udp.dataset.tone).toBe("error");
+    expect(udp.textContent).toMatch(/Failed\s*read udp: i\/o timeout/);
+    expect(q("probe-facts")!.querySelector<HTMLElement>("[data-fact=throughput]")?.dataset.tone).toBe("error");
+    expect(q("probe-facts")!.querySelector<HTMLElement>("[data-fact=exit]")?.dataset.tone).toBeUndefined();
   });
 
   it("policy refusal: says what the probe refused and does not invite the same run again", async () => {
@@ -219,6 +252,9 @@ describe("the Probe layer's states", () => {
     await timedOut.run();
     expect(timedOut.q("probe-failure")?.dataset.kind).toBe("timeout");
     expect(timedOut.q("probe-failure")?.textContent).toMatch(/console stopped waiting/);
+    // A new run measures again; it does not fetch the answer the console gave up on.
+    expect(timedOut.q("probe-failure")?.textContent).toMatch(/cannot be recovered\. Running again starts a new test/);
+    expect(timedOut.q("probe-failure")?.textContent).not.toMatch(/run it again to see/);
     timedOut.unmount();
     document.body.innerHTML = "";
 
@@ -227,6 +263,61 @@ describe("the Probe layer's states", () => {
     await garbled.run();
     expect(garbled.q("probe-failure")?.dataset.kind).toBe("failed");
     expect(garbled.q("probe-failure")?.textContent).toMatch(/not a probe result/);
+  });
+
+  it("keeps the keyboard's focus on one button as Run turns into Cancel and back", async () => {
+    let resolve: (value: unknown) => void = () => {};
+    const { q, paste } = await mount({ answers: { run: () => new Promise((done) => { resolve = done; }) } });
+    await paste(JSON.stringify(RELAY));
+    const button = q<HTMLButtonElement>("probe-run")!;
+    button.focus();
+    button.click();
+    await settle();
+    expect(q("probe-cancel")).toBe(button);
+    expect(button.textContent).toMatch(/Cancel/);
+    expect(document.activeElement).toBe(button);
+    resolve(probeHandlers("ok")["probe/run"]!({ outbounds: [RELAY], test: "relay", targets: ["gstatic-204"], samples: 5 }));
+    await settle();
+    expect(q("probe-verdict")).not.toBeNull();
+    expect(q("probe-run")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    // The same key press starts a run and stops it.
+    button.click();
+    await settle();
+    button.click();
+    await settle();
+    expect(q("probe-failure")?.dataset.kind).toBe("cancelled");
+    expect(document.activeElement).toBe(button);
+    // Run again leaves with its card; the focus goes to the button that now cancels.
+    q<HTMLButtonElement>("probe-run-again")!.click();
+    await settle();
+    expect(q("probe-cancel")).toBe(button);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("announces the start and the end once each, and keeps the clock and the figures out of live regions", async () => {
+    let resolve: (value: unknown) => void = () => {};
+    const { q, paste, run } = await mount({ answers: { run: () => new Promise((done) => { resolve = done; }) } });
+    const live = () => [...q("probe-result")!.querySelectorAll<HTMLElement>("[aria-live], [role=status], [role=alert]")];
+    await paste(JSON.stringify(SAMPLE_CHAIN));
+    await run();
+    expect(live()).toEqual([q("probe-announce")]);
+    expect(q("probe-announce")?.textContent).toBe("Testing exit (vless) via relay");
+    // The running block with its ticking seconds is not announced.
+    expect(q("probe-running")?.closest("[aria-live], [role=status], [role=alert]")).toBeNull();
+    resolve(probeHandlers("ok")["probe/run"]!({ outbounds: SAMPLE_CHAIN, test: "exit", targets: ["gstatic-204"], samples: 5, udp: true }));
+    await settle();
+    expect(q("probe-announce")?.textContent).toBe("Works");
+    expect(live()).toEqual([q("probe-announce")]);
+    expect(q("probe-targets-table")?.closest("[aria-live], [role=status], [role=alert]")).toBeNull();
+  });
+
+  it("announces a failed run with its reason", async () => {
+    const { q, paste, run } = await mount({ scenario: "limited" });
+    await paste(JSON.stringify(RELAY));
+    await run();
+    expect(q("probe-announce")?.textContent).toMatch(/^Rate limited\. Probe runs are limited to 120 per hour/);
+    expect(q("probe-failure")?.getAttribute("role")).toBeNull();
   });
 
   it("targets that cannot be read say so and can be read again", async () => {
@@ -255,6 +346,46 @@ describe("the editor", () => {
     expect(q("probe-outbounds")?.querySelector('[data-tested="true"]')?.textContent).toMatch(/exit/);
   });
 
+  it("Show in editor scrolls to where a wrapped fault is drawn, without copying the paste", async () => {
+    const { q, paste } = await mount();
+    // Minified, with the comma between the two outbounds gone: one logical line, the fault far along it.
+    const text = JSON.stringify(SAMPLE_CHAIN).replace('"relay"},{', '"relay"}{');
+    await paste(text);
+    expect(q("probe-read")?.textContent).toMatch(/Line 1, column \d+: Expected a comma or a closing bracket/);
+    const editor = q<HTMLTextAreaElement>("probe-editor")!;
+    let top = 0;
+    Object.defineProperty(editor, "scrollTop", { configurable: true, get: () => top, set: (value: number) => { top = value; } });
+    Object.defineProperty(editor, "clientHeight", { configurable: true, value: 270 });
+    Object.defineProperty(editor, "clientWidth", { configurable: true, value: 300 });
+    // jsdom lays nothing out: a 40-column, 18px-line wrap stands in for the browser's.
+    const laidOut: string[] = [];
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop")!;
+    Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+      configurable: true,
+      get(this: HTMLElement) {
+        const copy = this.parentElement;
+        if (copy?.getAttribute("aria-hidden") !== "true") return 0;
+        laidOut.push(copy.textContent ?? "");
+        return 12 + Math.floor((copy.textContent!.length - 1) / 40) * 18;
+      },
+    });
+    try {
+      q<HTMLButtonElement>("probe-show-fault")!.click();
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "offsetTop", original);
+    }
+    const offset = text.indexOf("}{") + 1;
+    expect(editor.selectionStart).toBe(offset);
+    expect(top).toBe(12 + Math.floor(offset / 40) * 18 - 270 / 3);
+    expect(top).toBeGreaterThan(0);
+    // The copy measured had the paste's shape and none of its credentials, and it is gone.
+    expect(laidOut).toHaveLength(1);
+    expect(laidOut[0]).toHaveLength(offset + 1);
+    expect(laidOut[0]).not.toContain(UUID);
+    expect(laidOut[0]).not.toMatch(/vless|relay|198\.51/);
+    expect(document.body.querySelector("div[aria-hidden=true]")).toBeNull();
+  });
+
   it("Run on a broken paste names the fault and selects it inside the textarea", async () => {
     const { q, paste, run, calls } = await mount();
     const text = '{\n  "type": "vless",\n  "tag": "exit",\n  "server": "198.51.100.24"\n  "server_port": 443\n}';
@@ -271,17 +402,25 @@ describe("the editor", () => {
     expect(document.activeElement).toBe(editor);
   });
 
-  it("picks the chain's end, lets the operator test another hop, and sends that tag", async () => {
+  it("picks the chain's end, lets the operator test another hop, and sends that hop alone", async () => {
     const { q, paste, run, calls } = await mount();
     await paste(JSON.stringify(SAMPLE_CHAIN));
     const picker = q<HTMLSelectElement>("probe-test")!;
     expect(picker.value).toBe("exit");
     expect([...picker.options].map((option) => option.textContent)).toEqual(["exit (vless) via relay", "relay (shadowsocks)"]);
+    expect(q("probe-outbounds")?.querySelectorAll('[data-sent="true"]')).toHaveLength(2);
     picker.value = "relay";
     picker.dispatchEvent(new Event("change"));
     await settle();
+    // The exit stays in the editor, marked as left out of the run.
+    const exitRow = q("probe-outbounds")!.querySelectorAll<HTMLElement>("li")[0]!;
+    expect(exitRow.dataset.sent).toBe("false");
+    expect(exitRow.textContent).toMatch(/not in this test/);
     await run();
-    expect(calls.find((call) => call.method === "run")?.payload.test).toBe("relay");
+    const sent = calls.find((call) => call.method === "run")!.payload;
+    expect(sent.test).toBe("relay");
+    expect(sent.outbounds).toEqual([RELAY]);
+    expect(JSON.stringify(sent)).not.toContain(UUID);
   });
 
   it("hides the picker for one outbound, and Ctrl+Enter runs from the textarea", async () => {
@@ -343,6 +482,47 @@ describe("the editor", () => {
     expect(q<HTMLTextAreaElement>("probe-editor")!.value).toBe("");
     expect(q("probe-verdict")).toBeNull();
     expect(q("probe-empty")).not.toBeNull();
+  });
+
+  it("Clear can be undone until the next edit or for a few seconds, and the focus goes to Undo", async () => {
+    const { q, paste, probe } = await mount();
+    const text = JSON.stringify(SAMPLE_CHAIN);
+    await paste(text);
+    const picker = q<HTMLSelectElement>("probe-test")!;
+    picker.value = "relay";
+    picker.dispatchEvent(new Event("change"));
+    await settle();
+    q<HTMLButtonElement>("probe-clear")!.click();
+    await settle();
+    expect(probe.draft.value).toBe("");
+    expect(q("probe-read")?.textContent).toMatch(/Cleared\./);
+    expect(document.activeElement).toBe(q("probe-undo-clear"));
+    q<HTMLButtonElement>("probe-undo-clear")!.click();
+    await settle();
+    expect(probe.draft.value).toBe(text);
+    expect(probe.test.value).toBe("relay");
+    expect(q("probe-undo-clear")).toBeNull();
+    expect(document.activeElement).toBe(q("probe-clear"));
+
+    // Something typed after Clear is the new draft; the old one is not offered back over it.
+    q<HTMLButtonElement>("probe-clear")!.click();
+    await settle();
+    await paste("{");
+    await paste("");
+    expect(q("probe-undo-clear")).toBeNull();
+    expect(probe.undoClear()).toBe(false);
+
+    // And the offer runs out.
+    await paste(text);
+    vi.useFakeTimers();
+    q<HTMLButtonElement>("probe-clear")!.click();
+    await settle();
+    expect(q("probe-undo-clear")).not.toBeNull();
+    vi.advanceTimersByTime(UNDO_CLEAR_MS);
+    await settle();
+    expect(q("probe-undo-clear")).toBeNull();
+    expect(probe.undoClear()).toBe(false);
+    expect(probe.draft.value).toBe("");
   });
 
   it("Format re-indents a paste that reads, and only that", async () => {

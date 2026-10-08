@@ -9,7 +9,7 @@
  * textarea opts out of spell checking, autocorrect and password managers,
  * some of which send what they read to a server.
  */
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Activity, CircleAlert, Clock, KeyRound, ListRestart, LoaderCircle, Minus, Play, RefreshCw, Trash2, X, Check } from "@lucide/vue";
 
 import type { ProbeState } from "./probe";
@@ -30,6 +30,7 @@ import {
   verdictOf,
   type BuildResult,
 } from "./probeModel";
+import { revealOffset } from "./textareaCaret";
 
 const props = defineProps<{ probe: ProbeState }>();
 
@@ -40,13 +41,16 @@ const editor = ref<HTMLTextAreaElement>();
 const samplesInput = ref<HTMLInputElement>();
 const targetList = ref<HTMLElement>();
 const resultPanel = ref<HTMLElement>();
+const runButton = ref<HTMLButtonElement>();
+const clearButton = ref<HTMLButtonElement>();
+const undoButton = ref<HTMLButtonElement>();
 
 const p = props.probe;
 const read = computed(() => p.read.value);
 const readError = computed(() => (read.value.kind === "error" ? read.value.error : undefined));
 const outbounds = computed(() => p.outbounds.value);
 const result = computed(() => p.result.value);
-const verdict = computed(() => (result.value ? verdictOf(result.value, p.tested.value?.timeoutMs) : undefined));
+const verdict = computed(() => (result.value ? verdictOf(result.value, p.tested.value) : undefined));
 const track = computed(() => (result.value ? stageTrack(result.value) : []));
 const failure = computed(() => p.failure.value);
 const health = computed(() => p.health.value);
@@ -90,6 +94,9 @@ const FAILURES = {
   denied: { tone: "error", title: "This session cannot run probes" },
 } as const;
 const failureView = computed(() => (failure.value ? FAILURES[failure.value.kind] : undefined));
+/* Run again would send what the server just refused: a policy refusal is
+   refused again, and a rate limit holds until the time it named. */
+const offerRunAgain = computed(() => !!failure.value && failure.value.kind !== "refused" && failure.value.kind !== "rate_limited");
 
 // ── the running clock ─────────────────────────────────────────────────────
 const clock = ref(Date.now());
@@ -109,6 +116,19 @@ onBeforeUnmount(() => {
 });
 const elapsed = computed(() => Math.max(0, Math.floor((clock.value - p.startedAt.value) / 1000)));
 const runningLabel = computed(() => (outbounds.value.length ? outboundLabel(outbounds.value, p.test.value) : ""));
+
+/*
+ * What a screen reader hears: the start of a run and how it ended, once
+ * each. The running clock and the result's figures stay out of it, so the
+ * seconds are not read out every second and a table is not read as one
+ * sentence.
+ */
+const announcement = computed(() => {
+  if (p.running.value) return `Testing ${runningLabel.value}`;
+  if (failure.value && failureView.value) return `${failureView.value.title}. ${failure.value.message}`;
+  if (verdict.value) return verdict.value.title;
+  return "";
+});
 
 /*
  * Stacked below 1100px, the result sits under the form, out of view of the
@@ -133,8 +153,8 @@ function showFault(): void {
   el.focus();
   if (!at) return;
   el.setSelectionRange(at.offset, at.offset + Math.max(1, at.length));
-  const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 18;
-  el.scrollTop = Math.max(0, (at.line - 3) * lineHeight);
+  // From where the fault is drawn, not its line number: a minified paste is one line that wraps.
+  revealOffset(el, at.offset);
 }
 
 function pointAt(built: BuildResult): void {
@@ -157,6 +177,36 @@ async function run(): Promise<void> {
   }
 }
 watch(() => p.request.value, () => { runNote.value = ""; });
+
+/*
+ * Run and Cancel are one button that changes, so the focus a keyboard put
+ * on it stays there: Enter starts a run, Enter again cancels it, and the
+ * focus is still on it when the answer lands.
+ */
+function runOrCancel(): void {
+  if (p.running.value) p.cancel();
+  else void run();
+}
+
+/* Run again leaves with the card it sits in, so the focus moves to the
+   button that now says Cancel rather than falling to the page. */
+function runAgain(): void {
+  runButton.value?.focus();
+  void run();
+}
+
+/* Clear disables itself, so the focus goes to Undo while it is offered. */
+async function clearPaste(): Promise<void> {
+  p.clear();
+  await nextTick();
+  (undoButton.value ?? editor.value)?.focus();
+}
+
+async function undoClear(): Promise<void> {
+  if (!p.undoClear()) return;
+  await nextTick();
+  clearButton.value?.focus();
+}
 
 function onEditorKey(event: KeyboardEvent): void {
   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -194,6 +244,17 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
   </section>
 
   <div v-else class="probe-layout">
+    <!-- Above both columns, so a phone sees it before the editor rather than under the whole form. -->
+    <div v-if="p.unavailable.value" class="explain-panel probe-banner" data-tone="warning" data-testid="probe-unavailable">
+      <CircleAlert :size="18" aria-hidden="true" />
+      <div>
+        <strong>The probe is not running on this control plane</strong>
+        <p>{{ health?.reason || "It did not say why." }} Tests stay off until it answers. Platform, System shows its health as well.</p>
+      </div>
+      <button class="button button-secondary button-compact" type="button" :disabled="p.healthBusy.value" @click="p.refresh()">Check again</button>
+    </div>
+    <p v-else-if="p.healthState.value === 'error'" class="panel-inline-note probe-note probe-banner" data-testid="probe-health-error"><CircleAlert :size="14" aria-hidden="true" /> {{ p.healthError.value }} A test may still run; its answer says whether the probe is there.</p>
+
     <section class="data-panel probe-input" aria-labelledby="probe-input-title">
       <header class="panel-header">
         <div>
@@ -239,22 +300,27 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
               <Check :size="14" aria-hidden="true" />
               <span>{{ outbounds.length === 1 ? "1 outbound reads" : `${outbounds.length} outbounds read` }}<span class="probe-keys">. {{ RUN_KEYS }} runs the test.</span></span>
             </template>
+            <template v-else-if="p.undoable.value">
+              <span>Cleared.</span>
+              <button ref="undoButton" class="probe-link" type="button" data-testid="probe-undo-clear" @click="undoClear">Undo</button>
+            </template>
             <span v-else>Paste an outbound to test.</span>
           </div>
           <div class="probe-editor-actions">
             <span v-if="sizeNote" class="probe-size">{{ sizeNote }}</span>
             <button class="button button-secondary button-compact" type="button" :disabled="read.kind !== 'ok'" data-testid="probe-format" @click="p.format()"><ListRestart :size="13" aria-hidden="true" /> Format</button>
-            <button class="button button-secondary button-compact" type="button" :disabled="!p.draft.value && !result && !failure" data-testid="probe-clear" @click="p.clear()"><Trash2 :size="13" aria-hidden="true" /> Clear</button>
+            <button ref="clearButton" class="button button-secondary button-compact" type="button" :disabled="!p.draft.value && !result && !failure" data-testid="probe-clear" @click="clearPaste"><Trash2 :size="13" aria-hidden="true" /> Clear</button>
           </div>
         </div>
       </div>
 
       <ul v-if="read.kind === 'ok'" class="probe-outbounds" aria-label="Outbounds in this paste" data-testid="probe-outbounds">
-        <li v-for="item in outbounds" :key="item.tag" :data-tested="item.tag === p.test.value">
+        <li v-for="item in outbounds" :key="item.tag" :data-tested="item.tag === p.test.value" :data-sent="p.sent.value.has(item.tag)">
           <span class="badge">{{ item.type }}</span>
           <strong class="mono">{{ item.tag }}</strong>
           <span class="mono muted">{{ item.server }}:{{ item.server_port }}</span>
           <small v-if="item.detour">via {{ item.detour }}</small>
+          <small v-if="!p.sent.value.has(item.tag)" class="probe-not-sent">not in this test</small>
         </li>
       </ul>
 
@@ -264,7 +330,7 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
           <select id="probe-test" :value="p.test.value" data-testid="probe-test" @change="setTest">
             <option v-for="item in outbounds" :key="item.tag" :value="item.tag">{{ outboundLabel(outbounds, item.tag) }}</option>
           </select>
-          <small class="field-help">The end of a chain is tested by default, so the request passes every hop.</small>
+          <small class="field-help">The end of a chain is tested by default, so the request passes every hop. Only the tested outbound and the hops it passes through are sent.</small>
         </label>
 
         <fieldset ref="targetList" class="field probe-wide probe-targets" data-testid="probe-targets">
@@ -311,8 +377,19 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
         <p v-if="runNote" class="probe-run-note error-text" role="alert" data-testid="probe-run-note">{{ runNote }}</p>
         <p v-else-if="p.running.value" class="probe-run-note" data-testid="probe-running-note"><LoaderCircle class="spin" :size="13" aria-hidden="true" /> Testing, {{ elapsed }} s</p>
         <p v-else-if="blocker" class="probe-run-note">{{ blocker }}</p>
-        <button v-if="p.running.value" class="button button-secondary" type="button" data-testid="probe-cancel" @click="p.cancel()"><X :size="15" aria-hidden="true" /> Cancel</button>
-        <button v-else class="button button-primary" type="button" :disabled="!canRun" data-testid="probe-run" @click="run"><Play :size="15" aria-hidden="true" /> Run test</button>
+        <button
+          ref="runButton"
+          class="button"
+          :class="p.running.value ? 'button-secondary' : 'button-primary'"
+          type="button"
+          :disabled="!p.running.value && !canRun"
+          :data-testid="p.running.value ? 'probe-cancel' : 'probe-run'"
+          @click="runOrCancel"
+        >
+          <X v-if="p.running.value" :size="15" aria-hidden="true" />
+          <Play v-else :size="15" aria-hidden="true" />
+          {{ p.running.value ? "Cancel" : "Run test" }}
+        </button>
       </footer>
     </section>
 
@@ -333,17 +410,10 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
         </div>
       </header>
 
-      <div v-if="p.unavailable.value" class="explain-panel" data-tone="warning" data-testid="probe-unavailable">
-        <CircleAlert :size="18" aria-hidden="true" />
-        <div>
-          <strong>The probe is not running on this control plane</strong>
-          <p>{{ health?.reason || "It did not say why." }} Tests stay off until it answers. Platform, System shows its health as well.</p>
-        </div>
-      </div>
-      <p v-else-if="p.healthState.value === 'error'" class="panel-inline-note probe-note" data-testid="probe-health-error"><CircleAlert :size="14" aria-hidden="true" /> {{ p.healthError.value }} A test may still run; its answer says whether the probe is there.</p>
+      <p class="sr-only" role="status" data-testid="probe-announce">{{ announcement }}</p>
 
-      <div class="probe-result-body" aria-live="polite">
-        <div v-if="p.running.value" class="probe-running" role="status" data-testid="probe-running">
+      <div class="probe-result-body">
+        <div v-if="p.running.value" class="probe-running" data-testid="probe-running">
           <LoaderCircle class="spin" :size="18" aria-hidden="true" />
           <div>
             <strong>Testing {{ runningLabel }}</strong>
@@ -351,15 +421,15 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
           </div>
         </div>
 
-        <div v-else-if="failure && failureView" class="probe-failure" :data-tone="failureView.tone" role="alert" :data-kind="failure.kind" data-testid="probe-failure">
+        <div v-else-if="failure && failureView" class="probe-failure" :data-tone="failureView.tone" :data-kind="failure.kind" data-testid="probe-failure">
           <CircleAlert v-if="failure.kind !== 'cancelled'" :size="17" aria-hidden="true" />
           <X v-else :size="17" aria-hidden="true" />
           <div>
             <strong>{{ failureView.title }}</strong>
             <p>{{ failure.message }}</p>
-            <p v-if="failure.kind === 'timeout'" class="muted">The probe may still have finished on the server after the console gave up; run it again to see.</p>
+            <p v-if="failure.kind === 'timeout'" class="muted">The probe may have finished on the server after the console stopped waiting, but that answer cannot be recovered. Running again starts a new test.</p>
           </div>
-          <button v-if="failure.kind !== 'refused'" class="button button-secondary button-compact" type="button" :disabled="!canRun" @click="run">Run again</button>
+          <button v-if="offerRunAgain" class="button button-secondary button-compact" type="button" :disabled="!canRun" data-testid="probe-run-again" @click="runAgain">Run again</button>
         </div>
 
         <template v-else-if="result && verdict">
@@ -383,7 +453,7 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
           </ol>
 
           <dl v-if="facts.length" class="probe-facts" data-testid="probe-facts">
-            <div v-for="fact in facts" :key="fact.key" :data-fact="fact.key">
+            <div v-for="fact in facts" :key="fact.key" :data-fact="fact.key" :data-tone="fact.tone">
               <dt>{{ fact.label }}</dt>
               <dd :class="{ mono: fact.mono, wrap: fact.mono }">{{ fact.value }}</dd>
               <dd v-if="fact.note"><small>{{ fact.note }}</small></dd>

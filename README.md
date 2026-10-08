@@ -59,8 +59,9 @@ through plan, approval, a bounded agent task, and audit.
 - Probe calls (`latticenet.vpn-core/probe` health, targets and run) require
   `vpn:probe`. A pasted outbound carries credentials, so it leaves the frame
   only as the run call's payload: never page state, the address, storage or a
-  log, and the page never draws it outside the textarea. Results stay in page
-  memory.
+  log, and the page never draws it outside the textarea. A run carries only
+  the tested outbound and the hops it detours through; the rest of a pasted
+  set stays in the editor. Results stay in page memory.
 
 ## Scope migration and rollback
 

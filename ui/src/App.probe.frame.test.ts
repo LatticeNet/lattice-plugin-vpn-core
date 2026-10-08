@@ -140,6 +140,28 @@ describe("the Probe layer in the page", () => {
     expect(document.body.textContent).not.toContain(UUID);
   });
 
+  it("sends only the tested outbound of a pasted set; the others never leave the frame", async () => {
+    const exits = [
+      { type: "trojan", tag: "hk-exit", server: "198.51.100.10", server_port: 443, password: "hk-only-0f3c9a" },
+      { type: "trojan", tag: "jp-exit", server: "198.51.100.11", server_port: 443, password: "jp-only-7d21be" },
+      { type: "shadowsocks", tag: "lab-box", server: "10.0.0.5", server_port: 8388, method: "aes-128-gcm", password: "lab-only-52e8c4" },
+    ];
+    await mountPage({ view: "probe" });
+    await until(() => testid("probe-health")?.textContent?.includes("Probe ready"), "the probe's health");
+    await paste(JSON.stringify(exits, null, 2));
+    expect(testid<HTMLSelectElement>("probe-test")!.value).toBe("hk-exit");
+    testid<HTMLButtonElement>("probe-run")!.click();
+    await until(() => testid("probe-verdict"), "the verdict");
+
+    const runs = posted.filter((entry) => entry.message.type === "lattice.plugin.call" && entry.message.method === "run");
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.message.payload.outbounds).toEqual([exits[0]]);
+    expect(posted.filter((entry) => JSON.stringify(entry.message).includes("hk-only-0f3c9a"))).toHaveLength(1);
+    for (const secret of ["jp-only-7d21be", "lab-only-52e8c4", "10.0.0.5"]) {
+      expect(posted.some((entry) => JSON.stringify(entry.message).includes(secret)), secret).toBe(false);
+    }
+  });
+
   it("keeps the paste and the result across layers, and reads the probe only when the layer opens", async () => {
     await mountPage({ view: "overview" });
     await until(() => document.querySelector(".layer-tabs"), "the tabs");

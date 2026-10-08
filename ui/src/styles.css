@@ -977,6 +977,9 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .probe-outbounds strong { font-weight: 650; overflow-wrap: anywhere; }
 .probe-outbounds .muted { font-size: var(--text-2xs); overflow-wrap: anywhere; }
 .probe-outbounds small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); }
+/* Left in the editor but not sent: the run carries only the tested outbound and its hops. */
+.probe-outbounds li[data-sent="false"] { border-style: dashed; color: var(--muted-foreground, #65707b); }
+.probe-outbounds .probe-not-sent { margin-left: auto; font-style: italic; }
 .probe-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); padding: var(--sp-4); }
 .probe-wide { grid-column: 1 / -1; }
 fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -993,12 +996,17 @@ fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
 .probe-switch input { width: 16px; height: 16px; flex: 0 0 auto; margin: 1px 0 0; }
 .probe-switch span { display: grid; gap: 2px; }
 .probe-switch strong { font-weight: 620; }
-.probe-switch small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); line-height: 1.45; }
+.probe-switch small { color: var(--muted-foreground, #65707b); font-size: var(--text-xs); line-height: 1.45; }
 .probe-run { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border, #d9dde2); }
 .probe-run-note { display: inline-flex; min-width: 0; flex: 1 1 220px; align-items: center; gap: var(--sp-1); margin: 0; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); line-height: 1.5; }
 .probe-health { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); font-size: var(--text-xs); }
 .probe-health .mono { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); }
-.probe-result > .explain-panel { margin: var(--sp-4) var(--sp-4) 0; border: 1px solid; border-radius: var(--radius); }
+/* Probe down or unknown: one row across both columns, above the editor. */
+.probe-banner { grid-column: 1 / -1; margin: 0; }
+.probe-layout > .explain-panel { align-items: flex-start; border: 1px solid; border-radius: var(--radius); }
+.probe-layout > .explain-panel > div { min-width: 0; flex: 1 1 auto; }
+.probe-layout > .explain-panel > .button { flex: 0 0 auto; }
+.probe-layout > .panel-inline-note { border: 1px solid var(--tone-warn-border); border-radius: var(--radius); }
 .probe-result-body { display: grid; gap: var(--sp-4); padding: var(--sp-4); }
 .probe-running, .probe-failure { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); font-size: var(--text-sm); }
 .probe-running { border-style: dashed; color: var(--muted-foreground, #65707b); }
@@ -1033,7 +1041,7 @@ fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
 .probe-track li[data-state="fail"] .probe-step-mark { border-color: var(--tone-danger); background: var(--tone-danger); }
 .probe-track li[data-state="skip"] .probe-step-mark { border-style: dashed; }
 .probe-track strong { margin-top: var(--sp-1); font-size: var(--text-xs); font-weight: 650; }
-.probe-track small { max-width: 100%; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); line-height: 1.35; overflow-wrap: anywhere; }
+.probe-track small { max-width: 100%; color: var(--muted-foreground, #65707b); font-size: var(--text-xs); line-height: 1.35; overflow-wrap: anywhere; }
 .probe-track li[data-state="skip"] strong { color: var(--muted-foreground, #65707b); font-weight: 600; }
 .probe-track li[data-state="fail"] small { color: var(--tone-danger); }
 .probe-track li[data-state="timeout"] small, .probe-track li[data-state="partial"] small { color: var(--tone-warn); }
@@ -1042,7 +1050,10 @@ fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
 .probe-facts > div { min-width: 0; }
 .probe-facts dt { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-weight: 650; text-transform: uppercase; }
 .probe-facts dd { margin: 2px 0 0; font-size: var(--text-sm); font-weight: 620; font-variant-numeric: tabular-nums; }
-.probe-facts dd small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); font-weight: 400; overflow-wrap: anywhere; }
+.probe-facts dd small { color: var(--muted-foreground, #65707b); font-size: var(--text-xs); font-weight: 400; overflow-wrap: anywhere; }
+/* A failed or missing figure is coloured, value and reason both, so "Failed" does not read like a measurement. */
+.probe-facts [data-tone="error"] dd, .probe-facts [data-tone="error"] dd small { color: var(--tone-danger); }
+.probe-facts [data-tone="warning"] dd, .probe-facts [data-tone="warning"] dd small { color: var(--tone-warn); }
 .probe-result .table-wrap { border: 1px solid var(--border, #d9dde2); border-radius: var(--radius); }
 /* Eight columns, six of them short figures: it fits the result column from 1100px and scrolls sideways on a phone. */
 .probe-table { min-width: 540px; }
@@ -1052,7 +1063,8 @@ fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
 .probe-table thead th { position: static; box-shadow: none; }
 .probe-table thead th.sticky-first { position: sticky; }
 .probe-table th.probe-group { border-left: 1px solid var(--border, #d9dde2); text-align: center; }
-.probe-table td.sticky-first strong { white-space: nowrap; }
+/* Target ids run to 40 characters; capped, a long one wraps instead of covering the figures on a phone. */
+.probe-table td.sticky-first strong { display: block; max-width: 40vw; overflow-wrap: anywhere; }
 /* One tbody per target: the row, and under it the probe's line when it has one. */
 .probe-table tbody tr:last-child td { border-bottom: 1px solid var(--border, #e3e6e9); }
 .probe-table tbody:last-child tr:last-child td { border-bottom: 0; }
@@ -1067,7 +1079,7 @@ fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
 @media (max-width: 620px) {
   .probe-options { grid-template-columns: 1fr; }
   .probe-run .button { flex: 1 1 auto; }
-  .probe-result > .explain-panel { flex-direction: column; gap: var(--sp-2); }
+  .probe-layout > .explain-panel { flex-wrap: wrap; gap: var(--sp-2); }
 }
 @media (pointer: coarse) {
   .probe-keys { display: none; }

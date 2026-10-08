@@ -470,16 +470,21 @@ export type BuildResult =
   | { ok: false; field: "outbound" | "test" | "targets" | "samples" | "throughput" | "size"; message: string };
 
 /**
- * The run payload, exactly what the probe reads. The outbounds go as pasted,
- * field for field: the probe decodes them with sing-box's own option
+ * The run payload, exactly what the probe reads. Only the tested outbound
+ * and the hops it detours through are sent, in paste order; the rest of the
+ * paste stays in the editor. The probe decodes, creates and checks every
+ * outbound it is sent, so one that is not under test could decide the
+ * verdict, and its credentials have no reason to leave the frame. What is
+ * sent goes field for field: the probe decodes it with sing-box's own option
  * registry, and anything this page rewrote would test something else.
  */
 export function buildProbeRequest(read: DraftRead, options: ProbeOptions, knownTargets: readonly string[]): BuildResult {
   if (read.kind === "empty") return { ok: false, field: "outbound", message: "Paste an outbound to test." };
   if (read.kind === "error") return { ok: false, field: "outbound", message: read.error.message };
-  const outbounds = read.outbounds;
-  const test = read.single ? outbounds[0]!.tag : options.test;
-  if (!outbounds.some((item) => item.tag === test)) return { ok: false, field: "test", message: "Choose which outbound to test." };
+  const test = read.single ? read.outbounds[0]!.tag : options.test;
+  if (!read.outbounds.some((item) => item.tag === test)) return { ok: false, field: "test", message: "Choose which outbound to test." };
+  const sent = new Set(chainPath(read.outbounds, test).tags);
+  const outbounds = read.outbounds.filter((item) => sent.has(item.tag));
   const chosen = new Set(options.targets);
   const targets = knownTargets.filter((id) => chosen.has(id) && TARGET_ID.test(id));
   if (!targets.length) return { ok: false, field: "targets", message: "Choose at least one target." };
@@ -667,17 +672,43 @@ export interface Verdict {
   detail: string;
 }
 
-/** `timeoutMs` is the deadline the run asked for, so a timeout can say how long it was. */
-export function verdictOf(result: ProbeResult, timeoutMs?: number): Verdict {
+/** What the run asked for, so the verdict can hold the answer to it. */
+export interface Asked {
+  udp?: boolean;
+  throughput?: boolean;
+  /** The deadline the run gave the probe, so a timeout can say how long it was. */
+  timeoutMs?: number;
+}
+
+/**
+ * The probe keeps stage "ok" when the HTTP requests passed and an asked-for
+ * UDP query or download did not, so a passing stage alone is not "works": a
+ * line that answers HTTP and drops UDP still fails every game, call and QUIC
+ * client, and that is what UDP is measured for.
+ */
+export function verdictOf(result: ProbeResult, asked: Asked = {}): Verdict {
   if (result.stage === "ok") {
     const ok = result.targets.reduce((sum, item) => sum + item.ok, 0);
     const of = result.targets.reduce((sum, item) => sum + item.of, 0);
+    const udpFailed = !!asked.udp && result.udp?.ok === false;
+    const downloadFailed = !!asked.throughput && !result.throughput;
+    const missed = [udpFailed ? "UDP" : "", downloadFailed ? "the download" : ""].filter(Boolean).join(" and ");
+    const why = [
+      udpFailed ? "The DNS query over UDP did not answer, so games, voice calls and QUIC clients will not work through it." : "",
+      downloadFailed ? "The throughput download did not finish, so its speed is unknown." : "",
+    ].filter(Boolean).join(" ");
     if (of > 0 && ok < of) {
-      return { tone: "warning", title: "Works, with losses", detail: `${ok} of ${of} requests through it answered. The ones that did not are in the table.` };
+      return {
+        tone: "warning",
+        title: missed ? `Works with losses, and ${missed} failed` : "Works, with losses",
+        detail: `${ok} of ${of} requests through it answered. The ones that did not are in the table.${why ? ` ${why}` : ""}`,
+      };
     }
+    if (missed) return { tone: "warning", title: `Works for HTTP, ${missed} failed`, detail: `Every request through it answered. ${why}` };
     return { tone: "success", title: "Works", detail: "The outbound connected and every request through it answered." };
   }
   const known = STAGES[result.stage];
+  const timeoutMs = asked.timeoutMs;
   if (result.stage === "timeout" && timeoutMs) {
     return { tone: "warning", title: known!.title, detail: `The probe stopped after ${timeoutMs / 1000} s, before every measurement finished. What it measured before then is below.` };
   }
@@ -754,6 +785,8 @@ export interface Fact {
   /** A value read character by character (an address), drawn in the mono face. */
   mono: boolean;
   note: string;
+  /** Set when the fact is a failure or a missing figure, so it does not read like a measured value. */
+  tone?: "error" | "warning";
 }
 
 /**
@@ -768,30 +801,35 @@ export function resultFacts(result: ProbeResult, asked: { udp: boolean; throughp
   const server = result.server;
   if (server) {
     const rtt = server.rttMs !== undefined ? ` in ${formatMs(server.rttMs)} ms` : "";
-    facts.push({
+    const fact: Fact = {
       key: "server",
       label: "Server",
       value: server.address || "Not reported",
       mono: !!server.address,
       note: `${server.reachable ? `answers${rtt}` : "no answer"}${server.network ? ` over ${server.network}` : ""}`,
-    });
+    };
+    if (!server.reachable) fact.tone = "error";
+    facts.push(fact);
   }
   if (result.exit) {
     facts.push({ key: "exit", label: "Exit", value: result.exit.ip || "Unknown", mono: !!result.exit.ip, note: [result.exit.loc, result.exit.colo].filter(Boolean).join(" · ") || "no location" });
   } else if (finished) {
-    facts.push({ key: "exit", label: "Exit", value: "Not measured", mono: false, note: "the trace did not answer" });
+    facts.push({ key: "exit", label: "Exit", value: "Not measured", mono: false, note: "the trace did not answer", tone: "warning" });
   }
   if (asked.udp && (result.udp || reached)) {
     const udp = result.udp;
     if (udp?.ok) facts.push({ key: "udp", label: "UDP", value: udp.rttMs !== undefined ? `${formatMs(udp.rttMs)} ms` : "Answered", mono: false, note: "DNS over UDP answered" });
-    else if (udp) facts.push({ key: "udp", label: "UDP", value: "Failed", mono: false, note: udp.error || "no answer over UDP" });
-    else facts.push({ key: "udp", label: "UDP", value: "Not tested", mono: false, note: finished ? "this protocol does not relay UDP" : "the test ran out of time first" });
+    else if (udp) facts.push({ key: "udp", label: "UDP", value: "Failed", mono: false, note: udp.error || "no answer over UDP", tone: "error" });
+    else if (finished) facts.push({ key: "udp", label: "UDP", value: "Not tested", mono: false, note: "this protocol does not relay UDP" });
+    else facts.push({ key: "udp", label: "UDP", value: "Not tested", mono: false, note: "the test ran out of time first", tone: "warning" });
   }
   if (asked.throughput && (result.throughput || reached)) {
     const value = result.throughput;
     facts.push(value
       ? { key: "throughput", label: "Throughput", value: `${value.mbps.toFixed(1)} Mbit/s`, mono: false, note: `${formatMB(value.bytes)} in ${value.seconds.toFixed(2)} s` }
-      : { key: "throughput", label: "Throughput", value: "Not measured", mono: false, note: finished ? "the probe returned no figure" : "the test ran out of time first" });
+      : finished
+        ? { key: "throughput", label: "Throughput", value: "Failed", mono: false, note: "the download did not finish", tone: "error" }
+        : { key: "throughput", label: "Throughput", value: "Not measured", mono: false, note: "the test ran out of time first", tone: "warning" });
   }
   return facts;
 }

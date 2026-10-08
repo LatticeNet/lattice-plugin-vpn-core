@@ -16,10 +16,10 @@
 import { LinkFixtureError } from "./linkFixtures";
 
 export type ProbeScenario =
-  | "ok" | "loss" | "decode" | "create" | "server" | "handshake" | "target" | "timeout"
+  | "ok" | "loss" | "degraded" | "decode" | "create" | "server" | "handshake" | "target" | "timeout"
   | "unavailable" | "limited" | "refused" | "denied" | "garbled";
 export const PROBE_SCENARIOS: readonly ProbeScenario[] = [
-  "ok", "loss", "decode", "create", "server", "handshake", "target", "timeout",
+  "ok", "loss", "degraded", "decode", "create", "server", "handshake", "target", "timeout",
   "unavailable", "limited", "refused", "denied", "garbled",
 ];
 
@@ -114,8 +114,10 @@ function runAnswer(scenario: ProbeScenario, payload: RunPayload): unknown {
         targets: targetRows(payload, (index, of) => (index === 0 ? Math.min(2, of) : 0)), took_ms: 15000.4,
       };
     default: {
+      // degraded: every HTTP request answers, but the UDP query and the download fail, and the stage stays ok.
       const loss = scenario === "loss";
-      const bytes = payload.throughput ? payload.throughput_bytes ?? 5_000_000 : 0;
+      const degraded = scenario === "degraded";
+      const bytes = payload.throughput && !degraded ? payload.throughput_bytes ?? 5_000_000 : 0;
       return {
         valid: true,
         stage: "ok",
@@ -123,7 +125,7 @@ function runAnswer(scenario: ProbeScenario, payload: RunPayload): unknown {
         server: server(payload, true),
         targets: targetRows(payload, (index, of) => (loss && index === 0 ? Math.max(0, of - 2) : of)),
         exit: { ip: "162.196.9.138", loc: "US", colo: "LAX" },
-        udp: payload.udp && UDP_RELAY.has(t.type) ? { ok: true, rtt_ms: 80.3, error: "" } : null,
+        udp: payload.udp && UDP_RELAY.has(t.type) ? (degraded ? { ok: false, rtt_ms: 0, error: "read udp: i/o timeout" } : { ok: true, rtt_ms: 80.3, error: "" }) : null,
         throughput: bytes ? { bytes, seconds: round((bytes * 8) / 48.3e6), mbps: 48.3 } : null,
         engine: { name: "sing-box", version: "1.13.19" },
         took_ms: 1843.7,
