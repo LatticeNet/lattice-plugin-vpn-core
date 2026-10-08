@@ -346,23 +346,10 @@ export function usersAttention(users: readonly VpnUser[], now: number, formatDay
   return items;
 }
 
-// ── search, sort, group ──────────────────────────────────────────────────
+// ── sort, group ──────────────────────────────────────────────────────────
 
 function compareText(a: string | undefined, b: string | undefined): number {
   return (a ?? "").localeCompare(b ?? "", undefined, { sensitivity: "base", numeric: true });
-}
-
-/** Every word must appear in the identity's email, name, id, group, comment or a protocol. */
-export function searchUsers(users: readonly VpnUser[], query: string): VpnUser[] {
-  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return [...users];
-  return users.filter((user) => {
-    const haystack = [
-      user.email, user.name, user.id, user.group, user.comment,
-      ...(user.credentials ?? []).map((credential) => credential.protocol),
-    ].filter(Boolean).join(" ").toLowerCase();
-    return words.every((word) => haystack.includes(word));
-  });
 }
 
 export const USER_SORT_KEYS = ["identity", "group", "status", "expires", "quota", "lines", "used"] as const;

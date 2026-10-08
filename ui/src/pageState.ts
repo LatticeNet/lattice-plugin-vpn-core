@@ -92,15 +92,16 @@ const LEGACY_LENS: Record<string, LinesView> = { fleet: "lines", topology: "topo
 
 /**
  * Everything the four pages keep. Each route encodes its own part, and one
- * frame only ever shows one route, so `q` and `open` are shared: the search
- * and the open object of whichever page this is (a line, an identity, a
- * node profile).
+ * frame only ever shows one route, so `q` and `open` are shared: the query
+ * (plugin-bridge's list query, querySchemas.ts) and the open object of
+ * whichever page this is (a line, an identity, a node profile). Usage keeps
+ * `q` for its By line layer.
  */
 export interface VpnPageState {
   linesView: LinesView;
   usageView: UsageView;
   group: GroupBy;
-  /** The page's search as typed. */
+  /** The page's query as typed: bare words, `field:value` terms and `sort:`. */
   q: string;
   /** The object whose panel is open, or asked for by a link and not yet found. */
   open: string;
@@ -154,6 +155,8 @@ export function encodePageState(route: string, state: VpnPageState): PageState {
     put("view", state.usageView, DEFAULT_PAGE_STATE.usageView);
     put("period", state.period, DEFAULT_PAGE_STATE.period);
     put("stack", state.stack, DEFAULT_PAGE_STATE.stack);
+    // Only By line has the query bar; another layer's link carries no query it does not show.
+    if (state.usageView === "line") put("q", state.q.trim());
   } else if (route === "users") {
     put("show", state.usersView, DEFAULT_PAGE_STATE.usersView);
     put("group", state.usersGroup, DEFAULT_PAGE_STATE.usersGroup);
@@ -162,6 +165,7 @@ export function encodePageState(route: string, state: VpnPageState): PageState {
     put("open", state.open);
     if (state.create) put("create", "1");
   } else if (route === "profiles") {
+    put("q", state.q.trim());
     put("open", state.open);
   }
   return out;

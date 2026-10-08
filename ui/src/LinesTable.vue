@@ -4,17 +4,22 @@
  *
  * A group row carries an aggregate in every member column. A state shared by
  * every line is said once in the header and its column leaves the table; when
- * states differ the column stays and the common one recedes. Searching
- * flattens the table to the matching lines, because the operator asked for
- * lines. Each row has one affordance, opening the line's panel; the evidence
- * links sit in one menu at the end of the row.
+ * states differ the column stays and the common one recedes. A query that
+ * filters or sorts flattens the table to the matching lines, in the query's
+ * order, because the operator asked for lines. Each row has one affordance,
+ * opening the line's panel; the evidence links sit in one menu at the end of
+ * the row.
+ *
+ * The query is the console's (querySchemas.ts holds the fields); its text is
+ * the page's `q`, so the address keeps it and an old `?q=` link still finds
+ * what it found.
  */
 import { computed, ref, watch } from "vue";
 import { ChevronRight, Ellipsis, Radar } from "@lucide/vue";
+import { PcQueryBar, useListQuery } from "@latticenet/plugin-bridge/chassis";
 
 import {
   GROUP_BY,
-  flatLines,
   groupByLabel,
   groupLines,
   groupTraffic,
@@ -29,8 +34,9 @@ import {
   type LineTrafficIndex,
 } from "./lineGroups";
 import type { EvidenceLens } from "./navigate";
+import { LINE_QUERY_EXAMPLES, LINE_QUERY_SCHEMA, lineQueryRows } from "./querySchemas";
 import RowMenu, { type RowMenuItem } from "./RowMenu.vue";
-import { filterLineGroups, formatBytes, pageRows, type Line, type LineGroup } from "./vpnModel";
+import { formatBytes, pageRows, type Line, type LineGroup } from "./vpnModel";
 
 const props = defineProps<{
   groups: LineGroup[];
@@ -49,16 +55,19 @@ const emit = defineEmits<{
   evidence: [nodeID: string, lens: EvidenceLens, line?: Line];
 }>();
 
-const searching = computed(() => props.search.trim().length > 0);
-const visible = computed(() => filterLineGroups(props.groups, props.search));
+/* Every line, flat and heaviest first; the query filters and orders these. */
+const entries = computed(() => lineQueryRows(props.groups, props.traffic));
+const query = useListQuery(entries, LINE_QUERY_SCHEMA, computed(() => props.search));
+/* The query asks for something: a filter, a bare word or a sort. */
+const searching = computed(() => query.filtering.value);
 const summary = computed(() => stateSummary(props.groups));
 /* The state column exists only when states differ; otherwise the header says it. */
 const showState = computed(() => !summary.value.uniform);
 const flat = computed(() => searching.value || props.groupBy === "none");
-const rows = computed<LineGroupRow[]>(() => (flat.value ? [] : groupLines(visible.value, props.groupBy, props.traffic, props.groups)));
-const flatRows = computed<LineEntry[]>(() => (flat.value ? flatLines(visible.value, props.traffic, props.groups) : []));
+const rows = computed<LineGroupRow[]>(() => (flat.value ? [] : groupLines(props.groups, props.groupBy, props.traffic, props.groups)));
+const flatRows = computed<LineEntry[]>(() => (flat.value ? query.rows.value : []));
 const totalLines = computed(() => props.groups.reduce((sum, group) => sum + group.lines.length, 0));
-const matching = computed(() => visible.value.reduce((sum, group) => sum + group.lines.length, 0));
+const matching = computed(() => query.rows.value.length);
 
 /* Groups open by default; the operator folds what they are done with. */
 const folded = ref(new Set<string>());
@@ -131,7 +140,20 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
 </script>
 
 <template>
-  <section class="data-panel lines-panel" aria-labelledby="lines-title">
+  <!-- Outside the panel: the panel clips its overflow, and the field's menu and help hang below it. -->
+  <div class="query-toolbar">
+    <PcQueryBar
+      :model-value="search"
+      :query="query"
+      :count="{ shown: matching, total: totalLines }"
+      label="Search, filter and sort lines"
+      placeholder="Search, or role:exit sort:-traffic"
+      storage-key="vpn-core.lines"
+      :examples="LINE_QUERY_EXAMPLES"
+      @update:model-value="(value: string) => emit('update:search', value)"
+    />
+  </div>
+  <section class="data-panel lines-panel" aria-labelledby="lines-title" :data-stale="query.invalid.value ? 'true' : undefined" :inert="query.invalid.value || undefined">
     <header class="panel-header lines-header">
       <div>
         <h2 id="lines-title">Lines</h2>
@@ -148,10 +170,9 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
           <span class="segmented-label">Group by</span>
           <button v-for="value in GROUP_BY" :key="value" type="button" class="segmented-option" :aria-pressed="groupBy === value" :disabled="searching" @click="emit('update:groupBy', value)">{{ groupByLabel(value) }}</button>
         </div>
-        <input class="search-input" type="search" :value="search" aria-label="Search lines" placeholder="Search node, line, port or error" @input="emit('update:search', ($event.target as HTMLInputElement).value)" />
       </div>
     </header>
-    <p v-if="searching" class="panel-inline-note" data-tone="neutral">{{ matching }} of {{ totalLines }} lines match, listed flat. Clear the search to group them again.</p>
+    <p v-if="searching" class="panel-inline-note" data-tone="neutral">{{ matching }} of {{ totalLines }} lines match, listed flat. Clear the query to group them again.</p>
 
     <div v-if="flat ? flatRows.length : rows.length" class="table-wrap">
       <table class="lines-table" :data-flat="flat ? 'true' : undefined">
@@ -234,9 +255,9 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
     </div>
     <div v-else-if="searching" class="empty-state">
       <Radar :size="26" aria-hidden="true" />
-      <strong>No line matches that search</strong>
-      <p>Nothing in {{ totalLines }} lines across {{ groups.length }} nodes matches <span class="mono">{{ search.trim() }}</span>. The search covers node, line name, protocol, host, status, outbound reference and error text.</p>
-      <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('update:search', '')">Clear the search</button></div>
+      <strong>No line matches this query</strong>
+      <p>Nothing in {{ totalLines }} lines across {{ groups.length }} nodes matches <span class="mono">{{ search.trim() }}</span>. A bare word searches node, line name, protocol, host, status, outbound reference and error text; the field's help lists the fields to filter and sort by.</p>
+      <div class="empty-actions"><button class="button button-secondary" type="button" @click="emit('update:search', '')">Clear the query</button></div>
     </div>
     <div v-else class="empty-state">
       <Radar :size="26" aria-hidden="true" />

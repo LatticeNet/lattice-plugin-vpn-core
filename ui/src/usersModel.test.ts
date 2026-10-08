@@ -18,7 +18,6 @@ import {
   encodeUserSort,
   rotateOutcome,
   rowsHoldUser,
-  searchUsers,
   sortUsers,
   userColumns,
   usersAttention,
@@ -179,18 +178,13 @@ describe("columns with nothing to show leave for the header", () => {
   });
 });
 
-describe("search, sort and group", () => {
+describe("sort and group", () => {
   const users = [
     user("zed", { group: "metix", credentials: [{ protocol: "trojan", has_secret: true }] }),
     user("amy", { group: "openjobs", expires_at: at(40), bindings: bound }),
     user("bob", { expires_at: at(5), quota_bytes: 10 * GiB, used_period_bytes: 9 * GiB }),
     user("cat", { group: "metix", enabled: false }),
   ];
-
-  it("matches every word across email, group and protocol", () => {
-    expect(searchUsers(users, "metix trojan").map((value) => value.id)).toEqual(["zed"]);
-    expect(searchUsers(users, "  ")).toHaveLength(4);
-  });
 
   it("reads and writes the sort key, falling back on junk", () => {
     expect(parseUserSort("-expires")).toEqual({ key: "expires", reverse: true });

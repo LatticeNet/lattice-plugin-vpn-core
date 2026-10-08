@@ -170,21 +170,6 @@ export function safeErrorMessage(value: unknown, fallback = "Request failed"): s
   return fallback;
 }
 
-export function filterLineGroups(groups: LineGroup[], query: string): LineGroup[] {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return groups;
-  return groups
-    .map((group) => ({
-      ...group,
-      lines: group.lines.filter((line) => [
-        group.node_name, group.node_id, line.name, line.type, line.core,
-        line.source, line.public_host, line.listen_host, line.domain, line.status,
-        line.outbound_ref, line.outbound_server, line.last_error, line.line_hash_id,
-      ].some((value) => value?.toLowerCase().includes(needle))),
-    }))
-    .filter((group) => group.lines.length > 0);
-}
-
 export function lineStatus(line: Line): "healthy" | "warning" | "error" {
   // design-19: a dead service outranks a clean config. "Config ok" rendering
   // healthy while sing-box crash-looped 220k times is the incident this

@@ -16,6 +16,7 @@ import {
   Waypoints,
   X,
 } from "@lucide/vue";
+import { quoteQueryValue } from "@latticenet/plugin-bridge/query";
 
 import { BridgeClient, canCall, type HostInit } from "./bridge";
 import { attentionItems, livenessSummary, summarizeFleet, type AttentionItem } from "./fleetRows";
@@ -314,9 +315,9 @@ function nodeNameOf(id: string): string {
   return group?.node_name || id;
 }
 /* The overview's node rows and map boxes open that node's lines: the Lines
- * layer, searched to the node, which lists them flat. */
+ * layer, queried to that node by its exact name, which lists them flat. */
 function showLinesOf(nodeID: string): void {
-  search.value = nodeNameOf(nodeID);
+  search.value = `node:=${quoteQueryValue(nodeNameOf(nodeID))}`;
   linesView.value = "lines";
 }
 function showAllLines(): void {
@@ -1847,7 +1848,7 @@ onBeforeUnmount(() => {
         <span v-if="refreshing">· refreshing</span>
       </p>
       <div class="layer-body profiles-body">
-        <ProfilesTable :profiles="profiles" :open-profile="profileOpenId || undefined" @open="openProfilePanel" />
+        <ProfilesTable v-model:search="search" :profiles="profiles" :open-profile="profileOpenId || undefined" @open="openProfilePanel" />
       </div>
     </template>
 
@@ -1871,7 +1872,9 @@ onBeforeUnmount(() => {
         :observed-age="usageReadPeriod === usagePeriod ? observed.age.value : ''"
         :observed-title="observed.title.value"
         :can-open-users="canOpenEvidence"
+        :search="search"
         @period="setUsagePeriod"
+        @search="(value) => (search = value)"
         @view="(value) => (usageView = value)"
         @stack="(value) => (usageStack = value)"
         @open-users="openUsers"

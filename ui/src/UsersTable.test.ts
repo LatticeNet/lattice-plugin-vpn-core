@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import ProfilesTable from "./ProfilesTable.vue";
 import type { Profile } from "./profilesModel";
 import UsersTable from "./UsersTable.vue";
-import { NO_EXPIRY, type UserOutcome, type UsersGroupBy, type UsersView } from "./usersModel";
+import { NO_EXPIRY, type UserOutcome, type UserSort, type UsersGroupBy, type UsersView } from "./usersModel";
 import type { VpnUser } from "./vpnModel";
 
 const NOW = Date.parse("2026-09-30T08:00:00Z");
@@ -29,7 +29,7 @@ const users = [
 ];
 const can = { edit: true, rotate: true, bind: true, delete: true };
 
-function render(over: Partial<{ users: VpnUser[]; groupBy: UsersGroupBy; view: UsersView; search: string; outcome: UserOutcome; can: typeof can }> = {}): Promise<string> {
+function render(over: Partial<{ users: VpnUser[]; groupBy: UsersGroupBy; view: UsersView; search: string; sort: UserSort; outcome: UserOutcome; can: typeof can }> = {}): Promise<string> {
   return renderToString(createSSRApp({
     render: () => h(UsersTable, {
       users, now: NOW, view: "all", search: "", groupBy: "none", sort: { key: "identity", reverse: false }, can, ...over,
@@ -71,7 +71,18 @@ describe("the identities table", () => {
   it("does not ask to clear the search to group again when nothing is grouped", async () => {
     const text = (html: string) => html.replace(/<!--[\s\S]*?-->/g, "");
     expect(text(await render({ search: "m-" }))).toContain("2 of 4 identities match.</p>");
-    expect(text(await render({ search: "m-", groupBy: "group" }))).toContain("2 of 4 identities match, listed flat. Clear the search to group them again.</p>");
+    expect(text(await render({ search: "m-", groupBy: "group" }))).toContain("2 of 4 identities match, listed flat. Clear the query to group them again.</p>");
+  });
+
+  it("marks the column that orders the rows, and none while bare words rank them", async () => {
+    const sortedBy = (html: string) => [...html.matchAll(/aria-sort="(ascending|descending)"><button class="sort-button" type="button">(\w+)/g)].map((match) => `${match[2]} ${match[1]}`);
+    expect(sortedBy(await render({ sort: { key: "expires", reverse: true } }))).toEqual(["Expires descending"]);
+    // A bare word ranks the matches; the column sort no longer decides the order, so no header claims it.
+    expect(sortedBy(await render({ search: "m", sort: { key: "expires", reverse: true } }))).toEqual([]);
+    // A `sort:` term that names a column marks that column, in the column's own direction.
+    expect(sortedBy(await render({ search: "sort:-traffic" }))).toEqual(["Used ascending"]);
+    expect(sortedBy(await render({ search: "sort:expires" }))).toEqual(["Expires ascending"]);
+    expect(sortedBy(await render({ search: "sort:last_seen" }))).toEqual([]);
   });
 
   it("drops a column blank on every identity and says so in the header", async () => {
@@ -122,7 +133,7 @@ describe("the node profiles table", () => {
     const html = await renderToString(createSSRApp({
       render: () => h(ProfilesTable, { profiles: [profile("a"), profile("b"), profile("jnb", { collector: { status: "error", last_error: "connection refused" } })] }),
     }));
-    expect(html).toContain("1 node needs a look, listed first");
+    expect(html.replace(/<!--[\s\S]*?-->/g, "")).toContain("1 node needs a look, listed first");
     expect(html).toContain(">Collector<");
     expect(html).not.toContain(">Core<");
     expect(html).toContain("Every node: sing-box 1.12.4");
