@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.11.0-alpha.4",
+  "version": "0.11.0-alpha.5",
   "publisher": "latticenet",
-  "signature_ed25519": "eDnVvlr+h5oFGo4jqB0zjS7z2olapKvVUv91dhjANmxY5zxbAlOWsILOwHBrcMmdUJy5wzPdiAYUG9MvE3HvAg==",
+  "signature_ed25519": "",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "17d01c0535786f712ecfbd45f883509ad1148f568ea5076cf7b950ba0cc670d9"
+    "digest_sha256": "fbf1ed11c565f832159a2d3f4eb1d2b0c8cce5287204c7bdb228349e7ea644e6"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -29,7 +29,7 @@
     "bridge_version": "1"
   },
   "compatibility": {
-    "server": "\u003e=0.2.2-alpha.19",
+    "server": "\u003e=0.2.2-alpha.123",
     "dashboard_host": "\u003e=1",
     "runtime_protocol": "\u003e=1"
   },
@@ -205,6 +205,13 @@
           "scopes": [
             "vpncore:admin"
           ]
+        },
+        {
+          "name": "catalogue",
+          "effect": "read",
+          "scopes": [
+            "vpncore:read"
+          ]
         }
       ],
       "backing": "core"
@@ -221,6 +228,19 @@
         },
         {
           "name": "get",
+          "effect": "read",
+          "scopes": [
+            "vpncore:read"
+          ]
+        }
+      ],
+      "backing": "core"
+    },
+    {
+      "service": "latticenet.vpn-core/identities",
+      "methods": [
+        {
+          "name": "list",
           "effect": "read",
           "scopes": [
             "vpncore:read"

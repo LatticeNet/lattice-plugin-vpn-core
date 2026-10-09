@@ -41,6 +41,10 @@ through plan, approval, a bounded agent task, and audit.
 - Every call is constrained to a service and method declared in `manifest.json`.
 - Lines, Users, chains and usage reads require `vpncore:read`. Identity
   mutations, rollout, reattach and chain planning require `vpncore:admin`.
+- The line catalogue (`latticenet.vpn-core/lines` method `catalogue`) and the
+  identity list (`latticenet.vpn-core/identities` method `list`) are
+  credential-free reads at `vpncore:read`, served by core for the native
+  Sub-Store.
 - Reading one node's profile settings requires `node:read` for that node, and
   saving them requires `node:admin` plus `task:run` for that node.
 - Credential secrets are write-only with one deliberate exception: rotating a
