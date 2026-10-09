@@ -5,7 +5,7 @@ import { attributionSummary, roleTotals, seriesEgressGap, type UsageSeries } fro
 import type { UsageLineRow } from "../src/usageModel";
 import { NO_EXPIRY, expiryOf, isAttributed, isBound, usersSummary } from "../src/usersModel";
 import type { LineGroup, VpnUser } from "../src/vpnModel";
-import { handlers, resetUserStores } from "./fixtures";
+import { handlers, resetUserStores, withContent, type Scenario } from "./fixtures";
 
 const GiB = 1024 ** 3;
 const gib = (value: number) => Math.round((value / GiB) * 10) / 10;
@@ -185,5 +185,60 @@ describe("identity links answer like the server", () => {
     expect(status(expired!.id).answer_reason).toBe("link_expired");
     handlers("dense")["users-admin/link_set"]({ user_id: expired!.id, clear_expiry: true });
     expect(status(expired!.id).answer_reason).not.toBe("link_expired");
+  });
+});
+
+describe("content=hostile composes with a topology", () => {
+  beforeEach(resetUserStores);
+  const hostile = (scenario: Scenario) => withContent(handlers(scenario), "hostile");
+  const flat = (groups: LineGroup[]) => groups.flatMap((group) => group.lines);
+
+  it("keeps the nodes, the numbers and the relay roles, and every edge still names a line", () => {
+    const plain = (handlers("production")["lines/list"]({}) as { groups: LineGroup[] }).groups;
+    const hard = (hostile("production")["lines/list"]({}) as { groups: LineGroup[] }).groups;
+    const shape = (groups: LineGroup[]) => flat(groups).map((line) => [line.node_id, lineRole(line), line.listen_port, line.user_count]);
+    expect(shape(hard)).toEqual(shape(plain));
+    const hashes = new Set(flat(hard).map((line) => line.line_hash_id));
+    expect(hashes.size).toBe(flat(hard).length);
+    const edges = flat(hard).flatMap((line) => line.jump_edges ?? []);
+    expect(edges.length).toBe(flat(plain).flatMap((line) => line.jump_edges ?? []).length);
+    expect(edges.every((hash) => hashes.has(hash))).toBe(true);
+    expect(flat(hard).filter((line) => line.outbound_ref === "direct").length).toBe(flat(plain).filter((line) => line.outbound_ref === "direct").length);
+  });
+
+  it("gives one node one name on every screen, and two nodes never one name", () => {
+    const table = hostile("dense");
+    const named = new Map((table["lines/list"]({}) as { groups: LineGroup[] }).groups.map((group) => [group.node_id, group.node_name]));
+    const usage = table["usage/query"]({ period: "7d" }) as { collectors: Array<{ node_id: string; node_name: string }> };
+    const profiles = (table["profiles/query"]({}) as { profiles: Array<{ node_id: string; node_name: string }> }).profiles;
+    for (const row of [...usage.collectors, ...profiles]) {
+      if (named.has(row.node_id)) expect(row.node_name).toBe(named.get(row.node_id));
+    }
+    expect(new Set(named.values()).size).toBe(named.size);
+    expect([...named.values()].every((name) => /-transit-egress-cluster-node-\d{3}-(primary|secondary)$/.test(name ?? ""))).toBe(true);
+  });
+
+  it("replaces only the first occurrence of each enum in an answer", () => {
+    const usage = hostile("production")["usage/query"]({ period: "7d" }) as UsageAnswer;
+    const roles = new Set(["entry", "relay", "exit", "direct", "shared"]);
+    expect(usage.lines.filter((row) => !roles.has(row.role))).toHaveLength(1);
+    expect(usage.collectors.filter((row) => row.status !== "ok")).toHaveLength(1);
+    expect(usage.lines.filter((row) => row.attribution === "none").length).toBe(130);
+  });
+
+  it("answers a call that names a rewritten line or identity, and keeps the original in the store", () => {
+    const table = hostile("production");
+    const line = flat((table["lines/list"]({}) as { groups: LineGroup[] }).groups)[0];
+    expect(line.line_hash_id).toMatch(/^nd_01J8/);
+    expect((table["lines/get"]({ line_hash_id: line.line_hash_id }) as { line: { line_hash_id: string } }).line.line_hash_id).toBe(line.line_hash_id);
+    const probe = (table["users/list"]({}) as { users: VpnUser[] }).users.find((user) => user.id === "u_probe")!;
+    expect(probe.email).toMatch(/@subsidiary-holdings\.example\.invalid$/);
+    table["users-admin/update"]({ id: "u_probe", email: probe.email, name: "Liveness probe", group: "probe", comment: "" });
+    expect((handlers("production")["users/list"]({}) as { users: VpnUser[] }).users.find((user) => user.id === "u_probe")!.email).toBe("probe@lattice.invalid");
+  });
+
+  it("is the plain table itself when content is plain", () => {
+    const table = handlers("production");
+    expect(withContent(table, "plain")).toBe(table);
   });
 });

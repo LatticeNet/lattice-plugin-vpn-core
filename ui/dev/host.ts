@@ -22,7 +22,7 @@
  */
 
 import { filterPageState, validPageState, type PageState } from "../src/pageState";
-import { handlers, SCENARIOS, type Scenario } from "./fixtures";
+import { CONTENT_SHAPES, handlers, SCENARIOS, withContent, type ContentShape, type Scenario } from "./fixtures";
 import { LinkFixtureError } from "./linkFixtures";
 import { probeHandlers, PROBE_SCENARIOS, type ProbeScenario } from "./probeFixtures";
 
@@ -167,7 +167,7 @@ function armMeasure(resolve: (value: Measure) => void): void {
 
 const params = new URLSearchParams(location.search);
 /* The harness's own keys. Everything else in the address is page state. */
-const HARNESS_KEYS = new Set(["route", "scenario", "theme", "width", "frame", "fail", "zoom", "measure", "plugin", "oldhost", "stepup", "deny", "slow", "probe"]);
+const HARNESS_KEYS = new Set(["route", "scenario", "content", "theme", "width", "frame", "fail", "zoom", "measure", "layout", "plugin", "oldhost", "stepup", "deny", "slow", "probe"]);
 let frameEpoch = 0;
 let route = (params.get("route") ?? "lines") as Route;
 let scenario = (params.get("scenario") ?? "production") as Scenario;
@@ -208,6 +208,12 @@ const denyLinks = params.get("deny") === "link";
 const denyProbe = params.get("deny") === "probe";
 const probeScenario = (PROBE_SCENARIOS as readonly string[]).includes(params.get("probe") ?? "") ? (params.get("probe") as ProbeScenario) : "ok";
 const interfaces = denyProbe ? INTERFACES.filter((contract) => !contract.service.endsWith("/probe")) : INTERFACES;
+/* `content=hostile` keeps the scenario's topology and makes its strings
+ * adversarial (fixtures.ts, "Content shape"). It composes with every scenario
+ * and every probe scenario. */
+let content: ContentShape = (CONTENT_SHAPES as readonly string[]).includes(params.get("content") ?? "") ? (params.get("content") as ContentShape) : "plain";
+/* `layout=1` runs the layout check (below) after every frame load. */
+const layoutOnLoad = params.get("layout") === "1";
 /* `slow=users-admin/link_get` holds that call for two minutes, so its loading
  * state can be looked at. */
 const slowCalls = new Set(params.getAll("slow"));
@@ -223,10 +229,12 @@ shell.innerHTML = `
     <strong>vpn-core dev harness</strong>
     <label>route <select id="route">${ROUTES.map((value) => `<option${value === route ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>data <select id="scenario">${SCENARIOS.map((value) => `<option${value === scenario ? " selected" : ""}>${value}</option>`).join("")}</select></label>
+    <label>content <select id="content">${CONTENT_SHAPES.map((value) => `<option${value === content ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <label>width <select id="width">${["1440", "2423", "375"].map((value) => `<option${value === width ? " selected" : ""}>${value}</option>`).join("")}</select></label>
     <button id="theme" type="button">${dark ? "light" : "dark"}</button>
     <span id="reported"></span>
     <span id="state"></span>
+    <span id="layout"></span>
   </div>
   <div class="viewport" id="viewport">
     <div class="frame-wrap" id="wrap"><iframe id="frame" title="plugin"></iframe></div>
@@ -238,6 +246,7 @@ const wrap = document.getElementById("wrap") as HTMLDivElement;
 const viewport = document.getElementById("viewport") as HTMLDivElement;
 const reported = document.getElementById("reported") as HTMLSpanElement;
 const stateNote = document.getElementById("state") as HTMLSpanElement;
+const layoutNote = document.getElementById("layout") as HTMLSpanElement;
 
 function tokens(): Record<string, string> {
   return dark ? DARK : LIGHT;
@@ -254,6 +263,8 @@ function applyChrome(): void {
 /** The harness's keys, then the page state, as the console would hold it. */
 function writeAddress(): void {
   const query = new URLSearchParams({ route, scenario, theme: dark ? "dark" : "light", width, frame: String(windowHeight) });
+  if (content !== "plain") query.set("content", content);
+  if (layoutOnLoad) query.set("layout", "1");
   for (const key of failCalls) query.append("fail", key);
   for (const key of slowCalls) query.append("slow", key);
   if (stepUp !== "ok") query.set("stepup", stepUp);
@@ -272,6 +283,8 @@ function reload(): void {
   stateTimes = [];
   readySeen = false;
   stateNote.textContent = oldHost ? "old host: page state not kept" : "";
+  layoutNote.textContent = "";
+  (window as unknown as { __layout?: LayoutReport }).__layout = undefined;
   // The epoch matters: assigning an identical src, fragment and all, is a
   // same-document navigation, so the frame would keep running and the route or
   // data the operator just picked would never reach a fresh plugin.
@@ -342,7 +355,7 @@ window.addEventListener("message", (event) => {
       return;
     }
     case "lattice.plugin.call": {
-      const table = { ...handlers(scenario), ...probeHandlers(probeScenario) };
+      const table = withContent({ ...handlers(scenario), ...probeHandlers(probeScenario) }, content);
       const key = `${String(data.service).split("/").pop()}/${data.method}`;
       const handler = table[key];
       const isLink = String(data.method).startsWith("link_");
@@ -398,6 +411,10 @@ document.getElementById("scenario")!.addEventListener("change", (event) => {
   scenario = (event.target as HTMLSelectElement).value as Scenario;
   reload();
 });
+document.getElementById("content")!.addEventListener("change", (event) => {
+  content = (event.target as HTMLSelectElement).value as ContentShape;
+  reload();
+});
 document.getElementById("width")!.addEventListener("change", (event) => {
   width = (event.target as HTMLSelectElement).value;
   reload();
@@ -407,6 +424,239 @@ document.getElementById("theme")!.addEventListener("click", () => {
   applyChrome();
   post({ type: "lattice.host.theme", colorScheme: dark ? "dark" : "light", designTokens: tokens() });
 });
+
+/* ---------------------------------------------------------------------------
+ * `?layout=1`: assert the property, not a threshold.
+ *
+ * PR #20 called this `?probe=1`. `probe=` has since come to pick what the Probe
+ * layer's fixture answers, so the check took its own key rather than share one
+ * with a different meaning.
+ *
+ * The content fixture had a near miss worth encoding here. It detected a
+ * collector overflow because a hostname was long enough, and when that string
+ * was made more realistic it became 17px shorter than the container, fit, and
+ * the fixture went quiet while still reporting green. The repair was to
+ * lengthen the string, which is a threshold, and a threshold drifts: a font
+ * size, a padding, a grid track or a panel width, all of which live in other
+ * files, move the same margin without anyone touching the string.
+ *
+ * So this asserts what cannot drift. Not "does the panel overflow by N", which
+ * is a number, but "is anything on screen unreachable", which is a binary. If
+ * every value fits, nothing is clipped and this is silent rather than falsely
+ * green. If a rule regresses, it trips at whatever margin it produces.
+ *
+ * Three properties, each a real failure rather than a proxy for one:
+ *
+ *   1. A panel that overflows has lost content outright. `.data-panel` hides
+ *      its overflow: there is no scrollbar, and neither the wheel nor a swipe
+ *      moves it. Past its edge the content is gone.
+ *   2. A scroller that overflows is fine, provided every pixel is reachable.
+ *      Off-screen and gone look identical in a screenshot and are not the
+ *      same thing. #20 checked that `scrollLeft` travels `scrollWidth -
+ *      clientWidth`, which a real engine always allows, so that test could
+ *      only fail on rounding. What does lose a scroller's content is its own
+ *      box running past an ancestor that clips: the scroll range is all there,
+ *      and its end can never be brought into view.
+ *   3. A clipped element is acceptable only if the full value is recoverable,
+ *      which here means a `title` on it, on an ancestor, or on a child the
+ *      pointer can reach. Clipped with no title is information destroyed with
+ *      no recourse, which is the shape of every truncation defect this
+ *      harness has found.
+ *
+ * Which elements clip and which scroll is read from computed style, not from a
+ * list of class names. The first version listed selectors (`td strong`,
+ * `.badge`, `.collector-grid p`), and the screens it was written against have
+ * since been rebuilt around other classes: a selector list goes stale the same
+ * silent way a threshold drifts. The subject guard below does keep a list, and
+ * that is safe in the other direction, because a stale guard reports that it
+ * examined nothing, which is loud.
+ *
+ * Manual, and deliberately so. Layout needs a real engine, jsdom will not
+ * compute any of it, and a browser lane is a real cost to carry for one
+ * property. `checkLayout()` in the console runs it on whatever is open (a
+ * sheet, a probe result); `layout=1` runs it after every frame load. It does
+ * not make CI defend the property; that remains a decision to take on purpose.
+ * ------------------------------------------------------------------------- */
+
+interface Finding {
+  property: "no-subject" | "panel-clipped" | "scroller-unreachable" | "clipped-without-recourse";
+  detail: string;
+}
+interface LayoutReport {
+  findings: Finding[];
+  /** Panels, content cells and clipping elements examined, reported apart. */
+  panels: number;
+  cells: number;
+  clipping: number;
+}
+
+const PANELS = ".data-panel";
+
+/* The subject two of the properties are about: cells holding row data, the
+ * collector grid, attention items and the exit bars. The guard counts these
+ * and nothing that merely correlates with them. The first version counted
+ * every capped element, and once two panel headers grew row-count chips an
+ * empty usage screen reported "clear (4p 2c)": two chips reading "0
+ * identities" and "0 nodes", no table cells at all, and a count that looked
+ * healthy enough to take the pass branch. A proxy count fails as silently as
+ * a proxy threshold.
+ *
+ * A cell that spans columns is not a subject either. Every "nothing here" row
+ * in this plugin is one (the empty topology table says so in a
+ * `<td colspan="7">`), and counting it reported an empty fleet as
+ * "clear (1p 1c)". Spanning cells that do carry data (a probe target's error,
+ * a row's evidence) belong to a row whose own cells are counted. */
+const CONTENT_CELLS = "tbody td:not([colspan]), .collector-grid > div, .attention-item, .exit-bars > li";
+
+const rendered = (el: Element) => el.getClientRects().length > 0;
+
+function panelName(el: Element): string {
+  const panel = el.closest(PANELS);
+  if (!panel) return "(outside any panel)";
+  const label = panel.getAttribute("aria-label") ?? panel.querySelector("h2, h3")?.textContent ?? "";
+  return label.trim() || `(unnamed .${[...panel.classList].join(".")})`;
+}
+
+function nameOf(el: Element): string {
+  return [el.tagName.toLowerCase(), ...el.classList].join(".");
+}
+
+function measureLayout(): LayoutReport {
+  const doc = frame.contentDocument;
+  const view = doc?.defaultView;
+  if (!doc?.body || !view) return { findings: [{ property: "no-subject", detail: "the frame has no document to check" }], panels: 0, cells: 0, clipping: 0 };
+  const panels = Array.from(doc.querySelectorAll<HTMLElement>(PANELS)).filter(rendered);
+  const cells = Array.from(doc.querySelectorAll(CONTENT_CELLS)).filter(rendered).length;
+  /* Nothing to check is not the same as nothing wrong, and printing the one as
+   * "clear" is how this check once reported a screen that was overflowing by
+   * 50px. Zero panels or zero cells is a finding, not a pass. */
+  if (panels.length === 0 || cells === 0) {
+    return {
+      findings: [{
+        property: "no-subject",
+        detail: `${panels.length} panels and ${cells} content cells rendered, so ${panels.length === 0 ? "nothing" : "almost nothing"} was checked; this is not a pass. If the route is right, the scenario probably has no rows here.`,
+      }],
+      panels: panels.length, cells, clipping: 0,
+    };
+  }
+  const findings: Finding[] = [];
+
+  for (const panel of panels) {
+    const over = panel.scrollWidth - panel.clientWidth;
+    // One pixel is sub-pixel rounding of the border box, not lost content.
+    if (over > 1) {
+      findings.push({
+        property: "panel-clipped",
+        detail: `${panelName(panel)} overflows its own panel by ${over}px; .data-panel hides overflow, so that content cannot be scrolled to`,
+      });
+    }
+  }
+
+  let clipping = 0;
+  for (const el of Array.from(doc.body.querySelectorAll<HTMLElement>("*"))) {
+    if (el.matches(PANELS) || !rendered(el)) continue;
+    const style = view.getComputedStyle(el);
+    if (style.overflowX === "auto" || style.overflowX === "scroll") {
+      const need = el.scrollWidth - el.clientWidth;
+      if (need <= 0) continue;
+      /* The nearest ancestor that does not let overflow show decides: one
+       * that scrolls can bring the cut part into view, one that clips cannot. */
+      for (let up = el.parentElement; up && up !== doc.body; up = up.parentElement) {
+        const outer = view.getComputedStyle(up).overflowX;
+        if (outer === "visible") continue;
+        if (outer === "hidden" || outer === "clip") {
+          const box = el.getBoundingClientRect();
+          const edge = up.getBoundingClientRect();
+          const cut = Math.round(Math.max(box.right - edge.right, edge.left - box.left));
+          if (cut > 1) {
+            findings.push({
+              property: "scroller-unreachable",
+              detail: `${panelName(el)}: ${nameOf(el)} scrolls ${need}px of content, but its own box runs ${cut}px past ${nameOf(up)}, which clips it, so that end of its range never comes into view`,
+            });
+          }
+        }
+        break;
+      }
+      continue;
+    }
+    const clipsX = style.overflowX === "hidden" || style.overflowX === "clip";
+    const clipsY = style.overflowY === "hidden" || style.overflowY === "clip";
+    /* A one-pixel box is a visually hidden label (.sr-only), not a value. */
+    if ((!clipsX && !clipsY) || el.clientWidth <= 1 || el.clientHeight <= 1) continue;
+    clipping += 1;
+    const wide = clipsX ? el.scrollWidth - el.clientWidth : 0;
+    /* Vertically, less than half a line is a clipped descender, not a lost line. */
+    const line = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.2 || 16;
+    const tall = clipsY ? el.scrollHeight - el.clientHeight : 0;
+    if (wide <= 0 && tall < line / 2) continue;
+    if (el.closest("[title]") || el.querySelector("[title]")) continue;
+    findings.push({
+      property: "clipped-without-recourse",
+      detail: `${panelName(el)}: ${nameOf(el)} is clipped by ${wide > 0 ? `${wide}px` : `${tall}px vertically`} and carries no title, so the full value cannot be recovered: ${JSON.stringify((el.textContent ?? "").trim().slice(0, 48))}`,
+    });
+  }
+
+  return { findings, panels: panels.length, cells, clipping };
+}
+
+/* Wait for the document to settle rather than guessing a delay, and rather
+ * than waiting on the panels alone. The panels mount before their data
+ * arrives, so `.data-panel` exists while the rows are still empty: checking
+ * then examined a real but unpopulated screen and called it clear. Settling on
+ * the count of what is examined is the signal, and it is the same number the
+ * pass line reports, so the signal and the evidence are one quantity. Half a
+ * second of no growth, not one sample: a single match is satisfied by any
+ * plateau between two renders.
+ *
+ * No cells keeps it waiting too, up to the same six seconds. A loading screen
+ * holds one skeleton panel and no rows, and when the screen's reads run one
+ * after another that plateau outlasts half a second: the check settled on it
+ * and reported no subject over a Collectors panel that, a moment later, was
+ * overflowing by 51px. A screen that truly has no rows still ends in the
+ * no-subject finding, six seconds later. */
+function subjects(): { panels: number; cells: number } {
+  const doc = frame.contentDocument;
+  if (!doc) return { panels: 0, cells: 0 };
+  return { panels: doc.querySelectorAll(PANELS).length, cells: Array.from(doc.querySelectorAll(CONTENT_CELLS)).filter(rendered).length };
+}
+
+function settle(): Promise<void> {
+  return new Promise((resolve) => {
+    let last = "";
+    let stable = 0;
+    let attempt = 0;
+    const tick = () => {
+      const now = subjects();
+      const key = `${now.panels}:${now.cells}`;
+      stable = key === last ? stable + 1 : 0;
+      last = key;
+      attempt += 1;
+      if ((now.cells === 0 || stable < 5) && attempt < 60) window.setTimeout(tick, 100);
+      else resolve();
+    };
+    tick();
+  });
+}
+
+async function checkLayout(): Promise<LayoutReport> {
+  const epoch = frameEpoch;
+  await settle();
+  const report = measureLayout();
+  // A frame that reloaded while this settled is someone else's subject.
+  if (epoch !== frameEpoch) return report;
+  (window as unknown as { __layout?: LayoutReport }).__layout = report;
+  if (report.findings.length === 0) {
+    /* A bare "clear" is what let an empty document pass for a sound one, so
+     * it carries what it examined. */
+    console.log(`[layout] clear: ${report.panels} panels, ${report.cells} content cells and ${report.clipping} clipping elements examined, nothing clipped without recourse and nothing unreachable`);
+    layoutNote.textContent = `layout: clear (${report.panels}p ${report.cells}c, ${report.clipping} clipping)`;
+  } else {
+    for (const finding of report.findings) console.error(`[layout] ${finding.property}: ${finding.detail}`);
+    layoutNote.textContent = `layout: ${report.findings.length} finding${report.findings.length === 1 ? "" : "s"}`;
+  }
+  return report;
+}
+(window as unknown as { checkLayout: () => Promise<LayoutReport> }).checkLayout = checkLayout;
 
 /* `?measure=1` arms the very first mount, so a single fresh tab load yields one
  * number for what the operator actually waits through: no remount, no warm
@@ -418,3 +668,14 @@ if (params.get("measure") === "1") {
 }
 
 reload();
+
+/* `layout=1` checks once each frame load has settled. The short delay is the
+ * plugin's first paint, not a race fix; settle() is what waits for the data.
+ *
+ * This hook belongs at the end of the file, after the final `reload()`. It was
+ * first written against the wrong `reload();`, the one inside `measureRender`,
+ * where it typechecked, built, and never executed. The check reported nothing,
+ * and an empty result reads the same as a clean one. */
+if (layoutOnLoad) {
+  frame.addEventListener("load", () => window.setTimeout(() => void checkLayout(), 150));
+}

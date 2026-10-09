@@ -116,6 +116,13 @@ console. There is no `dev` script in `ui/package.json`, so start it with
 `offfleet`, `rich`, `dense`, `empty` and `failing`. `?probe=` picks what the
 probe answers on the Probe layer (`ui/dev/probeFixtures.ts` lists one scenario
 per state) and `?deny=probe` plays a session without `vpn:probe`.
+`?content=hostile` keeps any scenario's topology and makes its display strings
+adversarial: node names that differ only past the cut, ids that share a long
+prefix, an unbreakable token in an error, and one enum value this build has not
+learned. `?layout=1` checks every frame load for a panel that overflows, a
+scroller that cannot reach its end, and a clipped value with no title, and
+prints the result in the bar; `checkLayout()` in the console runs the same
+check on whatever is open.
 
 ## Reproducible bundle
 
