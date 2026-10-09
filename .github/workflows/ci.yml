@@ -68,7 +68,7 @@ jobs:
         env:
           # alpha-0.2.2a122 release commit 0133390, the first server that knows the vpn:probe scope.
           # Move ONLY to another released tag's commit.
-          LATTICE_CHECK_REF: v0.2.4-0.20261008200845-01333905e310
+          LATTICE_CHECK_REF: v0.2.4-0.20261009034729-e987e1606b03
         run: go run "github.com/LatticeNet/lattice-server/cmd/lattice-plugin-manifest-check@${LATTICE_CHECK_REF}" manifest.json
 
       - name: build runtime binaries
