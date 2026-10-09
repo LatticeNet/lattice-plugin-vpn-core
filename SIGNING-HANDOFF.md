@@ -28,7 +28,7 @@ The authorized signer must verify:
 5. The canonical manifest is signed only after that digest is fixed.
 
 Compatibility inputs: read them from `manifest.json` rather than from this
-line. At the time of writing they were server floor `0.2.2-alpha.19`, dashboard
+line. At the time of writing they were server floor `0.2.2-alpha.123`, dashboard
 host bridge `1`, node-agent `0.3.4-alpha.1`. The plugin version is whatever the
 manifest declares.
 

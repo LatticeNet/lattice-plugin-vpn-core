@@ -16,6 +16,8 @@ func TestSDKHandlerPreservesCoreBackedHostBoundary(t *testing.T) {
 		{service: "latticenet.vpn-core/lines", method: "chains"},
 		{service: "latticenet.vpn-core/subscription-sources", method: "graph_options"},
 		{service: "latticenet.vpn-core/subscription-sources", method: "compose"},
+		{service: "latticenet.vpn-core/lines", method: "catalogue"},
+		{service: "latticenet.vpn-core/identities", method: "list"},
 	} {
 		resp := handleSDKRequest(context.Background(), request{
 			Action:  "call",

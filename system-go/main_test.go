@@ -256,6 +256,59 @@ func TestManifestDeclaresSubscriptionSourceContract(t *testing.T) {
 	t.Fatal("subscription-sources service is missing")
 }
 
+// The native Sub-Store (design 28) reads the line catalogue and the identity
+// list from core. Both are credential-free reads, and lattice-server serves
+// exactly lines.catalogue and identities.list, so the manifest declares them at
+// vpncore:read and nothing more: an identities method added later must widen
+// this test on purpose.
+func TestManifestDeclaresSubStoreCatalogueContract(t *testing.T) {
+	raw, err := os.ReadFile("../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Interfaces []struct {
+			Service string `json:"service"`
+			Backing string `json:"backing"`
+			Methods []struct {
+				Name   string   `json:"name"`
+				Effect string   `json:"effect"`
+				Scopes []string `json:"scopes"`
+			} `json:"methods"`
+		} `json:"interfaces"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	sawCatalogue, sawIdentities := false, false
+	for _, iface := range manifest.Interfaces {
+		switch iface.Service {
+		case "latticenet.vpn-core/lines":
+			for _, m := range iface.Methods {
+				if m.Name != "catalogue" {
+					continue
+				}
+				if iface.Backing != "core" || m.Effect != "read" || !reflect.DeepEqual(m.Scopes, []string{"vpncore:read"}) {
+					t.Fatalf("lines.catalogue contract = backing %q effect %q scopes %v", iface.Backing, m.Effect, m.Scopes)
+				}
+				sawCatalogue = true
+			}
+		case "latticenet.vpn-core/identities":
+			if iface.Backing != "core" || len(iface.Methods) != 1 {
+				t.Fatalf("identities = backing %q with %d methods; want core with list only", iface.Backing, len(iface.Methods))
+			}
+			m := iface.Methods[0]
+			if m.Name != "list" || m.Effect != "read" || !reflect.DeepEqual(m.Scopes, []string{"vpncore:read"}) {
+				t.Fatalf("identities method = %s effect %q scopes %v", m.Name, m.Effect, m.Scopes)
+			}
+			sawIdentities = true
+		}
+	}
+	if !sawCatalogue || !sawIdentities {
+		t.Fatalf("lines.catalogue declared %v, identities.list declared %v", sawCatalogue, sawIdentities)
+	}
+}
+
 // The version the sidecar reports and the version the manifest declares must be
 // the same number, and a signature, when the manifest carries one, must be what
 // pluginsign writes over a packed bundle.
