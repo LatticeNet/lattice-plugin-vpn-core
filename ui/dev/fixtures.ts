@@ -1361,3 +1361,206 @@ export function handlers(scenario: Scenario): Record<string, (payload: any) => u
     },
   };
 }
+
+/* ---------------------------------------------------------------------------
+ * Content shape, orthogonal to the scenarios above.
+ *
+ * Every value of `Scenario` is a topology: how the fleet is wired and which
+ * edges the control plane can see. None of them says anything about the shape
+ * of the strings the server returns, and that is the axis every defect in the
+ * usage-screen review came from. A server enum this build has not learned, an
+ * unbreakable token in a collector error, node names distinguished only by a
+ * trailing suffix, and identifiers that share a prefix because they are
+ * time-ordered: none depends on how the fleet is wired, and none of the
+ * scenarios can express any of them.
+ *
+ * So this is a modifier rather than another scenario. Adding it to that enum
+ * would put a content shape in a list that means topology, and the next reader
+ * would take it for one. `hostile` composes with any topology, and with any
+ * probe scenario, because it wraps a handler table instead of building one.
+ *
+ * It rewrites display strings only. Structure, counts and every number are
+ * untouched, so a topology renders the same shape of screen either way and
+ * only the text is adversarial.
+ * ------------------------------------------------------------------------- */
+
+export type ContentShape = "plain" | "hostile";
+export const CONTENT_SHAPES: readonly ContentShape[] = ["plain", "hostile"];
+
+/* Values chosen because each one broke something real, not because each one is
+ * long. Length alone is the easy case and the caps already handle it.
+ *
+ * Every generator that names one thing is injective in its index, so two
+ * originals never share a rewrite. The first version cycled through a short
+ * period (18 names, 130 ids), which was harmless at 111 lines and gives two
+ * lines one id at 136: duplicate keys, one row drawn twice, and a harness bug
+ * that reads exactly like the product bugs this exists to find. */
+const HOSTILE = {
+  /* Sibling nodes named from one template, differing only past the cut. */
+  name: (i: number) =>
+    `${["frankfurt-equinix-fr5", "amsterdam-equinix-am7", "singapore-equinix-sg3"][i % 3]}` +
+    `-transit-egress-cluster-node-${String(i + 1).padStart(3, "0")}-` +
+    (i % 2 ? "secondary" : "primary"),
+  /* ULIDs are lexicographically time-ordered, so ids minted seconds apart
+   * share a long prefix and differ in the tail. End truncation removes
+   * precisely the distinguishing part. */
+  ulid: (i: number) =>
+    `nd_01J8ZQK4X9F7M2P5R8T1V4W7Y0B3D6G9J2L5N8Q1S4U7X0Z3C6F9H2K5M8P1R4` +
+    i.toString(32).toUpperCase().padStart(2, "0"),
+  /* Generated paths have the same property for the same reason. */
+  path: (i: number) =>
+    `/var/lib/lattice/managed/sing-box/generated/production/cluster-am7/` +
+    `node-${String(i + 1).padStart(3, "0")}/config.observed.json`,
+  /* An identity that outgrows any cap a cell can be given. */
+  identity: (i: number) =>
+    `network.operations.oncall.${String(i).padStart(2, "0")}.${i % 2 ? "secondary" : "primary"}` +
+    `@subsidiary-holdings.example.invalid`,
+  /* A realistic resolver failure whose hostname has no break opportunity: no
+   * space, no hyphen, no dot inside the label. The surrounding message wraps
+   * at its spaces, so what has to overflow is the label alone.
+   *
+   * Its length was measured against the collector grid it has to break, after
+   * a shorter and more realistic form fit with 17px to spare and the fixture
+   * went quiet. That makes the length a threshold, and a threshold drifts with
+   * any font size, padding or grid track in another file. The layout check in
+   * host.ts (`?layout=1`) is the part that does not drift: it asserts that
+   * nothing on screen is unreachable, at whatever margin. */
+  unbreakable: () =>
+    "dial tcp: lookup collector_internal_am7_transit_egress_cluster_secondary_endpoint_observed " +
+    "on 10.0.0.1:53: no such host",
+  /* A value this build has not learned. Label helpers echo an unrecognised
+   * server enum verbatim, so the widest string a cell can hold is not bounded
+   * by anything this repo knows about. */
+  enum: (i: number) =>
+    (i % 2
+      ? "reality_sni_fallback_via_upstream_relay_chain_unverified"
+      : "multi_hop_relay_with_reality_fallback_egress"),
+};
+
+/* Rewritten by field name rather than by path, so a fixture growing a new row
+ * is covered without touching this. Field names were read out of the fixtures
+ * rather than guessed: an identity is `email`, not `name` (`name` is a display
+ * label like "Operations", and a line's file name), and a failure is `error`
+ * on a usage collector and a probe answer, `last_error` on a line and on a
+ * profile's collector, and `discovery_error` on a profile.
+ *
+ * `attribution_reason` is prose, not an enum, so every row gets the
+ * enum-shaped token there: one unbroken run of underscores is the width
+ * hazard. The enums proper are the fields below, replaced once per answer. */
+const HOSTILE_FIELDS: Record<string, (i: number) => string> = {
+  node_name: HOSTILE.name,
+  tag: HOSTILE.name,
+  email: HOSTILE.identity,
+  config_path: HOSTILE.path,
+  outbound_ref: HOSTILE.path,
+  last_error: HOSTILE.unbreakable,
+  error: HOSTILE.unbreakable,
+  discovery_error: HOSTILE.unbreakable,
+  attribution_reason: HOSTILE.enum,
+};
+
+/* A line is named by its hash in more places than `line_hash_id`: the relay
+ * graph's `jump_edges` and `declared_jump_edges`, and `counted_at`, which is a
+ * comma-joined list of hashes despite its name. They share one namespace, so
+ * a reference and the line it names get the same rewrite. Rewriting only the
+ * field called `line_hash_id` would leave every edge pointing at a line that
+ * no longer exists, and the topology would stop being the topology. */
+const LINE_REFERENCES: Record<string, "one" | "list" | "array"> = {
+  line_hash_id: "one",
+  counted_at: "list",
+  jump_edges: "array",
+  declared_jump_edges: "array",
+};
+
+/* Protocol, not display: an outbound of `direct` is what tells the plugin a
+ * line leaves the fleet rather than naming an upstream. */
+const SENTINELS = new Set(["direct"]);
+
+/* Rewrites that name one thing, which the plugin may send back in a call (the
+ * line the operator opened, the identity being edited). Error and enum values
+ * are many-to-one and never come back. */
+const REVERSIBLE = new Set<(i: number) => string>([HOSTILE.name, HOSTILE.ulid, HOSTILE.path, HOSTILE.identity]);
+
+/* Enums are handled separately and deliberately sparingly. An unrecognised
+ * enum was a real defect, because the label helpers echo a value this build
+ * has not learned verbatim and nothing bounds its width. But these fields
+ * drive rendering branches rather than only text, so rewriting every row would
+ * change the topology's meaning: every collector would read as broken and the
+ * scenario would no longer be the scenario. Only the first occurrence of each
+ * in an answer is replaced, which puts one unknown value beside known ones,
+ * which is also the shape the real bug arrived in. `attribution` and
+ * `allocation` joined the list because attributionLabel and the identity
+ * sheet's allocation badge echo theirs too. */
+const HOSTILE_ENUMS = new Set(["role", "status", "collector_state", "attribution", "allocation"]);
+
+/* Identity fields keep a stable rewrite per original value, so the same node
+ * reads the same everywhere it appears and a reader can still follow one row
+ * across two tables. The memo lives as long as the harness page, not one
+ * call: the host builds a fresh handler table for every call, so a memo held
+ * by the table restarts with every answer, and a node takes whatever name its
+ * position in that answer gives it, one name on Lines and another on Usage. */
+const rewritten = new Map<string, string>();
+const originals = new Map<string, string>();
+
+function rewrite(namespace: string, value: string, make: (i: number) => string): string {
+  const key = `${namespace}\u0000${value}`;
+  let out = rewritten.get(key);
+  if (out === undefined) {
+    out = make(rewritten.size);
+    rewritten.set(key, out);
+    if (REVERSIBLE.has(make)) originals.set(out, value);
+  }
+  return out;
+}
+
+function hardenLine(value: unknown, shape: "one" | "list" | "array"): unknown {
+  const line = (hash: string) => (hash ? rewrite("line", hash, HOSTILE.ulid) : hash);
+  if (shape === "array") return Array.isArray(value) ? value.map((hash) => (typeof hash === "string" ? line(hash) : hash)) : value;
+  if (typeof value !== "string") return value;
+  return shape === "list" ? value.split(",").map((hash) => line(hash.trim())).join(",") : line(value);
+}
+
+/** One answer, with its display strings made hostile. `hits` is per answer. */
+export function harden<T>(value: T, hits = new Map<string, number>()): T {
+  if (Array.isArray(value)) return value.map((item) => harden(item, hits)) as unknown as T;
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const make = HOSTILE_FIELDS[key];
+    if (typeof item === "string" && item !== "" && HOSTILE_ENUMS.has(key)) {
+      const n = hits.get(key) ?? 0;
+      hits.set(key, n + 1);
+      out[key] = n === 0 ? HOSTILE.enum(hits.size) : item;
+    } else if (LINE_REFERENCES[key]) {
+      out[key] = hardenLine(item, LINE_REFERENCES[key]);
+    } else if (make && typeof item === "string" && item !== "" && !SENTINELS.has(item)) {
+      out[key] = rewrite(key, item, make);
+    } else {
+      out[key] = harden(item, hits);
+    }
+  }
+  return out as T;
+}
+
+/* Calls carry values back, and the handlers behind this keep state and look
+ * things up by them, so every rewrite in a payload is mapped back to its
+ * original before the handler sees it. Without this, opening a line under
+ * `hostile` answered "line not found", a harness bug that reads as a product
+ * one. */
+function soften(value: unknown): unknown {
+  if (typeof value === "string") return originals.get(value) ?? value;
+  if (Array.isArray(value)) return value.map(soften);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, soften(item)]));
+}
+
+/** A handler table answering in the given content shape. `plain` is the table itself. */
+export function withContent(
+  table: Record<string, (payload: any) => unknown>,
+  content: ContentShape,
+): Record<string, (payload: any) => unknown> {
+  if (content !== "hostile") return table;
+  return Object.fromEntries(
+    Object.entries(table).map(([route, fn]) => [route, (payload: any) => harden(fn(soften(payload)))]),
+  );
+}
