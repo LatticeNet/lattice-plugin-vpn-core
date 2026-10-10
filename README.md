@@ -126,7 +126,7 @@ check on whatever is open.
 
 ## Reproducible bundle
 
-Build Linux runtimes with Go `1.26.4`, build the UI with Node `22`, then assemble:
+Build Linux runtimes with Go `1.26.9`, build the UI with Node `22`, then assemble:
 
 ```text
 bin/linux-amd64/plugin
