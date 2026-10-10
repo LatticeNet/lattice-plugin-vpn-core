@@ -33,7 +33,7 @@ host bridge `1`, node-agent `0.3.4-alpha.1`. The plugin version is whatever the
 manifest declares.
 
 Verified complete-bundle SHA-256:
-`6a741390b7f1fffbad7cd4a4f6d05e101199d6cfd3587dcefb51f42429f7aa11`.
+`346d3ccf00e18e441f6328be8eddb82f868ca4a3b157aff6360c717b918b528e`.
 
 That digest is CI's canonical one for the version `manifest.json` declares,
 adopted from the run log after the branch built, and `manifest.json` carries the
