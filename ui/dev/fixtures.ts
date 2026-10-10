@@ -1396,9 +1396,15 @@ export const CONTENT_SHAPES: readonly ContentShape[] = ["plain", "hostile"];
  * lines one id at 136: duplicate keys, one row drawn twice, and a harness bug
  * that reads exactly like the product bugs this exists to find. */
 const HOSTILE = {
-  /* Sibling nodes named from one template, differing only past the cut. */
+  /* Sibling nodes named from one template, differing only past the cut. One
+   * template in three opens with a flag and CJK, as subscription node names
+   * often do. Glyphs from a fallback font grow a line box whose height is
+   * `normal`, and while every name here was ASCII, PR #40's third head drew
+   * such a name's middle-cut face 5px below its copy without the layout check
+   * or the sweep seeing it. The flag is written as its two regional
+   * indicators. */
   name: (i: number) =>
-    `${["frankfurt-equinix-fr5", "amsterdam-equinix-am7", "singapore-equinix-sg3"][i % 3]}` +
+    `${["frankfurt-equinix-fr5", "amsterdam-equinix-am7", "\u{1F1EF}\u{1F1F5} 东京-软银-IPLC-tyo2"][i % 3]}` +
     `-transit-egress-cluster-node-${String(i + 1).padStart(3, "0")}-` +
     (i % 2 ? "secondary" : "primary"),
   /* ULIDs are lexicographically time-ordered, so ids minted seconds apart

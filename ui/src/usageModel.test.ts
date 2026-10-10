@@ -7,6 +7,7 @@ import {
   collectorLabel,
   collectorReports,
   collectorTone,
+  collectorUnknown,
   coverageNote,
   foldUsage,
   formatDay,
@@ -178,6 +179,16 @@ describe("a collector that is not reporting means unknown, not zero", () => {
     expect(collectorTone("ok")).toBe("healthy");
     expect(collectorTone("error")).toBe("error");
     expect(collectorTone("no_collector")).toBe("warning");
+  });
+
+  it("singles out a state this build has not learned, so it can carry a title", () => {
+    for (const state of ["ok", "error", "stats_off", "no_collector", "", undefined]) {
+      expect(collectorUnknown(state)).toBeUndefined();
+    }
+    const skew = "reality_sni_fallback_via_upstream_relay_chain_unverified";
+    expect(collectorUnknown(skew)).toBe(skew);
+    expect(collectorLabel(skew)).toBe(skew);
+    expect(collectorTone(skew)).toBe("warning");
   });
 });
 

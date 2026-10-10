@@ -216,6 +216,8 @@ describe("content=hostile composes with a topology", () => {
     }
     expect(new Set(named.values()).size).toBe(named.size);
     expect([...named.values()].every((name) => /-transit-egress-cluster-node-\d{3}-(primary|secondary)$/.test(name ?? ""))).toBe(true);
+    // Some names need a fallback font: a flag (two regional indicators) and CJK.
+    expect([...named.values()].filter((name) => /^\p{Regional_Indicator}{2} \p{Script=Han}/u.test(name ?? "")).length).toBeGreaterThan(0);
   });
 
   it("replaces only the first occurrence of each enum in an answer", () => {

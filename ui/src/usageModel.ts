@@ -240,13 +240,30 @@ export function measurementLabel(row: UsageLineRow): string {
   return row.estimate ? "estimated" : "measured";
 }
 
+const COLLECTOR_LABELS: Record<string, string> = {
+  ok: "reporting",
+  error: "collector failing",
+  stats_off: "stats API off",
+  no_collector: "no collector",
+};
+
 export function collectorLabel(state: string): string {
-  return ({
-    ok: "reporting",
-    error: "collector failing",
-    stats_off: "stats API off",
-    no_collector: "no collector",
-  } as Record<string, string>)[state] ?? (state || "not reported");
+  return COLLECTOR_LABELS[state] ?? (state || "not reported");
+}
+
+/**
+ * A collector state this build has not learned, or undefined for a known one.
+ * The label helpers echo such a value verbatim on purpose (the server and the
+ * plugin version apart), and nothing bounds its width, so wherever it is
+ * shown it also goes in a title: the status dot's budget may cut it.
+ *
+ * Profiles show a profile's collector status raw, with no label table of
+ * their own, so there a known value outside these four ("not configured")
+ * also gets the title. That costs a tooltip that repeats the label; it
+ * cannot hide anything.
+ */
+export function collectorUnknown(state: string | undefined): string | undefined {
+  return state && COLLECTOR_LABELS[state] === undefined ? state : undefined;
 }
 
 export function collectorTone(state: string): Tone {

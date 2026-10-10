@@ -34,6 +34,7 @@ import {
   type LineTrafficIndex,
 } from "./lineGroups";
 import type { EvidenceLens } from "./navigate";
+import MiddleText from "./MiddleText.vue";
 import { LINE_QUERY_EXAMPLES, LINE_QUERY_SCHEMA, lineQueryRows } from "./querySchemas";
 import RowMenu, { type RowMenuItem } from "./RowMenu.vue";
 import { formatBytes, pageRows, type Line, type LineGroup } from "./vpnModel";
@@ -200,13 +201,13 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
           <tbody>
             <tr v-for="entry in flatPage.rows" :key="entry.line.line_hash_id" class="line-row clickable-row" :data-selected="openLine === entry.line.line_hash_id || undefined" @click="emit('open', entry.group, entry.line)">
               <td class="sticky-first line-col">
-                <button class="row-open" type="button" :data-line-open="entry.line.line_hash_id" @click.stop="emit('open', entry.group, entry.line)"><strong :title="entry.line.name">{{ entry.line.name }}</strong></button>
-                <small class="mono" :title="entry.line.line_hash_id">{{ entry.line.line_hash_id }}</small>
+                <button class="row-open" type="button" :data-line-open="entry.line.line_hash_id" @click.stop="emit('open', entry.group, entry.line)"><strong :title="entry.line.name"><MiddleText :text="entry.line.name" /></strong></button>
+                <small class="mono" :title="entry.line.line_hash_id"><MiddleText :text="entry.line.line_hash_id" /></small>
               </td>
-              <td><span class="cell-text" :title="nodeLabel(entry.group)">{{ nodeLabel(entry.group) }}</span></td>
+              <td><span class="cell-text" :title="nodeLabel(entry.group)"><MiddleText :text="nodeLabel(entry.group)" /></span></td>
               <td><span class="badge" :data-tone="entry.role === 'orphan' ? 'error' : undefined">{{ roleText(entry) }}</span><span v-if="entry.line.managed" class="badge" data-tone="info">managed</span></td>
               <td class="mono">{{ entry.line.type || 'unknown' }} :{{ entry.line.listen_port || '?' }}</td>
-              <td :class="{ 'warn-text': entry.target.kind === 'none' }"><span class="cell-text" :title="targetText(entry)">{{ targetText(entry) }}</span><small v-if="entry.target.kind === 'off-fleet'">outside the fleet</small></td>
+              <td :class="{ 'warn-text': entry.target.kind === 'none' }"><span class="cell-text" :title="targetText(entry)"><MiddleText :text="entry.target.label" :suffix="entry.target.more > 0 ? ` +${entry.target.more}` : ''" /></span><small v-if="entry.target.kind === 'off-fleet'">outside the fleet</small></td>
               <td class="num mono" :title="entry.line.user_known ? undefined : 'The node did not report a user count for this line'">{{ entry.line.user_known ? entry.line.user_count : 'unknown' }}</td>
               <td class="num mono" :data-unknown="entry.bytes === undefined || undefined">{{ bytesCell(entry.bytes) }}</td>
               <td v-if="showState"><span class="status-dot" :data-tone="entry.state.tone" :data-common="entry.state.rank <= 1 || undefined">{{ entry.state.label }}</span></td>
@@ -223,12 +224,12 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
               <td class="sticky-first line-col">
                 <button class="node-toggle" type="button" :aria-expanded="!folded.has(group.key)" @click="toggle(group.key)">
                   <ChevronRight class="node-chevron" :size="14" aria-hidden="true" />
-                  <strong :title="group.label">{{ group.label }}</strong>
+                  <strong :title="group.label"><MiddleText :text="group.label" /></strong>
                 </button>
                 <small v-if="group.sub" :title="group.sub">{{ group.sub }}</small>
               </td>
               <td>{{ roleSummary(group.agg) }}</td>
-              <td class="mono"><span class="cell-text">{{ protocolSummary(group.agg) }}</span><small>{{ ports(group.agg) }}</small></td>
+              <td class="mono"><span class="cell-text" :title="protocolSummary(group.agg, Infinity)">{{ protocolSummary(group.agg) }}</span><small>{{ ports(group.agg) }}</small></td>
               <td>{{ targetSummary(group.agg) }}</td>
               <td class="num mono">{{ aggUsers(group.agg) }}</td>
               <td class="num mono" :data-unknown="groupFigures.get(group.key)?.unknown || undefined">{{ groupFigures.get(group.key)?.figure }}<small v-if="groupFigures.get(group.key)?.note">{{ groupFigures.get(group.key)?.note }}</small></td>
@@ -240,12 +241,12 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
             <template v-if="!folded.has(group.key)">
               <tr v-for="entry in group.entries" :key="entry.line.line_hash_id" class="line-row clickable-row" :data-selected="openLine === entry.line.line_hash_id || undefined" @click="emit('open', entry.group, entry.line)">
                 <td class="sticky-first line-col">
-                  <button class="row-open" type="button" :data-line-open="entry.line.line_hash_id" @click.stop="emit('open', entry.group, entry.line)"><strong :title="entry.line.name">{{ entry.line.name }}</strong></button>
-                  <small class="mono" :title="groupBy === 'node' ? entry.line.line_hash_id : nodeLabel(entry.group)">{{ groupBy === 'node' ? entry.line.line_hash_id : nodeLabel(entry.group) }}</small>
+                  <button class="row-open" type="button" :data-line-open="entry.line.line_hash_id" @click.stop="emit('open', entry.group, entry.line)"><strong :title="entry.line.name"><MiddleText :text="entry.line.name" /></strong></button>
+                  <small class="mono" :title="groupBy === 'node' ? entry.line.line_hash_id : nodeLabel(entry.group)"><MiddleText :text="groupBy === 'node' ? entry.line.line_hash_id : nodeLabel(entry.group)" /></small>
                 </td>
                 <td><span class="badge" :data-tone="entry.role === 'orphan' ? 'error' : undefined">{{ roleText(entry) }}</span><span v-if="entry.line.managed" class="badge" data-tone="info">managed</span></td>
                 <td class="mono">{{ entry.line.type || 'unknown' }} :{{ entry.line.listen_port || '?' }}</td>
-                <td :class="{ 'warn-text': entry.target.kind === 'none' }"><span class="cell-text" :title="targetText(entry)">{{ targetText(entry) }}</span><small v-if="entry.target.kind === 'off-fleet'">outside the fleet</small></td>
+                <td :class="{ 'warn-text': entry.target.kind === 'none' }"><span class="cell-text" :title="targetText(entry)"><MiddleText :text="entry.target.label" :suffix="entry.target.more > 0 ? ` +${entry.target.more}` : ''" /></span><small v-if="entry.target.kind === 'off-fleet'">outside the fleet</small></td>
                 <td class="num mono" :title="entry.line.user_known ? undefined : 'The node did not report a user count for this line'">{{ entry.line.user_known ? entry.line.user_count : 'unknown' }}</td>
                 <td class="num mono" :data-unknown="entry.bytes === undefined || undefined">{{ bytesCell(entry.bytes) }}</td>
                 <td v-if="showState"><span class="status-dot" :data-tone="entry.state.tone" :data-common="entry.state.rank <= 1 || undefined">{{ entry.state.label }}</span></td>

@@ -169,7 +169,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .summary-strip > div:last-child { border-right: 0; }
 .summary-strip span { color: var(--muted-foreground, #65707b); font-size: var(--text-xs); font-weight: 600; }
 .summary-strip strong { overflow: hidden; font-size: 19px; font-weight: 660; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.summary-strip small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); }
+/* The caption under a figure can name an identity ("next: <email>, <date>"),
+   and an address has no break opportunity. Without `anywhere` it ran out of
+   its stat cell into the next column at 375. */
+.summary-strip small { color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); overflow-wrap: anywhere; }
 .summary-strip > div[data-tone="warning"] strong { color: var(--tone-warn); }
 
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-4); }
@@ -218,6 +221,84 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    column impossible to scan. Every one of these cells carries a title. */
 td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Middle truncation (MiddleText.vue, middleText.ts) for identifiers that
+   differ at the end: the head gives way with an ellipsis and the tail never
+   does. It sits inside an element that already truncates, which keeps its
+   budget and its title; this only moves the cut. `pre`, not `nowrap`: each
+   half is its own flex item, so a space the split put at the start of the
+   tail sat at the start of a line and collapsed away ("18 other exits" drew
+   as "18 otherexits"). Every part is named through .mid-text so a host's
+   descendant rule (`.chart-legend li span`) cannot set it back.
+
+   The face is drawn and nothing else: two flex items turn into text with a
+   break between them, so it is hidden from assistive technology (in the
+   markup), unselectable, and transparent to the pointer. The copy is the
+   whole value in a transparent layer in the same box; it is what gets
+   selected, found and read.
+
+   Both layers are in flow, the face pulled up over the copy (`-1lh`) and
+   positioned so it paints above it. `-1lh` is the copy's height only while
+   its line box is one line height tall. Under `line-height: normal` a glyph
+   from a fallback font (a flag emoji, CJK) grows the line box, so the face of
+   a node name that opens with a flag and "东京-软银" was drawn 5px below its
+   copy, the selection band and a find highlight 5px above its glyphs, and its
+   box 10px taller. `line-height: 1lh` on the box fixes the line height at what
+   `normal` gives with the inherited font alone (`lh` in `line-height` reads
+   the parent's), so no glyph grows the line, and every other value keeps the
+   height and row rhythm it had: Latin rows measure the same at every size
+   this sheet uses (10, 11 and 12px), where one number such as 1.25 matched
+   only 12px. A pointer pressed in the cell's padding
+   is placed in the nearest selectable text in flow: with the copy out of
+   flow that was the unselectable face, so the press landed in the next cell
+   and a drag from the padding copied the value with a trailing newline, or
+   nothing. The face alone sizes the box and so the table's columns, as it did
+   with the copy out of flow (`contain: inline-size` on the copy): one run of
+   text can measure a hair apart from the same text drawn as two flex items.
+   The box is as wide as the value and no wider, so a drag over empty cell
+   space beside a short value selects nothing. When the value is cut, the copy's
+   text overflows to the left (`flex-end`), which puts its last glyphs under
+   the face's tail: find-in-page then highlights the tail where it is drawn,
+   and the head, which is drawn over the copy's hidden middle, is the part a
+   match cannot light. `clip`, not `hidden`, so find-in-page cannot scroll
+   it. `text`, not `all`: under `all` a click on a value, or on the copy box
+   beside it, left the value selected behind an opened sheet. */
+.mid-text { display: block; width: fit-content; min-width: 0; max-width: 100%; line-height: 1lh; }
+.mid-text > .mid-face { position: relative; display: flex; margin-top: -1lh; pointer-events: none; -webkit-user-select: none; user-select: none; }
+.mid-face > .mid-head, .mid-face > .mid-tail { white-space: pre; }
+.mid-face > .mid-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mid-face > .mid-tail { flex: none; }
+.mid-text > .mid-copy { display: flex; justify-content: flex-end; overflow: clip; contain: inline-size; color: transparent; white-space: pre; forced-color-adjust: none; -webkit-user-select: text; user-select: text; }
+/* Where the platform paints selected text in a selection colour
+   (MiddleText.vue sets the attribute off Apple platforms), the copy's glyphs
+   would show through the face while selected. Any author selection colour
+   also drops the engine's own highlight, so the background is set with it,
+   to the system colour the specification names as the default, and the face
+   of a value selected whole (middleText.ts marks it) takes the text colour
+   that goes with it, as the selected text beside it does: muted grey on a
+   Windows highlight was barely legible. On Apple platforms there is no rule:
+   Highlight there resolves to the light colour even under a dark scheme, a
+   pale band under light text, and selected text keeps its colour anyway. */
+:root[data-selection-recolours] .mid-text > .mid-copy::selection { color: transparent; background-color: Highlight; }
+:root[data-selection-recolours] .mid-text[data-whole-selected] > .mid-face { color: HighlightText; }
+/* Forced colours draw a backplate in Canvas behind text for legibility. On
+   the face that backplate covered the copy's selection highlight, so a
+   selected value looked unselected; the face draws no backplate and takes
+   the system colours forced colours give the text around it, which `none`
+   would otherwise replace with the console theme's (dark text on a
+   high-contrast black canvas). `none` on the copy keeps it transparent,
+   where forced colours would paint it over the face, so its highlight is set
+   here to the user's Highlight on every platform, and a value selected
+   whole reads in HighlightText on it, as the text around it does. */
+@media (forced-colors: active) {
+  .mid-text > .mid-face { forced-color-adjust: none; color: CanvasText; }
+  button .mid-text > .mid-face { color: ButtonText; }
+  .mid-text[data-whole-selected] > .mid-face { color: HighlightText; }
+  .mid-text > .mid-copy::selection { color: transparent; background-color: Highlight; }
+}
+/* In a button the value is the control's label: the pointer goes to the
+   button, as it did before the cut, and a selection that runs across the row
+   still copies the name whole. */
+button .mid-text > .mid-copy { pointer-events: none; }
 /* The row action is pinned to the right edge of the scroll container, so a
    table wider than the console still offers its action without a horizontal
    scroll. .table-wrap is a real scrollport in both axes, so this sticks. */
@@ -248,7 +329,20 @@ th[aria-sort="ascending"] .sort-button, th[aria-sort="descending"] .sort-button 
 .collector-grid > div { min-width: 0; padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--border, #d9dde2); border-bottom: 1px solid var(--border, #d9dde2); }
 .collector-grid strong, .collector-grid small { display: block; margin-top: var(--sp-1); }
 .collector-grid small { overflow: hidden; color: var(--muted-foreground, #65707b); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
+/* A panel whose content is not a table has no .table-wrap to catch an
+   overflow, so the budget has to be on the cell. A `1fr` track will not
+   shrink below its item's min-content width, so one unbreakable token in a
+   collector error (it routinely carries a hostname) set the track wider than
+   the panel: 51px lost at 375, and 164px drawn across the neighbouring cell at
+   1440. An error is meant to be read in full, so it wraps mid-token rather
+   than being cut, as .attention-body p and .evidence-grid p already do. The
+   node name gets the same treatment: it falls back to the node id, which is
+   one underscore-joined run, and a wrapped name stays distinguishable where a
+   cut one may not. */
+.collector-grid strong, .collector-grid p { overflow-wrap: anywhere; }
 .collector-grid p { margin: var(--sp-1) 0 0; font-size: var(--text-2xs); line-height: 1.45; }
+/* The status dot's 260px budget is wider than a 220px track. */
+.collector-grid .status-dot { max-width: 100%; }
 
 /* ── line chain workspace ─────────────────────────────────────────────── */
 .chain-plan-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: var(--sp-3); padding: var(--sp-4); border-bottom: 1px solid var(--border, #d9dde2); }
@@ -668,6 +762,11 @@ button.evidence-cell:disabled { cursor: default; opacity: 1; }
 .lines-table td.line-col small { max-width: 300px; }
 .lines-table .cell-text { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lines-table td.mono { max-width: 200px; }
+/* The mono cap is for identifiers, which carry a title. A figure is not one:
+   the group row's traffic note ("egress 7.7 GiB · relayed 84.4 GiB") was cut
+   by 17 to 23px with nothing to recover it from. A figure column is as wide
+   as its figures. */
+td.num.mono { max-width: none; }
 .fold-all { margin-right: var(--sp-2); border: 0; padding: 0; color: var(--primary, #1769aa); background: transparent; font: inherit; font-weight: 650; text-transform: none; }
 .group-row td { background: color-mix(in srgb, var(--muted, #eef0f2) 45%, var(--card, #fff)); color: var(--foreground, #17191c); font-size: var(--text-xs); }
 .group-row td.mono { font-size: var(--text-xs); }
@@ -882,7 +981,10 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .narrow-only { display: none !important; }
 @media (max-width: 720px) {
   .narrow-only { display: block !important; }
-  .profiles-table td.line-col small.narrow-only { white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; }
+  /* Two lines of the reason, wrapped mid-token if it must be, and every issue
+     in the title, which is the list the profile sheet shows in full. One
+     clipped line with no title hid 42 to 350px of plain reasons. */
+  .profiles-table td.line-col small.narrow-only { display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; white-space: normal !important; }
 }
 .issue-list .status-dot { flex: 0 0 auto; }
 @media (max-width: 720px) {
@@ -903,7 +1005,24 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
 .link-facts dd { margin: 2px 0 0; font-size: var(--text-xs); overflow-wrap: anywhere; }
 .link-facts dd small { color: var(--muted-foreground, #65707b); }
 .link-facts dd .link-fact-action { margin-left: var(--sp-2); vertical-align: middle; }
-.status-dot.wrap { max-width: none; white-space: normal; }
+/* A value this build has not learned (collectorUnknown in usageModel.ts) is
+   echoed verbatim and nothing bounds its width. Outside a table the dot wraps
+   and shows all of it: a one-word enum has no break opportunity, hence
+   `anywhere`. Inside a table it keeps one line, for the reason td.mono gives,
+   and cuts with a visible ellipsis (.cut). The dot's text in a flex box is an
+   anonymous flex item that text-overflow never reaches, so a bare label was
+   cut mid-letter with no sign it had been; a label in its own flex item is a
+   block box, so copying a row put a line break before it ("\t\nreporting").
+   So a cut dot is not a flex box: the label is inline text after an inline
+   dot. `clip`, because an inline block that hides its overflow sits on its
+   bottom edge and made each row a third of a pixel taller. The 1px drop puts
+   it where the flex dots beside it sit, whose baseline is their dot's bottom
+   edge: exact with the macOS system font, within half a pixel with others.
+   The dot is centred on the line as a flex item centres it. Either way the
+   value is in the title. */
+.status-dot.wrap { max-width: none; white-space: normal; overflow-wrap: anywhere; }
+.status-dot.cut { display: inline-block; overflow: clip; vertical-align: -1px; }
+.status-dot.cut::before { display: inline-block; margin: calc((1lh - 7px) / 2) var(--sp-1) 0 0; vertical-align: top; }
 .mono.wrap { overflow-wrap: anywhere; }
 .link-reveal { display: grid; gap: var(--sp-2); }
 .link-reveal > .button { justify-self: start; }
