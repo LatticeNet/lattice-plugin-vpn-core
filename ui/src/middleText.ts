@@ -9,10 +9,11 @@
  * values read the same, and the hostile-content layout check counted 111 line
  * hashes showing as one.
  *
- * MiddleText.vue renders `head` and `tail` as two spans: the head gives way
- * with an ellipsis and the tail never does, so the value reads as
- * `frankfurt-equin…-001-primary`. This module only decides the split; the
- * width it is cut to is the browser's, so nothing here measures text.
+ * MiddleText.vue draws `head` and `tail` as two spans over a copy of the
+ * whole value: the head gives way with an ellipsis and the tail never does,
+ * so the value reads as `frankfurt-equin…-001-primary`. This module decides
+ * the split (and widenToCopies below keeps a selection of the copy whole);
+ * the width it is cut to is the browser's, so nothing here measures text.
  *
  * The tail is the part that tells siblings apart, chosen without knowing the
  * siblings:
@@ -74,4 +75,31 @@ function cut(text: string, at: number): MiddleSplit {
   const code = text.charCodeAt(at);
   if (code >= 0xdc00 && code <= 0xdfff) at -= 1;
   return { head: text.slice(0, at), tail: text.slice(at) };
+}
+
+/**
+ * Widens a selection that ends inside a middle-cut value's copy to the whole
+ * copy (MiddleText.vue calls it once a pointer selection is finished).
+ *
+ * The copy's glyphs are laid out uncut under a face that is cut, so a
+ * selection that stops partway through the copy holds the value's hidden
+ * middle while the face shows its tail highlighted: dragging across
+ * `nd_01J8...M8P1R429` copied `nd_01J8...F9H2`. `user-select: all` says the
+ * copy is taken whole, and Chromium does so for a click and for most drags,
+ * but not for every drag that starts or ends inside it. Returns whether it
+ * changed the selection.
+ */
+export function widenToCopies(selection: Selection | null): boolean {
+  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return false;
+  const range = selection.getRangeAt(0);
+  const copyOf = (node: Node) => (node.nodeType === 1 ? (node as Element) : node.parentElement)?.closest(".mid-copy") ?? null;
+  const first = copyOf(range.startContainer);
+  const last = copyOf(range.endContainer);
+  const wide = range.cloneRange();
+  if (first) wide.setStart(first, 0);
+  if (last) wide.setEnd(last, last.childNodes.length);
+  if (wide.compareBoundaryPoints(Range.START_TO_START, range) === 0 && wide.compareBoundaryPoints(Range.END_TO_END, range) === 0) return false;
+  selection.removeAllRanges();
+  selection.addRange(wide);
+  return true;
 }

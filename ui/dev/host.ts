@@ -445,7 +445,7 @@ document.getElementById("theme")!.addEventListener("click", () => {
  * every value fits, nothing is clipped and this is silent rather than falsely
  * green. If a rule regresses, it trips at whatever margin it produces.
  *
- * Three properties, each a real failure rather than a proxy for one:
+ * Four properties, each a real failure rather than a proxy for one:
  *
  *   1. A panel that overflows has lost content outright. `.data-panel` hides
  *      its overflow: there is no scrollbar, and neither the wheel nor a swipe
@@ -462,6 +462,14 @@ document.getElementById("theme")!.addEventListener("click", () => {
  *      pointer can reach. Clipped with no title is information destroyed with
  *      no recourse, which is the shape of every truncation defect this
  *      harness has found.
+ *   4. A middle-cut value (MiddleText.vue) copies as the value. Its face is
+ *      two flex items, and a browser turns block boxes into text with a
+ *      break between them: on PR #40's first head a cut node name copied as
+ *      "...-cluster-node\n-017-primary", the accessible name carried a space
+ *      at the cut, and find-in-page missed it, while every geometric
+ *      property here stayed clear. So each one is selected as a pointer
+ *      would select it and the text compared with the value, and its face
+ *      must be hidden from assistive technology.
  *
  * Which elements clip and which scroll is read from computed style, not from a
  * list of class names. The first version listed selectors (`td strong`,
@@ -479,7 +487,7 @@ document.getElementById("theme")!.addEventListener("click", () => {
  * ------------------------------------------------------------------------- */
 
 interface Finding {
-  property: "no-subject" | "panel-clipped" | "scroller-unreachable" | "clipped-without-recourse";
+  property: "no-subject" | "panel-clipped" | "scroller-unreachable" | "clipped-without-recourse" | "split-copy-not-whole";
   detail: string;
 }
 interface LayoutReport {
@@ -488,6 +496,8 @@ interface LayoutReport {
   panels: number;
   cells: number;
   clipping: number;
+  /** Middle-cut values selected and compared with their value. */
+  split: number;
 }
 
 const PANELS = ".data-panel";
@@ -524,7 +534,7 @@ function nameOf(el: Element): string {
 function measureLayout(): LayoutReport {
   const doc = frame.contentDocument;
   const view = doc?.defaultView;
-  if (!doc?.body || !view) return { findings: [{ property: "no-subject", detail: "the frame has no document to check" }], panels: 0, cells: 0, clipping: 0 };
+  if (!doc?.body || !view) return { findings: [{ property: "no-subject", detail: "the frame has no document to check" }], panels: 0, cells: 0, clipping: 0, split: 0 };
   const panels = Array.from(doc.querySelectorAll<HTMLElement>(PANELS)).filter(rendered);
   const cells = Array.from(doc.querySelectorAll(CONTENT_CELLS)).filter(rendered).length;
   /* Nothing to check is not the same as nothing wrong, and printing the one as
@@ -536,7 +546,7 @@ function measureLayout(): LayoutReport {
         property: "no-subject",
         detail: `${panels.length} panels and ${cells} content cells rendered, so ${panels.length === 0 ? "nothing" : "almost nothing"} was checked; this is not a pass. If the route is right, the scenario probably has no rows here.`,
       }],
-      panels: panels.length, cells, clipping: 0,
+      panels: panels.length, cells, clipping: 0, split: 0,
     };
   }
   const findings: Finding[] = [];
@@ -596,7 +606,33 @@ function measureLayout(): LayoutReport {
     });
   }
 
-  return { findings, panels: panels.length, cells, clipping };
+  /* Property 4. The selection is the frame's own, so a manual checkLayout()
+   * drops whatever was selected there. */
+  const selection = view.getSelection();
+  let split = 0;
+  for (const mid of Array.from(doc.querySelectorAll<HTMLElement>(".mid-text")).filter(rendered)) {
+    split += 1;
+    const value = mid.querySelector(".mid-copy")?.textContent ?? "";
+    const range = doc.createRange();
+    range.selectNodeContents(mid);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const copied = selection?.toString() ?? "";
+    if (copied !== value) {
+      findings.push({
+        property: "split-copy-not-whole",
+        detail: `${panelName(mid)}: a middle-cut value copies as ${JSON.stringify(copied.slice(0, 64))}, not ${JSON.stringify(value.slice(0, 64))}; pasting it, find-in-page and the accessible name no longer give the value`,
+      });
+    } else if (mid.querySelector(".mid-face")?.getAttribute("aria-hidden") !== "true") {
+      findings.push({
+        property: "split-copy-not-whole",
+        detail: `${panelName(mid)}: the face of ${JSON.stringify(value.slice(0, 64))} is not hidden from assistive technology, so the value is read twice and once with a break at the cut`,
+      });
+    }
+  }
+  selection?.removeAllRanges();
+
+  return { findings, panels: panels.length, cells, clipping, split };
 }
 
 /* Wait for the document to settle rather than guessing a delay, and rather
@@ -648,8 +684,8 @@ async function checkLayout(): Promise<LayoutReport> {
   if (report.findings.length === 0) {
     /* A bare "clear" is what let an empty document pass for a sound one, so
      * it carries what it examined. */
-    console.log(`[layout] clear: ${report.panels} panels, ${report.cells} content cells and ${report.clipping} clipping elements examined, nothing clipped without recourse and nothing unreachable`);
-    layoutNote.textContent = `layout: clear (${report.panels}p ${report.cells}c, ${report.clipping} clipping)`;
+    console.log(`[layout] clear: ${report.panels} panels, ${report.cells} content cells and ${report.clipping} clipping elements examined, nothing clipped without recourse and nothing unreachable; ${report.split} middle-cut values copy whole`);
+    layoutNote.textContent = `layout: clear (${report.panels}p ${report.cells}c, ${report.clipping} clipping, ${report.split} split)`;
   } else {
     for (const finding of report.findings) console.error(`[layout] ${finding.property}: ${finding.detail}`);
     layoutNote.textContent = `layout: ${report.findings.length} finding${report.findings.length === 1 ? "" : "s"}`;

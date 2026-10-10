@@ -227,12 +227,30 @@ td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-spa
    budget and its title; this only moves the cut. `pre`, not `nowrap`: each
    half is its own flex item, so a space the split put at the start of the
    tail sat at the start of a line and collapsed away ("18 other exits" drew
-   as "18 otherexits"). The halves are named through .mid-text so a host's
-   descendant rule (`.chart-legend li span`) cannot set them back. */
-.mid-text { display: flex; min-width: 0; max-width: 100%; }
-.mid-text > .mid-head, .mid-text > .mid-tail { white-space: pre; }
-.mid-text > .mid-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.mid-text > .mid-tail { flex: none; }
+   as "18 otherexits"). Every part is named through .mid-text so a host's
+   descendant rule (`.chart-legend li span`) cannot set it back.
+
+   The face is drawn and nothing else: two flex items turn into text with a
+   break between them, so it is hidden from assistive technology (in the
+   markup), unselectable, and transparent to the pointer. The copy is the
+   whole value in a transparent layer over the same box, first in paint order
+   so the face draws over its selection highlight; it is what gets selected,
+   found and read. `all` selects it as one unit: its glyphs are laid out
+   uncut under a face that is cut, so a word picked by position would not be
+   the word the pointer is on. `clip`, not `hidden`, so find-in-page cannot
+   scroll it. Forced colours would otherwise paint the copy over the face. */
+.mid-text { position: relative; display: block; min-width: 0; max-width: 100%; }
+.mid-text > .mid-face { position: relative; display: flex; pointer-events: none; -webkit-user-select: none; user-select: none; }
+.mid-face > .mid-head, .mid-face > .mid-tail { white-space: pre; }
+.mid-face > .mid-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mid-face > .mid-tail { flex: none; }
+.mid-text > .mid-copy { position: absolute; inset: 0; overflow: clip; color: transparent; white-space: pre; forced-color-adjust: none; -webkit-user-select: all; user-select: all; }
+/* In a button the value is the control's label, and a pointer does not
+   select a label (a click opens the row): with the copy under the pointer,
+   one click selected the name. The pointer goes to the button, as it did
+   before the cut, and a selection that runs across the row still copies the
+   name whole. */
+button .mid-text > .mid-copy { pointer-events: none; }
 /* The row action is pinned to the right edge of the scroll container, so a
    table wider than the console still offers its action without a horizontal
    scroll. .table-wrap is a real scrollport in both axes, so this sticks. */
