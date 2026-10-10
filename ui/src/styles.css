@@ -237,7 +237,17 @@ td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-spa
    selected, found and read.
 
    Both layers are in flow, the face pulled up over the copy (`-1lh`) and
-   positioned so it paints above it. A pointer pressed in the cell's padding
+   positioned so it paints above it. `-1lh` is the copy's height only while
+   its line box is one line height tall. Under `line-height: normal` a glyph
+   from a fallback font (a flag emoji, CJK) grows the line box, so the face of
+   a node name that opens with a flag and "东京-软银" was drawn 5px below its
+   copy, the selection band and a find highlight 5px above its glyphs, and its
+   box 10px taller. `line-height: 1lh` on the box fixes the line height at what
+   `normal` gives with the inherited font alone (`lh` in `line-height` reads
+   the parent's), so no glyph grows the line, and every other value keeps the
+   height and row rhythm it had: Latin rows measure the same at every size
+   this sheet uses (10, 11 and 12px), where one number such as 1.25 matched
+   only 12px. A pointer pressed in the cell's padding
    is placed in the nearest selectable text in flow: with the copy out of
    flow that was the unselectable face, so the press landed in the next cell
    and a drag from the padding copied the value with a trailing newline, or
@@ -252,7 +262,7 @@ td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-spa
    match cannot light. `clip`, not `hidden`, so find-in-page cannot scroll
    it. `text`, not `all`: under `all` a click on a value, or on the copy box
    beside it, left the value selected behind an opened sheet. */
-.mid-text { display: block; width: fit-content; min-width: 0; max-width: 100%; }
+.mid-text { display: block; width: fit-content; min-width: 0; max-width: 100%; line-height: 1lh; }
 .mid-text > .mid-face { position: relative; display: flex; margin-top: -1lh; pointer-events: none; -webkit-user-select: none; user-select: none; }
 .mid-face > .mid-head, .mid-face > .mid-tail { white-space: pre; }
 .mid-face > .mid-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

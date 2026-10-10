@@ -473,7 +473,10 @@ document.getElementById("theme")!.addEventListener("click", () => {
  *      technology. Each one in view is then selected again the way a pointer
  *      drag selects it (dragAcross, below), because a press is placed by hit
  *      testing: on the second head a drag from the cell padding copied a
- *      trailing newline, or nothing, while the range stayed whole.
+ *      trailing newline, or nothing, while the range stayed whole. Last, the
+ *      face must sit exactly on its copy (faceOffCopy, below): the selection
+ *      band and a find highlight are painted on the copy, and on the third
+ *      head a name that needs a fallback font drew its face 5px below them.
  *
  * Which elements clip and which scroll is read from computed style, not from a
  * list of class names. The first version listed selectors (`td strong`,
@@ -491,7 +494,7 @@ document.getElementById("theme")!.addEventListener("click", () => {
  * ------------------------------------------------------------------------- */
 
 interface Finding {
-  property: "no-subject" | "panel-clipped" | "scroller-unreachable" | "clipped-without-recourse" | "split-copy-not-whole";
+  property: "no-subject" | "panel-clipped" | "scroller-unreachable" | "clipped-without-recourse" | "split-copy-not-whole" | "split-face-off-copy";
   detail: string;
 }
 interface LayoutReport {
@@ -635,13 +638,35 @@ function measureLayout(): LayoutReport {
         property: "split-copy-not-whole",
         detail: `${panelName(mid)}: the face of ${JSON.stringify(value.slice(0, 64))} is not hidden from assistive technology, so the value is read twice and once with a break at the cut`,
       });
-    } else if (selection) {
-      dragged += dragAcross(doc, view, selection, mid, value, findings);
+    } else {
+      const off = faceOffCopy(mid);
+      if (off) findings.push({ property: "split-face-off-copy", detail: `${panelName(mid)}: the face of ${JSON.stringify(value.slice(0, 64))} ${off}, so its selection band and a find highlight are painted off the glyphs the operator sees` });
+      if (selection) dragged += dragAcross(doc, view, selection, mid, value, findings);
     }
   }
   selection?.removeAllRanges();
 
   return { findings, panels: panels.length, cells, clipping, split, dragged };
+}
+
+/* Property 4, where it is drawn. The copy is what a selection and a find
+ * highlight paint on, and the face is what the operator sees, so the two boxes
+ * must coincide. The face is pulled up over the copy by one line height,
+ * which is the copy's height only while nothing grows its line box: under
+ * `line-height: normal` a flag and CJK grew it to 20px against a 15px line
+ * height, and the face of such a name sat 5px below its copy while every
+ * ASCII value lined up. Both edges are compared, so a face that is taller or
+ * shorter than its copy shows too. Half a pixel is rounding, not an offset.
+ * Returns how the face is off, or nothing. */
+function faceOffCopy(mid: HTMLElement): string | undefined {
+  const face = mid.querySelector(".mid-face")?.getBoundingClientRect();
+  const copy = mid.querySelector(".mid-copy")?.getBoundingClientRect();
+  if (!face || !copy) return undefined;
+  const top = face.top - copy.top;
+  const bottom = face.bottom - copy.bottom;
+  if (Math.abs(top) <= 0.5 && Math.abs(bottom) <= 0.5) return undefined;
+  const edge = (px: number) => (Math.abs(px) <= 0.5 ? "level with" : `${Math.abs(px).toFixed(1)}px ${px > 0 ? "below" : "above"}`);
+  return `starts ${edge(top)} its copy and ends ${edge(bottom)} it`;
 }
 
 /* Property 4 with a pointer. A press is placed by hit testing, not by a
@@ -740,7 +765,7 @@ async function checkLayout(): Promise<LayoutReport> {
   if (report.findings.length === 0) {
     /* A bare "clear" is what let an empty document pass for a sound one, so
      * it carries what it examined. */
-    console.log(`[layout] clear: ${report.panels} panels, ${report.cells} content cells and ${report.clipping} clipping elements examined, nothing clipped without recourse and nothing unreachable; ${report.split} middle-cut values copy whole, and so do ${report.dragged} pointer drags across them`);
+    console.log(`[layout] clear: ${report.panels} panels, ${report.cells} content cells and ${report.clipping} clipping elements examined, nothing clipped without recourse and nothing unreachable; ${report.split} middle-cut values copy whole and are drawn on their copy, and ${report.dragged} pointer drags across them copy whole too`);
     layoutNote.textContent = `layout: clear (${report.panels}p ${report.cells}c, ${report.clipping} clipping, ${report.split} split, ${report.dragged} dragged)`;
   } else {
     for (const finding of report.findings) console.error(`[layout] ${finding.property}: ${finding.detail}`);
