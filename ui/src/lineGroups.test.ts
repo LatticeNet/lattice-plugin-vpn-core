@@ -165,6 +165,12 @@ describe("group rows carry aggregates in every member column", () => {
     expect(groups[0].sub).toBe("bank of 3 vless to 2 nodes");
   });
 
+  it("names every protocol when asked for all, for the title of a summary that says how many more", () => {
+    const agg = { protocols: [{ type: "vless", count: 39 }, { type: "hysteria2", count: 9 }, { type: "trojan", count: 1 }] } as Parameters<typeof protocolSummary>[0];
+    expect(protocolSummary(agg)).toBe("vless 39 · hysteria2 9 · 1 more");
+    expect(protocolSummary(agg, Infinity)).toBe("vless 39 · hysteria2 9 · trojan 1");
+  });
+
   it("names the worst state and its count when members differ", () => {
     const h2 = groupLines(fleet, "node", known).find((group) => group.key === "h2")!;
     expect(h2.agg.worst).toMatchObject({ label: "config error", tone: "error", count: 1 });

@@ -118,7 +118,7 @@ function issuesTitle(profile: Profile): string {
             <td v-if="head.show.core" class="mono">{{ coreText(profile) }}</td>
             <td v-if="head.show.ownership"><span class="status-dot" :data-tone="profile.managed ? (profile.applied ? 'healthy' : 'warning') : 'neutral'">{{ ownershipText(profile) }}</span></td>
             <td class="num mono">{{ inboundText(profile) }}</td>
-            <td v-if="head.show.collector"><span class="status-dot" :data-tone="collectorTone(profile)" :title="collectorUnknown(profile.collector?.status)"><span class="dot-text">{{ collectorText(profile) }}</span></span></td>
+            <td v-if="head.show.collector"><span class="status-dot cut" :data-tone="collectorTone(profile)" :title="collectorUnknown(profile.collector?.status)">{{ collectorText(profile) }}</span></td>
             <td v-if="head.show.path" class="mono" :title="profile.config_path"><MiddleText :text="profile.config_path || 'not reported'" /></td>
             <td v-if="head.show.issue" class="issue-cell">
               <template v-if="issueText(profile)">

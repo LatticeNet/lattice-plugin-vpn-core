@@ -229,7 +229,7 @@ function openMenu(event: MouseEvent, key: string, label: string, items: RowMenuI
                 <small v-if="group.sub" :title="group.sub">{{ group.sub }}</small>
               </td>
               <td>{{ roleSummary(group.agg) }}</td>
-              <td class="mono"><span class="cell-text">{{ protocolSummary(group.agg) }}</span><small>{{ ports(group.agg) }}</small></td>
+              <td class="mono"><span class="cell-text" :title="protocolSummary(group.agg, Infinity)">{{ protocolSummary(group.agg) }}</span><small>{{ ports(group.agg) }}</small></td>
               <td>{{ targetSummary(group.agg) }}</td>
               <td class="num mono">{{ aggUsers(group.agg) }}</td>
               <td class="num mono" :data-unknown="groupFigures.get(group.key)?.unknown || undefined">{{ groupFigures.get(group.key)?.figure }}<small v-if="groupFigures.get(group.key)?.note">{{ groupFigures.get(group.key)?.note }}</small></td>

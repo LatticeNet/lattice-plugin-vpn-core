@@ -233,23 +233,61 @@ td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-spa
    The face is drawn and nothing else: two flex items turn into text with a
    break between them, so it is hidden from assistive technology (in the
    markup), unselectable, and transparent to the pointer. The copy is the
-   whole value in a transparent layer over the same box, first in paint order
-   so the face draws over its selection highlight; it is what gets selected,
-   found and read. `all` selects it as one unit: its glyphs are laid out
-   uncut under a face that is cut, so a word picked by position would not be
-   the word the pointer is on. `clip`, not `hidden`, so find-in-page cannot
-   scroll it. Forced colours would otherwise paint the copy over the face. */
-.mid-text { position: relative; display: block; min-width: 0; max-width: 100%; }
-.mid-text > .mid-face { position: relative; display: flex; pointer-events: none; -webkit-user-select: none; user-select: none; }
+   whole value in a transparent layer in the same box; it is what gets
+   selected, found and read.
+
+   Both layers are in flow, the face pulled up over the copy (`-1lh`) and
+   positioned so it paints above it. A pointer pressed in the cell's padding
+   is placed in the nearest selectable text in flow: with the copy out of
+   flow that was the unselectable face, so the press landed in the next cell
+   and a drag from the padding copied the value with a trailing newline, or
+   nothing. The face alone sizes the box and so the table's columns, as it did
+   with the copy out of flow (`contain: inline-size` on the copy): one run of
+   text can measure a hair apart from the same text drawn as two flex items.
+   The box is as wide as the value and no wider, so a drag over empty cell
+   space beside a short value selects nothing. When the value is cut, the copy's
+   text overflows to the left (`flex-end`), which puts its last glyphs under
+   the face's tail: find-in-page then highlights the tail where it is drawn,
+   and the head, which is drawn over the copy's hidden middle, is the part a
+   match cannot light. `clip`, not `hidden`, so find-in-page cannot scroll
+   it. `text`, not `all`: under `all` a click on a value, or on the copy box
+   beside it, left the value selected behind an opened sheet. */
+.mid-text { display: block; width: fit-content; min-width: 0; max-width: 100%; }
+.mid-text > .mid-face { position: relative; display: flex; margin-top: -1lh; pointer-events: none; -webkit-user-select: none; user-select: none; }
 .mid-face > .mid-head, .mid-face > .mid-tail { white-space: pre; }
 .mid-face > .mid-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mid-face > .mid-tail { flex: none; }
-.mid-text > .mid-copy { position: absolute; inset: 0; overflow: clip; color: transparent; white-space: pre; forced-color-adjust: none; -webkit-user-select: all; user-select: all; }
-/* In a button the value is the control's label, and a pointer does not
-   select a label (a click opens the row): with the copy under the pointer,
-   one click selected the name. The pointer goes to the button, as it did
-   before the cut, and a selection that runs across the row still copies the
-   name whole. */
+.mid-text > .mid-copy { display: flex; justify-content: flex-end; overflow: clip; contain: inline-size; color: transparent; white-space: pre; forced-color-adjust: none; -webkit-user-select: text; user-select: text; }
+/* Where the platform paints selected text in a selection colour
+   (MiddleText.vue sets the attribute off Apple platforms), the copy's glyphs
+   would show through the face while selected. Any author selection colour
+   also drops the engine's own highlight, so the background is set with it,
+   to the system colour the specification names as the default, and the face
+   of a value selected whole (middleText.ts marks it) takes the text colour
+   that goes with it, as the selected text beside it does: muted grey on a
+   Windows highlight was barely legible. On Apple platforms there is no rule:
+   Highlight there resolves to the light colour even under a dark scheme, a
+   pale band under light text, and selected text keeps its colour anyway. */
+:root[data-selection-recolours] .mid-text > .mid-copy::selection { color: transparent; background-color: Highlight; }
+:root[data-selection-recolours] .mid-text[data-whole-selected] > .mid-face { color: HighlightText; }
+/* Forced colours draw a backplate in Canvas behind text for legibility. On
+   the face that backplate covered the copy's selection highlight, so a
+   selected value looked unselected; the face draws no backplate and takes
+   the system colours forced colours give the text around it, which `none`
+   would otherwise replace with the console theme's (dark text on a
+   high-contrast black canvas). `none` on the copy keeps it transparent,
+   where forced colours would paint it over the face, so its highlight is set
+   here to the user's Highlight on every platform, and a value selected
+   whole reads in HighlightText on it, as the text around it does. */
+@media (forced-colors: active) {
+  .mid-text > .mid-face { forced-color-adjust: none; color: CanvasText; }
+  button .mid-text > .mid-face { color: ButtonText; }
+  .mid-text[data-whole-selected] > .mid-face { color: HighlightText; }
+  .mid-text > .mid-copy::selection { color: transparent; background-color: Highlight; }
+}
+/* In a button the value is the control's label: the pointer goes to the
+   button, as it did before the cut, and a selection that runs across the row
+   still copies the name whole. */
 button .mid-text > .mid-copy { pointer-events: none; }
 /* The row action is pinned to the right edge of the scroll container, so a
    table wider than the console still offers its action without a horizontal
@@ -961,12 +999,20 @@ td[data-unknown="true"], td [data-unknown="true"] { color: var(--muted-foregroun
    echoed verbatim and nothing bounds its width. Outside a table the dot wraps
    and shows all of it: a one-word enum has no break opportunity, hence
    `anywhere`. Inside a table it keeps one line, for the reason td.mono gives,
-   and cuts with a visible ellipsis: the label goes in .dot-text, because the
-   dot's own text is an anonymous flex item that text-overflow never reaches,
-   so a bare label was cut mid-letter with no sign it had been. Either way the
+   and cuts with a visible ellipsis (.cut). The dot's text in a flex box is an
+   anonymous flex item that text-overflow never reaches, so a bare label was
+   cut mid-letter with no sign it had been; a label in its own flex item is a
+   block box, so copying a row put a line break before it ("\t\nreporting").
+   So a cut dot is not a flex box: the label is inline text after an inline
+   dot. `clip`, because an inline block that hides its overflow sits on its
+   bottom edge and made each row a third of a pixel taller. The 1px drop puts
+   it where the flex dots beside it sit, whose baseline is their dot's bottom
+   edge: exact with the macOS system font, within half a pixel with others.
+   The dot is centred on the line as a flex item centres it. Either way the
    value is in the title. */
 .status-dot.wrap { max-width: none; white-space: normal; overflow-wrap: anywhere; }
-.status-dot > .dot-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status-dot.cut { display: inline-block; overflow: clip; vertical-align: -1px; }
+.status-dot.cut::before { display: inline-block; margin: calc((1lh - 7px) / 2) var(--sp-1) 0 0; vertical-align: top; }
 .mono.wrap { overflow-wrap: anywhere; }
 .link-reveal { display: grid; gap: var(--sp-2); }
 .link-reveal > .button { justify-self: start; }

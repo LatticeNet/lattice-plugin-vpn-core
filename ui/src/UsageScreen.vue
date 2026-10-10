@@ -423,7 +423,7 @@ function setView(value: UsageView): void {
                 <small v-if="node.estimated" class="cell-note">{{ formatBytes(node.estimated) }} estimated</small>
               </td>
               <td class="num mono">{{ node.unattributed === undefined ? 'unknown' : node.unattributed ? formatBytes(node.unattributed) : '-' }}</td>
-              <td><span class="status-dot" :data-tone="collectorTone(collectorStateOf(node.nodeID))" :title="collectorTitle(node.nodeID)"><span class="dot-text">{{ collectorLabel(collectorStateOf(node.nodeID)) }}</span></span></td>
+              <td><span class="status-dot cut" :data-tone="collectorTone(collectorStateOf(node.nodeID))" :title="collectorTitle(node.nodeID)">{{ collectorLabel(collectorStateOf(node.nodeID)) }}</span></td>
               <td v-if="series"><Sparkline v-if="node.trend" :values="node.trend" :label="`${node.label}, bytes per day`" /></td>
             </tr>
           </tbody>

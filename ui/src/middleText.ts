@@ -78,28 +78,104 @@ function cut(text: string, at: number): MiddleSplit {
 }
 
 /**
- * Widens a selection that ends inside a middle-cut value's copy to the whole
- * copy (MiddleText.vue calls it once a pointer selection is finished).
+ * Widens a selection with an end in or against a middle-cut value to the
+ * whole value (MiddleText.vue calls it once a pointer selection is finished).
  *
- * The copy's glyphs are laid out uncut under a face that is cut, so a
- * selection that stops partway through the copy holds the value's hidden
- * middle while the face shows its tail highlighted: dragging across
- * `nd_01J8...M8P1R429` copied `nd_01J8...F9H2`. `user-select: all` says the
- * copy is taken whole, and Chromium does so for a click and for most drags,
- * but not for every drag that starts or ends inside it. Returns whether it
- * changed the selection.
+ * When the value is cut, the copy's glyphs are laid out whole with its end
+ * under the face's tail, so a selection that stops partway through the copy
+ * holds a stretch the face does not show there: dragging across
+ * `nd_01J8...M8P1R429` copied `nd_01J8...F9H2`. So a selection end anywhere
+ * in the value's box (the copy, the face, or between them) moves to that end
+ * of the copy. So does an end placed right after the value's box, or a start
+ * right before it, where a browser can put a press in the cell's padding: the
+ * box is a block, and a selection that ends after it copies a line break the
+ * cell never showed.
+ *
+ * A pointer drag along a cut value can also end as a caret in its copy: the
+ * copy's hidden head lies under the cell's left padding, and a press there
+ * is placed in it, sometimes as a caret the drag then carries along. With
+ * the drag given, a caret left in a copy by a drag that crossed that value's
+ * box within its cell takes the whole value. A click, or a drag over empty
+ * space beside a value, still selects nothing. Returns whether it changed
+ * the selection.
  */
-export function widenToCopies(selection: Selection | null): boolean {
-  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return false;
+export function widenToCopies(selection: Selection | null, drag?: PointerDrag): boolean {
+  if (!selection || selection.rangeCount !== 1) return false;
+  if (selection.isCollapsed) return drag ? takeCrossedValue(selection, drag) : false;
   const range = selection.getRangeAt(0);
-  const copyOf = (node: Node) => (node.nodeType === 1 ? (node as Element) : node.parentElement)?.closest(".mid-copy") ?? null;
-  const first = copyOf(range.startContainer);
-  const last = copyOf(range.endContainer);
+  const first = copyAt(range.startContainer, range.startOffset, "start");
+  const last = copyAt(range.endContainer, range.endOffset, "end");
   const wide = range.cloneRange();
-  if (first) wide.setStart(first, 0);
-  if (last) wide.setEnd(last, last.childNodes.length);
+  // Never past the other end: a value that only touches the selection from outside stays out.
+  if (first && range.comparePoint(first, 0) <= 0) wide.setStart(first, 0);
+  if (last && range.comparePoint(last, last.childNodes.length) >= 0) wide.setEnd(last, last.childNodes.length);
   if (wide.compareBoundaryPoints(Range.START_TO_START, range) === 0 && wide.compareBoundaryPoints(Range.END_TO_END, range) === 0) return false;
   selection.removeAllRanges();
   selection.addRange(wide);
   return true;
+}
+
+/**
+ * Marks each middle-cut value the selection holds whole (`data-whole-selected`)
+ * and unmarks the rest (MiddleText.vue calls it on every selection change).
+ *
+ * The face is not selectable, so an engine never draws it in the selection's
+ * text colour. Where the platform draws selected text in that colour, or under
+ * forced colours, styles.css draws a marked value's face in it, so the value
+ * reads like the selected text beside it rather than as muted grey on the
+ * selection colour. A value only partly selected (mid-drag, or by the
+ * keyboard) is not marked: the highlight then covers only part of its box.
+ */
+export function markWholeSelected(doc: Document): void {
+  const selection = doc.getSelection();
+  const whole = new Set<Element>();
+  for (let index = 0; index < (selection?.rangeCount ?? 0); index += 1) {
+    const range = selection!.getRangeAt(index);
+    if (range.collapsed) continue;
+    const common = range.commonAncestorContainer;
+    const scope = common.nodeType === 1 ? (common as Element) : common.parentElement;
+    const own = scope?.closest(".mid-text");
+    for (const value of own ? [own] : Array.from(scope?.querySelectorAll(".mid-text") ?? [])) {
+      // Its text, not its element's edges: a selection from offset 0 of the text holds the value whole.
+      const text = value.querySelector(":scope > .mid-copy")?.firstChild;
+      if (text && range.comparePoint(text, 0) === 0 && range.comparePoint(text, text.textContent?.length ?? 0) === 0) whole.add(value);
+    }
+  }
+  for (const value of Array.from(doc.querySelectorAll(".mid-text[data-whole-selected]"))) {
+    if (!whole.has(value)) value.removeAttribute("data-whole-selected");
+  }
+  for (const value of whole) value.setAttribute("data-whole-selected", "");
+}
+
+/** Where a pointer went down and came up, in viewport coordinates. */
+export interface PointerDrag {
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+}
+
+/** Under this horizontal travel a pointer clicked rather than dragged. */
+const DRAG_MIN = 3;
+
+function takeCrossedValue(selection: Selection, drag: PointerDrag): boolean {
+  if (Math.abs(drag.to.x - drag.from.x) < DRAG_MIN || !selection.anchorNode) return false;
+  const copy = copyAt(selection.anchorNode, selection.anchorOffset, "end") ?? copyAt(selection.anchorNode, selection.anchorOffset, "start");
+  const value = copy?.parentElement;
+  if (!copy || !value) return false;
+  const box = value.getBoundingClientRect();
+  const cell = (value.closest("td, th, li") ?? value.parentElement ?? value).getBoundingClientRect();
+  const within = (y: number) => y >= cell.top && y <= cell.bottom;
+  const crossed = Math.min(drag.from.x, drag.to.x) < box.right && Math.max(drag.from.x, drag.to.x) > box.left;
+  if (!crossed || !within(drag.from.y) || !within(drag.to.y)) return false;
+  const range = copy.ownerDocument.createRange();
+  range.selectNodeContents(copy);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
+/** The copy of the value a selection boundary is in, or directly against on the side it faces. */
+function copyAt(node: Node, offset: number, edge: "start" | "end"): Element | null {
+  const element = node.nodeType === 1 ? (node as Element) : node.parentElement;
+  const value = element?.closest(".mid-text") ?? (node.nodeType === 1 ? node.childNodes[edge === "end" ? offset - 1 : offset] : undefined);
+  return value?.nodeType === 1 && (value as Element).matches(".mid-text") ? (value as Element).querySelector(":scope > .mid-copy") : null;
 }
