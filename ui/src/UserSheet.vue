@@ -14,7 +14,7 @@ import { CircleAlert, KeyRound, LoaderCircle, Pencil, Trash2, X } from "@lucide/
 import IdentityLinkPanel from "./IdentityLinkPanel.vue";
 import LinePicker from "./LinePicker.vue";
 import type { IdentityLinkState } from "./identityLink";
-import { collectorLabel, collectorReports, collectorTone, coverageNote, quotaState, summarizeAllocation } from "./usageModel";
+import { collectorLabel, collectorReports, collectorTone, collectorUnknown, coverageNote, quotaState, summarizeAllocation } from "./usageModel";
 import {
   expiryOf,
   expiryRelative,
@@ -261,7 +261,7 @@ watch(() => props.focusBindings, async (value) => {
             <div class="evidence-grid">
               <div v-for="node in user.allocated_nodes" :key="node.node_id">
                 <span class="evidence-name" :title="node.node_id">{{ node.node_name || node.node_id }}</span>
-                <p><span class="status-dot" :data-tone="collectorTone(node.collector_state)">{{ collectorLabel(node.collector_state) }}</span></p>
+                <p><span class="status-dot" :class="{ wrap: collectorUnknown(node.collector_state) }" :data-tone="collectorTone(node.collector_state)" :title="collectorUnknown(node.collector_state)">{{ collectorLabel(node.collector_state) }}</span></p>
                 <p v-for="line in node.lines" :key="line.line_hash_id" class="allocation-line">
                   <strong :title="line.tag || line.line_hash_id">{{ line.tag || line.line_hash_id }}</strong>
                   <span class="badge">{{ line.role }}</span>

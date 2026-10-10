@@ -23,7 +23,9 @@ import {
   sortProfiles,
   type Profile,
 } from "./profilesModel";
+import MiddleText from "./MiddleText.vue";
 import { PROFILE_QUERY_EXAMPLES, PROFILE_QUERY_SCHEMA } from "./querySchemas";
+import { collectorUnknown } from "./usageModel";
 import { pageRows } from "./vpnModel";
 
 const props = withDefaults(defineProps<{
@@ -54,6 +56,10 @@ function issueText(profile: Profile): { text: string; tone: string; more: number
   const issues = profileIssues(profile);
   if (!issues.length) return undefined;
   return { text: issues[0].text, tone: issues[0].tone, more: issues.length - 1 };
+}
+/** Every issue, one a line: the list the profile sheet shows in full. */
+function issuesTitle(profile: Profile): string {
+  return profileIssues(profile).map((issue) => issue.text).join("\n");
 }
 </script>
 
@@ -105,18 +111,18 @@ function issueText(profile: Profile): { text: string; tone: string; more: number
           <tr v-for="profile in pager.rows" :key="profile.node_id" class="clickable-row" :data-selected="openProfile === profile.node_id || undefined" @click="emit('open', profile)">
             <td class="sticky-first line-col">
               <!-- The node id is a machine key: it lives in the title and the panel, not under every name (design 23, 3.10). -->
-              <button class="row-open" type="button" :data-profile-open="profile.node_id" @click.stop="emit('open', profile)"><strong :title="profile.node_name ? `${profile.node_name} (${profile.node_id})` : profile.node_id">{{ profileName(profile) }}</strong></button>
+              <button class="row-open" type="button" :data-profile-open="profile.node_id" @click.stop="emit('open', profile)"><strong :title="profile.node_name ? `${profile.node_name} (${profile.node_id})` : profile.node_id"><MiddleText :text="profileName(profile)" /></strong></button>
               <!-- On a phone the Needs column is off screen; the reason rides under the name. -->
-              <small v-if="issueText(profile)" class="narrow-only" :class="issueText(profile)!.tone === 'error' ? 'error-text' : 'warn-text'">{{ issueText(profile)!.text }}</small>
+              <small v-if="issueText(profile)" class="narrow-only" :class="issueText(profile)!.tone === 'error' ? 'error-text' : 'warn-text'" :title="issuesTitle(profile)">{{ issueText(profile)!.text }}</small>
             </td>
             <td v-if="head.show.core" class="mono">{{ coreText(profile) }}</td>
             <td v-if="head.show.ownership"><span class="status-dot" :data-tone="profile.managed ? (profile.applied ? 'healthy' : 'warning') : 'neutral'">{{ ownershipText(profile) }}</span></td>
             <td class="num mono">{{ inboundText(profile) }}</td>
-            <td v-if="head.show.collector"><span class="status-dot" :data-tone="collectorTone(profile)">{{ collectorText(profile) }}</span></td>
-            <td v-if="head.show.path" class="mono" :title="profile.config_path">{{ profile.config_path || 'not reported' }}</td>
+            <td v-if="head.show.collector"><span class="status-dot" :data-tone="collectorTone(profile)" :title="collectorUnknown(profile.collector?.status)"><span class="dot-text">{{ collectorText(profile) }}</span></span></td>
+            <td v-if="head.show.path" class="mono" :title="profile.config_path"><MiddleText :text="profile.config_path || 'not reported'" /></td>
             <td v-if="head.show.issue" class="issue-cell">
               <template v-if="issueText(profile)">
-                <span :class="issueText(profile)!.tone === 'error' ? 'error-text' : 'warn-text'" :title="profileIssues(profile).map((issue) => issue.text).join('\n')">{{ issueText(profile)!.text }}</span>
+                <span :class="issueText(profile)!.tone === 'error' ? 'error-text' : 'warn-text'" :title="issuesTitle(profile)">{{ issueText(profile)!.text }}</span>
                 <small v-if="issueText(profile)!.more">and {{ issueText(profile)!.more }} more</small>
               </template>
               <span v-else data-unknown="true">nothing</span>

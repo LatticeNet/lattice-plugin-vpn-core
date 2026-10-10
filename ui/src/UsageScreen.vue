@@ -30,6 +30,7 @@ import { Activity, ChevronRight, Gauge, Users, Waypoints } from "@lucide/vue";
 import { PcQueryBar, useListQuery } from "@latticenet/plugin-bridge/chassis";
 
 import DailyBars from "./DailyBars.vue";
+import MiddleText from "./MiddleText.vue";
 import { USAGE_QUERY_EXAMPLES, USAGE_QUERY_SCHEMA, usageQueryRows, type UsageQueryRow } from "./querySchemas";
 import Sparkline from "./Sparkline.vue";
 import {
@@ -53,6 +54,7 @@ import {
   collectorLabel,
   collectorReports,
   collectorTone,
+  collectorUnknown,
   foldUsage,
   formatDayRange,
   lineNameIndex,
@@ -133,6 +135,11 @@ function collectorStateOf(nodeID: string): string {
   const found = collectorByNode.value.get(nodeID);
   if (!found) return "no_collector";
   return found.status === "ok" ? "ok" : found.status === "error" ? "error" : found.status || "no_collector";
+}
+/** A state this build has not learned, then the collector's error: the dot
+ *  may cut the one and has no room for the other. */
+function collectorTitle(nodeID: string): string | undefined {
+  return [collectorUnknown(collectorStateOf(nodeID)), collectorByNode.value.get(nodeID)?.error].filter(Boolean).join(": ") || undefined;
 }
 const silentCollectors = computed(() =>
   props.collectors.filter((row) => !collectorReports(row.status ?? "")));
@@ -363,7 +370,7 @@ function setView(value: UsageView): void {
       </div>
       <ol v-else class="exit-bars" aria-label="Egress per exit for the period">
         <li v-for="exit in topExits" :key="exit.nodeID">
-          <span class="exit-bar-label" :title="exit.label">{{ exit.label }}</span>
+          <span class="exit-bar-label" :title="exit.label"><MiddleText :text="exit.label" /></span>
           <span class="exit-bar-track" aria-hidden="true"><span :style="{ width: `${maxExit ? Math.max(0.5, (exit.egress / maxExit) * 100) : 0}%` }" /></span>
           <span class="exit-bar-value mono">{{ formatBytes(exit.egress) }} · {{ percent(exit.share) }}</span>
         </li>
@@ -408,7 +415,7 @@ function setView(value: UsageView): void {
           </tr></thead>
           <tbody>
             <tr v-for="node in nodeFigures" :key="node.nodeID">
-              <td class="sticky-first"><strong :title="node.label">{{ node.label }}</strong><small :title="node.nodeID">{{ node.nodeID }}</small></td>
+              <td class="sticky-first"><strong :title="node.label">{{ node.label }}</strong><small :title="node.nodeID"><MiddleText :text="node.nodeID" /></small></td>
               <td class="num mono" :data-unknown="node.egress === undefined || undefined">{{ node.egress === undefined ? 'unknown' : node.egress ? formatBytes(node.egress) : '-' }}</td>
               <td class="num mono" :data-unknown="node.repeated === undefined || undefined">{{ node.repeated === undefined ? 'unknown' : node.repeated ? formatBytes(node.repeated) : '-' }}</td>
               <td class="num">
@@ -416,7 +423,7 @@ function setView(value: UsageView): void {
                 <small v-if="node.estimated" class="cell-note">{{ formatBytes(node.estimated) }} estimated</small>
               </td>
               <td class="num mono">{{ node.unattributed === undefined ? 'unknown' : node.unattributed ? formatBytes(node.unattributed) : '-' }}</td>
-              <td><span class="status-dot" :data-tone="collectorTone(collectorStateOf(node.nodeID))" :title="collectorByNode.get(node.nodeID)?.error || undefined">{{ collectorLabel(collectorStateOf(node.nodeID)) }}</span></td>
+              <td><span class="status-dot" :data-tone="collectorTone(collectorStateOf(node.nodeID))" :title="collectorTitle(node.nodeID)"><span class="dot-text">{{ collectorLabel(collectorStateOf(node.nodeID)) }}</span></span></td>
               <td v-if="series"><Sparkline v-if="node.trend" :values="node.trend" :label="`${node.label}, bytes per day`" /></td>
             </tr>
           </tbody>
@@ -456,7 +463,7 @@ function setView(value: UsageView): void {
       <header class="panel-header"><div><h2 id="collectors-title">Collectors</h2><p>Where each node's figures come from, and when they last reported.</p></div></header>
       <div v-if="collectors.length" class="collector-grid">
         <div v-for="collector in collectors" :key="collector.node_id">
-          <span class="status-dot" :data-tone="collectorTone(collector.status === 'ok' ? 'ok' : collector.status || '')">{{ collectorLabel(collector.status || '') }}</span>
+          <span class="status-dot" :class="{ wrap: collectorUnknown(collector.status) }" :data-tone="collectorTone(collector.status === 'ok' ? 'ok' : collector.status || '')" :title="collectorUnknown(collector.status)">{{ collectorLabel(collector.status || '') }}</span>
           <strong :title="collector.node_name || collector.node_id">{{ collector.node_name || collector.node_id }}</strong>
           <small :title="`${collector.source || 'unspecified'} / ${collector.checked_at || 'never'}`">{{ collector.source || 'unspecified' }} / {{ collector.checked_at ? collector.checked_at.replace('T', ' ').slice(0, 16) : 'never' }}</small>
           <p v-if="collector.error" class="error-text">{{ collector.error }}</p>
@@ -520,11 +527,11 @@ function setView(value: UsageView): void {
                 </td>
                 <td>
                   <strong :title="row.node_name || row.node_id">{{ row.node_name || row.node_id }}</strong>
-                  <small :title="row.node_id">{{ row.node_id }}</small>
+                  <small :title="row.node_id"><MiddleText :text="row.node_id" /></small>
                 </td>
                 <td>
                   <strong :title="lineLabel(row)">{{ lineLabel(row) }}</strong>
-                  <small v-if="row.line_hash_id" class="mono" :title="row.line_hash_id">{{ row.line_hash_id }}</small>
+                  <small v-if="row.line_hash_id" class="mono" :title="row.line_hash_id"><MiddleText :text="row.line_hash_id" /></small>
                   <small v-else class="cell-note">inbound tag only; no line on this node carries it</small>
                 </td>
                 <td><span class="badge" :data-tone="EGRESS_ROLES.has(row.role) ? 'info' : undefined">{{ roleLabel(row.role) }}</span></td>

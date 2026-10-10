@@ -10,6 +10,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import MiddleText from "./MiddleText.vue";
 import { OTHERS_KEY, byteTicks, shortDay, type DailyStack, type StackSegment } from "./trafficModel";
 import { formatBytes } from "./vpnModel";
 
@@ -149,7 +150,7 @@ function dayName(index: number): string {
         <!-- Bottom of the stack first, the order the bars are drawn in. -->
         <li v-for="item in legend" :key="item.key">
           <i :style="{ background: item.fill }" aria-hidden="true" />
-          <span :title="item.label">{{ item.label }}</span>
+          <span :title="item.label"><MiddleText :text="item.label" /></span>
           <strong>{{ formatBytes(item.value) }}</strong>
         </li>
       </ol>

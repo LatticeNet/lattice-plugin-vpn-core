@@ -24,6 +24,7 @@ import {
   type ProfilePluginConfig,
   type ProfileSettings,
 } from "./profilesModel";
+import { collectorUnknown } from "./usageModel";
 
 const props = defineProps<{
   profile?: Profile;
@@ -109,7 +110,7 @@ const execAllowed = computed(() => !!props.settings && props.settings.prerequisi
           <div><span>Core</span><strong class="mono">{{ coreText(profile) }}</strong><small>{{ profile.capabilities.join(', ') || 'no capability reported' }}</small></div>
           <div><span>Ownership</span><strong>{{ ownershipText(profile) }}</strong><small>{{ profile.managed ? 'Lattice writes this core config' : 'Lattice reads what the node runs' }}</small></div>
           <div><span>Inbounds</span><strong>{{ profile.inbound_count }}</strong><small>{{ profile.discovered_count }} discovered · discovery {{ profile.discovery_status || 'not reported' }}</small></div>
-          <div><span>Collector</span><strong><span class="status-dot" :data-tone="collectorTone(profile)">{{ collectorText(profile) }}</span></strong><small>{{ profile.collector?.source || 'no source reported' }}</small></div>
+          <div><span>Collector</span><strong><span class="status-dot" :class="{ wrap: collectorUnknown(profile.collector?.status) }" :data-tone="collectorTone(profile)" :title="collectorUnknown(profile.collector?.status)">{{ collectorText(profile) }}</span></strong><small>{{ profile.collector?.source || 'no source reported' }}</small></div>
           <div><span>Config path</span><strong class="mono">{{ profile.config_path || 'not reported' }}</strong><small>as the agent reports it</small></div>
           <div><span>Stats API</span><strong class="mono">{{ profile.stats_api || 'none' }}</strong><small>per-identity usage comes from here</small></div>
         </div>

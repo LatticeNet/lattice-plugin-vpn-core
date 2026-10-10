@@ -11,6 +11,7 @@ import { CircleAlert, Waypoints } from "@lucide/vue";
 
 import type { AttentionItem, NodeRow } from "./fleetRows";
 import { buildNodeRows, lineRole, serviceVerdict } from "./fleetRows";
+import MiddleText from "./MiddleText.vue";
 import RouteMap from "./RouteMap.vue";
 import { buildRouteMap, routeShape } from "./routeMap";
 import Sparkline from "./Sparkline.vue";
@@ -180,7 +181,7 @@ const orphanLines = computed(() => props.groups.reduce((sum, group) => sum + gro
           <tr v-for="line in nodes" :key="line.row.group.node_id" class="clickable-row" @click="emit('node', line.row.group.node_id)">
             <td class="sticky-first">
               <button class="row-open" type="button" :title="`Open the lines on ${line.row.group.node_name || line.row.group.node_id}`" @click.stop="emit('node', line.row.group.node_id)">
-                <strong>{{ line.row.group.node_name || line.row.group.node_id }}</strong>
+                <strong><MiddleText :text="line.row.group.node_name || line.row.group.node_id" /></strong>
               </button>
             </td>
             <td>{{ line.role }}</td>
