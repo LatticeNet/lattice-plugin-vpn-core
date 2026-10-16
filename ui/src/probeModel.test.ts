@@ -15,9 +15,11 @@ import {
   keepTestTag,
   MAX_OUTBOUNDS,
   MAX_REQUEST_BYTES,
+  MAX_TARGETS_PER_RUN,
   outboundLabel,
   parseHealth,
   parseProbeResult,
+  parseSavedTarget,
   parseTargets,
   PROBE_THROUGHPUT_TIMEOUT_MS,
   PROBE_TIMEOUT_MS,
@@ -26,6 +28,7 @@ import {
   RUN_CALL_TIMEOUT_MS,
   spotAt,
   stageTrack,
+  targetName,
   utf8Length,
   verdictOf,
   type DraftRead,
@@ -303,6 +306,10 @@ describe("the run request", () => {
     expect(buildProbeRequest(chainRead, options({ test: "gone" }), TARGETS)).toMatchObject({ ok: false, field: "test" });
     expect(buildProbeRequest(chainRead, options({ test: "exit", targets: [] }), TARGETS)).toMatchObject({ ok: false, field: "targets" });
     expect(buildProbeRequest(chainRead, options({ test: "exit", targets: ["free-url"] }), TARGETS)).toMatchObject({ ok: false, field: "targets" });
+    // A run measures at most 16 targets, as the probe caps them.
+    const many = Array.from({ length: MAX_TARGETS_PER_RUN + 1 }, (_, i) => `custom-t${i}`);
+    expect(buildProbeRequest(chainRead, options({ test: "exit", targets: many }), many)).toMatchObject({ ok: false, field: "targets", message: expect.stringMatching(/at most 16 targets; 17 are chosen/) });
+    expect(buildProbeRequest(chainRead, options({ test: "exit", targets: many.slice(0, 16) }), many)).toMatchObject({ ok: true });
     for (const samples of [0, 11, 2.5, Number.NaN]) {
       expect(buildProbeRequest(chainRead, options({ test: "exit", samples }), TARGETS), String(samples)).toMatchObject({ ok: false, field: "samples" });
     }
@@ -331,10 +338,35 @@ describe("the probe's answers", () => {
     expect(parseHealth(null)).toBeUndefined();
   });
 
-  it("reads targets, keeping only ids the contract allows", () => {
+  it("reads an older server's targets, keeping only ids the contract allows", () => {
     expect(parseTargets({ targets: [{ id: "gstatic-204", url: "https://www.gstatic.com/generate_204", expect: 204 }, { id: "Bad Id" }, { id: "gstatic-204" }] }))
-      .toEqual([{ id: "gstatic-204", url: "https://www.gstatic.com/generate_204", expect: 204 }]);
+      .toEqual({ targets: [{ id: "gstatic-204", source: "builtin", label: "", url: "https://www.gstatic.com/generate_204", method: "GET", expect: 204, expectStatus: "204", bodyContains: "", version: 0 }] });
     expect(parseTargets([])).toBeUndefined();
+  });
+
+  it("reads saved targets and whether they run", () => {
+    const list = parseTargets({
+      targets: [
+        { id: "gstatic-204", source: "builtin", url: "https://www.gstatic.com/generate_204", method: "GET", expect: 204, expect_status: "204" },
+        { id: "custom-nas", source: "custom", label: "NAS", url: "https://nas.example.net/", method: "HEAD", expect_status: "200-299,301", version: 4, created_at: "x" },
+        { id: "custom-up", source: "custom", label: "Up", url: "https://up.example.net/", method: "GET", expect_status: "200", body_contains: "ok", version: 1 },
+      ],
+      custom: { supported: false, reason: "too old", limit: 32 },
+    });
+    expect(list?.custom).toEqual({ supported: false, reason: "too old", limit: 32 });
+    expect(list?.targets[1]).toEqual({ id: "custom-nas", source: "custom", label: "NAS", url: "https://nas.example.net/", method: "HEAD", expect: 0, expectStatus: "200-299,301", bodyContains: "", version: 4 });
+    expect(list?.targets[2]?.bodyContains).toBe("ok");
+    expect(targetName(list!.targets[1]!)).toBe("NAS");
+    expect(targetName(list!.targets[0]!)).toBe("gstatic-204");
+    expect(parseTargets({ targets: [], custom: { reason: "no flag" } })?.custom).toBeUndefined();
+    expect(parseSavedTarget({ id: "custom-nas", source: "custom", label: "NAS", url: "https://nas.example.net/", method: "GET", expect_status: "200", version: 1 })?.label).toBe("NAS");
+    expect(parseSavedTarget({ id: "gstatic-204", url: "https://x/", expect: 204 })).toBeUndefined();
+  });
+
+  it("reads body_match only where the probe set it", () => {
+    const parsed = parseProbeResult({ valid: true, stage: "ok", error: "", targets: [{ id: "custom-up", ok: 5, of: 5, body_match: false, error: "" }, { id: "gstatic-204", ok: 5, of: 5, error: "" }] });
+    expect(parsed?.targets[0]?.bodyMatch).toBe(false);
+    expect(parsed?.targets[1] && "bodyMatch" in parsed.targets[1]).toBe(false);
   });
 
   it("reads a result and refuses a shape that is not one", () => {

@@ -10,17 +10,25 @@
  * the samples that were asked for. The pasted outbound is read only for the
  * tested server's host and port, which the real probe reports too.
  *
+ * Saved targets (the operator's own, kept by the server) live in each
+ * handler table's memory, so create, update and delete behave as the server
+ * does for one session: versions, the 32-target cap and the 409 a stale
+ * version gets. `outdated` answers as a server whose probe cannot run them
+ * yet, `oldserver` as a server older than saved targets (built-ins only, no
+ * `custom`), and `nosaved` as a current server with an empty list.
+ *
  * Never imported by src/; the shipped bundle is built from index.html alone.
  */
 
 import { LinkFixtureError } from "./linkFixtures";
+import { canonicalStatus, checkTargetUrl } from "../src/probeTargetForm";
 
 export type ProbeScenario =
   | "ok" | "loss" | "degraded" | "decode" | "create" | "server" | "handshake" | "target" | "timeout"
-  | "unavailable" | "limited" | "refused" | "denied" | "garbled";
+  | "unavailable" | "limited" | "refused" | "denied" | "garbled" | "outdated" | "oldserver" | "nosaved";
 export const PROBE_SCENARIOS: readonly ProbeScenario[] = [
   "ok", "loss", "degraded", "decode", "create", "server", "handshake", "target", "timeout",
-  "unavailable", "limited", "refused", "denied", "garbled",
+  "unavailable", "limited", "refused", "denied", "garbled", "outdated", "oldserver", "nosaved",
 ];
 
 export const PROBE_TARGETS = [
@@ -28,6 +36,35 @@ export const PROBE_TARGETS = [
   { id: "cloudflare-204", url: "https://cp.cloudflare.com/generate_204", expect: 204 },
   { id: "apple-success", url: "https://www.apple.com/library/test/success.html", expect: 200 },
 ];
+
+interface SavedTarget {
+  id: string;
+  source: "custom";
+  label: string;
+  url: string;
+  method: "GET" | "HEAD";
+  expect_status: string;
+  body_contains?: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const SAVED_LIMIT = 32;
+
+function seedSaved(): SavedTarget[] {
+  return [
+    { id: "custom-home-nas", source: "custom", label: "Home NAS health", url: "https://nas.home-lab.example.net:8443/api/health?probe=lattice",
+      method: "GET", expect_status: "200-299", body_contains: "\"status\":\"ok\"", version: 3, created_at: "2026-10-12T08:10:00Z", updated_at: "2026-10-15T21:04:00Z" },
+    { id: "custom-cdn-edge", source: "custom", label: "CDN edge (HEAD)", url: "https://edge.cdn-provider.example.org/",
+      method: "HEAD", expect_status: "204,301-302", version: 1, created_at: "2026-10-14T02:30:00Z", updated_at: "2026-10-14T02:30:00Z" },
+  ];
+}
+
+function slug(label: string): string {
+  const out = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 33).replace(/-+$/, "");
+  return out || "target";
+}
 
 const QUIC = new Set(["hysteria", "hysteria2", "tuic"]);
 const UDP_RELAY = new Set(["shadowsocks", "vmess", "vless", "trojan", "hysteria", "hysteria2", "tuic", "anytls", "socks"]);
@@ -61,7 +98,7 @@ function targetRows(payload: RunPayload, answered: (index: number, of: number) =
   const of = payload.samples ?? 5;
   return (payload.targets ?? ["gstatic-204"]).map((id, index) => {
     const ok = answered(index, of);
-    const expect = PROBE_TARGETS.find((target) => target.id === id)?.expect ?? 204;
+    const expect = PROBE_TARGETS.find((target) => target.id === id)?.expect ?? 200;
     const hop = 38 * (tested(payload).hops - 1);
     return {
       id,
@@ -135,7 +172,60 @@ function runAnswer(scenario: ProbeScenario, payload: RunPayload): unknown {
 }
 
 export function probeHandlers(scenario: ProbeScenario): Record<string, (payload: any) => unknown> {
+  let saved = scenario === "nosaved" ? [] : seedSaved();
+  const builtins = () => PROBE_TARGETS.map((target) => ({ ...target, source: "builtin", method: "GET", expect_status: String(target.expect) }));
+  const refuse = (message: string) => new LinkFixtureError(400, "bad_request", message);
+  const checked = (payload: Record<string, unknown>) => {
+    const label = typeof payload.label === "string" ? payload.label.trim() : "";
+    const url = typeof payload.url === "string" ? payload.url : "";
+    const method = payload.method === "HEAD" ? "HEAD" : "GET";
+    const status = canonicalStatus(typeof payload.expect_status === "string" ? payload.expect_status : "");
+    const body = typeof payload.body_contains === "string" ? payload.body_contains : "";
+    if (!label) throw refuse("label is required");
+    const urlProblem = checkTargetUrl(url);
+    if (urlProblem) throw refuse(urlProblem);
+    if (!status.ok) throw refuse(status.message);
+    // A rule the form does not know, so the server's own refusal can be seen.
+    if (url.includes("refuse-me")) throw refuse("url is refused by this server: the host is on the operator's block list");
+    return { label, url, method: method as "GET" | "HEAD", expect_status: status.value, ...(body ? { body_contains: body } : {}) };
+  };
   return {
+    "probe/targets": () => {
+      if (scenario === "oldserver") return { targets: PROBE_TARGETS };
+      return {
+        targets: [...builtins(), ...saved],
+        custom: scenario === "outdated"
+          ? { supported: false, reason: "lattice-probe 0.1.0-alpha.2 does not run saved targets; a newer lattice-probe does", limit: SAVED_LIMIT }
+          : { supported: true, limit: SAVED_LIMIT },
+      };
+    },
+    "probe/target_create": (payload: Record<string, unknown>) => {
+      if (saved.length >= SAVED_LIMIT) throw new LinkFixtureError(409, "conflict", `the list holds at most ${SAVED_LIMIT} saved targets; delete one first`);
+      const fields = checked(payload);
+      const base = `custom-${slug(fields.label)}`;
+      let id = base;
+      for (let n = 2; saved.some((target) => target.id === id); n++) id = `${base}-${n}`;
+      const now = new Date().toISOString();
+      const target: SavedTarget = { id, source: "custom", ...fields, version: 1, created_at: now, updated_at: now };
+      saved = [...saved, target];
+      return target;
+    },
+    "probe/target_update": (payload: Record<string, unknown>) => {
+      const current = saved.find((target) => target.id === payload.id);
+      if (!current) throw new LinkFixtureError(404, "not_found", "no saved probe target has this id; it may have been deleted");
+      if (current.version !== payload.version) throw new LinkFixtureError(409, "conflict", "someone changed this target since it was read; reload the list and try again");
+      const next: SavedTarget = { ...current, ...checked(payload), version: current.version + 1, updated_at: new Date().toISOString() };
+      if (!("body_contains" in checked(payload))) delete next.body_contains;
+      saved = saved.map((target) => (target.id === current.id ? next : target));
+      return next;
+    },
+    "probe/target_delete": (payload: Record<string, unknown>) => {
+      const current = saved.find((target) => target.id === payload.id);
+      if (!current) throw new LinkFixtureError(404, "not_found", "no saved probe target has this id; it may have been deleted");
+      if (current.version !== payload.version) throw new LinkFixtureError(409, "conflict", "someone changed this target since it was read; reload the list and try again");
+      saved = saved.filter((target) => target.id !== current.id);
+      return { id: current.id, deleted: true };
+    },
     "probe/health": () => {
       if (scenario === "denied") throw new LinkFixtureError(403, "capability_denied", "vpn-core/probe health requires vpn:probe");
       if (scenario === "unavailable") {
@@ -143,9 +233,18 @@ export function probeHandlers(scenario: ProbeScenario): Record<string, (payload:
       }
       return { available: true, probe_version: "0.1.0", engine: "sing-box", core_version: "1.13.19", uptime_s: 11_520, inflight: 1, max_inflight: 32, targets: PROBE_TARGETS.length };
     },
-    "probe/targets": () => ({ targets: PROBE_TARGETS }),
-    "probe/run": (payload: RunPayload) => runAnswer(scenario, payload ?? {}),
+    "probe/run": (payload: RunPayload) => withBodyMatch(runAnswer(scenario, payload ?? {}), saved),
   };
+}
+
+/** A saved target with body text reports whether a passing answer held it, as the probe does. */
+function withBodyMatch(answer: unknown, saved: SavedTarget[]): unknown {
+  if (!answer || typeof answer !== "object" || !Array.isArray((answer as { targets?: unknown }).targets)) return answer;
+  const rows = (answer as { targets: Array<Record<string, unknown>> }).targets.map((row) => {
+    const target = saved.find((item) => item.id === row.id);
+    return target?.body_contains && typeof row.ok === "number" && row.ok > 0 ? { ...row, body_match: true } : row;
+  });
+  return { ...(answer as object), targets: rows };
 }
 
 /** A chain to paste: a relay and the exit that detours through it. The credentials are made up. */

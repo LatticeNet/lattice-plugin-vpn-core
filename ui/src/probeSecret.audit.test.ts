@@ -17,7 +17,7 @@ const read = (file: string) => readFileSync(fileURLToPath(new URL(file, import.m
 
 describe("a pasted outbound stays in the Probe layer", () => {
   it("is never written to page state, the address, storage, the console log or another message", () => {
-    for (const file of ["./probe.ts", "./ProbePanel.vue", "./probeModel.ts", "./textareaCaret.ts"]) {
+    for (const file of ["./probe.ts", "./ProbePanel.vue", "./ProbeTargets.vue", "./probeModel.ts", "./probeTargetForm.ts", "./textareaCaret.ts"]) {
       const source = read(file);
       expect(source, file).not.toMatch(/sendState|history\.|location\.|localStorage|sessionStorage|indexedDB|console\.(log|info|warn|error|debug)/);
       expect(source, file).not.toMatch(/postMessage|\.copy\(/);

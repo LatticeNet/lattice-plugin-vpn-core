@@ -66,6 +66,17 @@ through plan, approval, a bounded agent task, and audit.
   log, and the page never draws it outside the textarea. A run carries only
   the tested outbound and the hops it detours through; the rest of a pasted
   set stays in the editor. Results stay in page memory.
+- Saved probe targets (`target_create`, `target_update`, `target_delete`)
+  require `vpncore:admin` as well as `vpn:probe`. The Targets field lists the
+  probe's built-in targets and the operator's saved ones together; a session
+  without the edit scope can run saved targets and is told why it cannot
+  change them. The form checks a URL the way lattice-probe does (https, port
+  443 or 1024 and up, no credentials, no private address or local-only name),
+  but the server and the probe check every save and every run again. A run
+  names saved targets by id only; the server sends their definitions. Against
+  a server older than saved targets the list is the built-in targets alone,
+  and while the probe cannot run saved targets they are listed, not offered,
+  with the reason.
 
 ## Scope migration and rollback
 
@@ -115,7 +126,10 @@ console. There is no `dev` script in `ui/package.json`, so start it with
 `?width=`, `?theme=` and `?measure=1`; the scenarios are `production`,
 `offfleet`, `rich`, `dense`, `empty` and `failing`. `?probe=` picks what the
 probe answers on the Probe layer (`ui/dev/probeFixtures.ts` lists one scenario
-per state) and `?deny=probe` plays a session without `vpn:probe`.
+per state; `outdated`, `oldserver` and `nosaved` cover saved targets against a
+probe that cannot run them, a server older than them, and an empty list) and
+`?deny=probe` plays a session without `vpn:probe`, `?deny=probeadmin` one with
+`vpn:probe` and without `vpncore:admin`.
 `?content=hostile` keeps any scenario's topology and makes its display strings
 adversarial: node names that differ only past the cut, ids that share a long
 prefix, an unbreakable token in an error, and one enum value this build has not

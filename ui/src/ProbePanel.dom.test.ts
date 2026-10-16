@@ -6,6 +6,7 @@ import ProbePanel from "./ProbePanel.vue";
 import { UNDO_CLEAR_MS, useProbe, type ProbeDeps } from "./probe";
 import type { ProbeMethod } from "./probeModel";
 import { probeHandlers, SAMPLE_CHAIN, type ProbeScenario } from "../dev/probeFixtures";
+import { LinkFixtureError } from "../dev/linkFixtures";
 
 const SECRET = "c2FtcGxlLW9ubHktbm90LXJlYWw=";
 const UUID = "4b1f2c9e-8a3d-4e5f-9b6a-7c8d9e0f1a2b";
@@ -78,7 +79,9 @@ describe("the Probe layer's states", () => {
     expect(q("probe-health")?.textContent).toMatch(/Probe ready/);
     expect(q("probe-health")?.textContent).toMatch(/sing-box 1\.13\.19 · up 3 h 12 m · 1 of 32 busy/);
     const boxes = q("probe-targets")!.querySelectorAll<HTMLInputElement>("input[type=checkbox]");
-    expect([...boxes].map((box) => [box.value, box.checked])).toEqual([["gstatic-204", true], ["cloudflare-204", false], ["apple-success", false]]);
+    expect([...boxes].map((box) => [box.value, box.checked])).toEqual([
+      ["gstatic-204", true], ["cloudflare-204", false], ["apple-success", false], ["custom-home-nas", false], ["custom-cdn-edge", false],
+    ]);
     // Nothing pasted, nothing to run.
     expect(q<HTMLButtonElement>("probe-run")!.disabled).toBe(true);
     expect(q<HTMLInputElement>("probe-throughput")!.checked).toBe(false);
@@ -328,7 +331,178 @@ describe("the Probe layer's states", () => {
     fail = false;
     [...q("probe-targets")!.querySelectorAll("button")].find((button) => button.textContent?.includes("Try again"))!.click();
     await settle();
-    expect(q("probe-targets")!.querySelectorAll("input")).toHaveLength(3);
+    expect(q("probe-targets")!.querySelectorAll("input[type=checkbox]")).toHaveLength(5);
+  });
+});
+
+describe("saved targets", () => {
+  const ADMIN = () => true;
+  const READ_ONLY = (method: ProbeMethod) => !method.startsWith("target_");
+  const row = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-testid="probe-targets"] [data-target="${id}"]`)!;
+  const type = async (input: HTMLInputElement | HTMLSelectElement, value: string) => {
+    input.value = value;
+    input.dispatchEvent(new Event(input instanceof HTMLSelectElement ? "change" : "input"));
+    await settle();
+  };
+  const field = (host: HTMLElement, id: string) => host.querySelector<HTMLInputElement>(`[data-testid="${id}"]`)!;
+
+  it("lists saved targets by name beside the built-in ones, with what each checks", async () => {
+    const { host, q } = await mount({ can: ADMIN });
+    expect(q("probe-saved")?.textContent).toMatch(/Saved targets\s*2 of 32/);
+    expect(row(host, "custom-home-nas").textContent).toMatch(/Home NAS health\s*nas\.home-lab\.example\.net:8443 · expects 200-299 · checks text/);
+    expect(row(host, "custom-cdn-edge").textContent).toMatch(/CDN edge \(HEAD\)\s*edge\.cdn-provider\.example\.org · HEAD · expects 204,301-302/);
+    expect(row(host, "custom-home-nas").querySelector('[data-testid="probe-target-edit"]')?.getAttribute("aria-label")).toBe("Edit Home NAS health");
+    expect(q("probe-target-add")?.textContent).toMatch(/Add target/);
+    expect(q("probe-target-readonly")).toBeNull();
+  });
+
+  it("adds a target: says what is wrong beside each field first, then saves and chooses it", async () => {
+    const { host, q, calls } = await mount({ can: ADMIN });
+    q<HTMLButtonElement>("probe-target-add")!.click();
+    await settle();
+    expect(document.activeElement).toBe(field(host, "probe-target-label"));
+    // Save on an empty form names every problem and sends nothing.
+    q("probe-target-form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    await settle();
+    expect(q("probe-target-form")?.textContent).toMatch(/Give the target a name/);
+    expect(q("probe-target-form")?.textContent).toMatch(/Enter the URL to request/);
+    expect(document.activeElement).toBe(field(host, "probe-target-label"));
+    expect(calls.some((call) => call.method === "target_create")).toBe(false);
+
+    await type(field(host, "probe-target-label"), "Status page");
+    await type(field(host, "probe-target-url"), "http://status.example.net/health");
+    expect(q("probe-target-form")?.textContent).toMatch(/Saved targets use https/);
+    await type(field(host, "probe-target-url"), "https://10.0.0.8/health");
+    expect(q("probe-target-form")?.textContent).toMatch(/10\.0\.0\.8 is not a public address/);
+    await type(field(host, "probe-target-url"), "https://status.example.net:8443/health?x=1");
+    await type(field(host, "probe-target-status"), "301, 200-299");
+    await type(field(host, "probe-target-body"), "All systems");
+    expect(field(host, "probe-target-url").getAttribute("aria-invalid")).toBe("false");
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    const create = calls.find((call) => call.method === "target_create")!;
+    expect(create.payload).toEqual({ label: "Status page", url: "https://status.example.net:8443/health?x=1", method: "GET", expect_status: "200-299,301", body_contains: "All systems" });
+    expect(q("probe-target-form")).toBeNull();
+    const added = row(host, "custom-status-page");
+    expect(added.textContent).toMatch(/Status page/);
+    expect(added.querySelector<HTMLInputElement>("input")!.checked).toBe(true);
+    expect(document.activeElement).toBe(added.querySelector("input"));
+    expect(q("probe-saved")?.textContent).toMatch(/3 of 32/);
+  });
+
+  it("HEAD has no body, so the body text steps aside", async () => {
+    const { host, q } = await mount({ can: ADMIN });
+    q<HTMLButtonElement>("probe-target-add")!.click();
+    await settle();
+    await type(field(host, "probe-target-body"), "ok");
+    await type(field(host, "probe-target-method") as unknown as HTMLSelectElement, "HEAD");
+    expect(field(host, "probe-target-body").disabled).toBe(true);
+    expect(field(host, "probe-target-body").value).toBe("");
+    expect(q("probe-target-form")?.textContent).toMatch(/Needs GET/);
+  });
+
+  it("a refusal from the server is said in the form, which stays open with what was typed", async () => {
+    const { host, q } = await mount({ can: ADMIN });
+    q<HTMLButtonElement>("probe-target-add")!.click();
+    await settle();
+    await type(field(host, "probe-target-label"), "Blocked");
+    await type(field(host, "probe-target-url"), "https://refuse-me.example.net/");
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    expect(q("probe-target-save-error")?.getAttribute("role")).toBe("alert");
+    expect(q("probe-target-save-error")?.textContent).toMatch(/block list/);
+    expect(field(host, "probe-target-url").value).toBe("https://refuse-me.example.net/");
+  });
+
+  it("edits a target by the version it read, and Escape closes the form with the focus back on the row", async () => {
+    const { host, q, calls } = await mount({ can: ADMIN });
+    row(host, "custom-home-nas").querySelector<HTMLButtonElement>('[data-testid="probe-target-edit"]')!.click();
+    await settle();
+    expect(q("probe-target-form")?.getAttribute("aria-label")).toBe("Edit Home NAS health");
+    expect(row(host, "custom-home-nas").dataset.editing).toBe("true");
+    expect(field(host, "probe-target-status").value).toBe("200-299");
+    await type(field(host, "probe-target-status"), "200");
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    const update = calls.find((call) => call.method === "target_update")!;
+    expect(update.payload).toMatchObject({ id: "custom-home-nas", version: 3, expect_status: "200", body_contains: '"status":"ok"' });
+    expect(row(host, "custom-home-nas").textContent).toMatch(/expects 200 ·/);
+
+    row(host, "custom-home-nas").querySelector<HTMLButtonElement>('[data-testid="probe-target-edit"]')!.click();
+    await settle();
+    field(host, "probe-target-label").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settle();
+    expect(q("probe-target-form")).toBeNull();
+    expect(document.activeElement).toBe(row(host, "custom-home-nas").querySelector("input"));
+  });
+
+  it("a save that lost to someone else's says so and offers to read the list again", async () => {
+    const { host, q, calls } = await mount({
+      can: ADMIN,
+      answers: { target_update: () => Promise.reject(new LinkFixtureError(409, "conflict", "someone changed this target since it was read; reload the list and try again")) },
+    });
+    row(host, "custom-cdn-edge").querySelector<HTMLButtonElement>('[data-testid="probe-target-edit"]')!.click();
+    await settle();
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    expect(q("probe-target-save-error")?.textContent).toMatch(/someone changed this target/);
+    const before = calls.filter((call) => call.method === "targets").length;
+    [...q("probe-target-save-error")!.querySelectorAll("button")].find((button) => button.textContent?.includes("Reload targets"))!.click();
+    await settle();
+    expect(calls.filter((call) => call.method === "targets").length).toBe(before + 1);
+  });
+
+  it("deletes only after a confirm in the row, whose Keep has the focus", async () => {
+    const { host, q, calls, paste, run } = await mount({ can: ADMIN });
+    row(host, "custom-cdn-edge").querySelector<HTMLInputElement>("input")!.click();
+    await settle();
+    const remove = () => row(host, "custom-cdn-edge").querySelector<HTMLButtonElement>('[data-testid="probe-target-delete"]')!;
+    remove().click();
+    await settle();
+    expect(row(host, "custom-cdn-edge").textContent).toMatch(/Delete\?/);
+    expect(document.activeElement?.textContent).toBe("Keep");
+    (document.activeElement as HTMLButtonElement).click();
+    await settle();
+    expect(document.activeElement).toBe(remove());
+    remove().click();
+    await settle();
+    q<HTMLButtonElement>("probe-target-confirm-delete")!.click();
+    await settle();
+    expect(calls.find((call) => call.method === "target_delete")?.payload).toEqual({ id: "custom-cdn-edge", version: 1 });
+    expect(host.querySelector('[data-target="custom-cdn-edge"]')).toBeNull();
+    await paste(JSON.stringify(SAMPLE_CHAIN));
+    await run();
+    expect(calls.find((call) => call.method === "run")!.payload.targets).toEqual(["gstatic-204"]);
+  });
+
+  it("a session without vpncore:admin runs saved targets but is told why it cannot change them", async () => {
+    const { host, q, calls, paste, run } = await mount({ can: READ_ONLY });
+    expect(q("probe-target-add")).toBeNull();
+    expect(host.querySelector('[data-testid="probe-target-edit"], [data-testid="probe-target-delete"]')).toBeNull();
+    expect(q("probe-target-readonly")?.textContent).toMatch(/needs vpncore:admin/);
+    row(host, "custom-home-nas").querySelector<HTMLInputElement>("input")!.click();
+    await settle();
+    await paste(JSON.stringify(SAMPLE_CHAIN));
+    await run();
+    expect(calls.find((call) => call.method === "run")!.payload.targets).toEqual(["gstatic-204", "custom-home-nas"]);
+    const tableRow = q("probe-targets-table")!.querySelector('[data-target="custom-home-nas"]')!;
+    expect(tableRow.textContent).toMatch(/Home NAS health\s*HTTP 200 · text found/);
+  });
+
+  it("while the probe cannot run saved targets, they are listed, not offered, and the reason is said", async () => {
+    const { host, q } = await mount({ scenario: "outdated", can: ADMIN });
+    expect(q("probe-saved-outdated")?.textContent).toMatch(/cannot run yet: lattice-probe 0\.1\.0-alpha\.2 does not run saved targets/);
+    expect(row(host, "custom-home-nas").querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
+    expect(q("probe-target-add")).not.toBeNull();
+  });
+
+  it("an older server answers built-in targets only, and the page offers nothing it cannot keep", async () => {
+    const { q } = await mount({ scenario: "oldserver", can: ADMIN });
+    const boxes = q("probe-targets")!.querySelectorAll<HTMLInputElement>("input[type=checkbox]");
+    expect([...boxes].map((box) => box.value)).toEqual(["gstatic-204", "cloudflare-204", "apple-success"]);
+    expect(q("probe-saved")).toBeNull();
+    expect(q("probe-target-add")).toBeNull();
+    expect(q("probe-targets")?.textContent).toMatch(/www\.gstatic\.com · expects 204/);
   });
 });
 

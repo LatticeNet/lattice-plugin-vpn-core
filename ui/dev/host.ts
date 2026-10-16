@@ -46,7 +46,7 @@ const INTERFACES = [
   },
   { service: "latticenet.vpn-core/profiles", methods: ["query", "settings", "configure"] },
   { service: "latticenet.vpn-core/usage", methods: ["query"] },
-  { service: "latticenet.vpn-core/probe", methods: ["health", "targets", "run"] },
+  { service: "latticenet.vpn-core/probe", methods: ["health", "targets", "run", "target_create", "target_update", "target_delete"] },
 ];
 
 /* The console's production theme (teal on slate, lattice-dashboard
@@ -207,8 +207,17 @@ const denyLinks = params.get("deny") === "link";
  * session without vpn:probe. `probe=<scenario>` picks what the probe answers
  * (probeFixtures.ts); the default works. */
 const denyProbe = params.get("deny") === "probe";
+/* `deny=probeadmin` keeps the probe but drops the saved-target edits, as the
+ * console does for a session with vpn:probe and without vpncore:admin. */
+const denyProbeAdmin = params.get("deny") === "probeadmin";
 const probeScenario = (PROBE_SCENARIOS as readonly string[]).includes(params.get("probe") ?? "") ? (params.get("probe") as ProbeScenario) : "ok";
-const interfaces = denyProbe ? INTERFACES.filter((contract) => !contract.service.endsWith("/probe")) : INTERFACES;
+/* One table for the page, so the saved targets it keeps outlive a call. */
+const probeTable = probeHandlers(probeScenario);
+const interfaces = denyProbe
+  ? INTERFACES.filter((contract) => !contract.service.endsWith("/probe"))
+  : denyProbeAdmin
+    ? INTERFACES.map((contract) => (contract.service.endsWith("/probe") ? { ...contract, methods: contract.methods.filter((method) => !method.startsWith("target_")) } : contract))
+    : INTERFACES;
 /* `content=hostile` keeps the scenario's topology and makes its strings
  * adversarial (fixtures.ts, "Content shape"). It composes with every scenario
  * and every probe scenario. */
@@ -271,6 +280,7 @@ function writeAddress(): void {
   if (stepUp !== "ok") query.set("stepup", stepUp);
   if (denyLinks) query.set("deny", "link");
   if (denyProbe) query.set("deny", "probe");
+  if (denyProbeAdmin) query.set("deny", "probeadmin");
   if (probeScenario !== "ok") query.set("probe", probeScenario);
   if (zoom) query.set("zoom", zoom);
   if (oldHost) query.set("oldhost", "1");
@@ -356,7 +366,7 @@ window.addEventListener("message", (event) => {
       return;
     }
     case "lattice.plugin.call": {
-      const table = withContent({ ...handlers(scenario), ...probeHandlers(probeScenario) }, content);
+      const table = withContent({ ...handlers(scenario), ...probeTable }, content);
       const key = `${String(data.service).split("/").pop()}/${data.method}`;
       const handler = table[key];
       const isLink = String(data.method).startsWith("link_");

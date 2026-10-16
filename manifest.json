@@ -432,6 +432,30 @@
           "scopes": [
             "vpn:probe"
           ]
+        },
+        {
+          "name": "target_create",
+          "effect": "write",
+          "scopes": [
+            "vpn:probe",
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "target_update",
+          "effect": "write",
+          "scopes": [
+            "vpn:probe",
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "target_delete",
+          "effect": "write",
+          "scopes": [
+            "vpn:probe",
+            "vpncore:admin"
+          ]
         }
       ],
       "backing": "core"
