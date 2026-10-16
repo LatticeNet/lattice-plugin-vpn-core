@@ -68,7 +68,7 @@ async function mount(options: MountOptions = {}) {
   };
   /** Everything the operator can read on the page except the textarea itself. */
   const shown = () => host.textContent ?? "";
-  return { host, probe, calls, cancelled, q, paste, run, shown, unmount: () => app.unmount() };
+  return { host, probe, calls, cancelled, q, paste, run, shown, table, unmount: () => app.unmount() };
 }
 
 describe("the Probe layer's states", () => {
@@ -390,15 +390,64 @@ describe("saved targets", () => {
     expect(q("probe-saved")?.textContent).toMatch(/3 of 32/);
   });
 
-  it("HEAD has no body, so the body text steps aside", async () => {
-    const { host, q } = await mount({ can: ADMIN });
+  it("HEAD has no body: the body text stays in the form for GET but is not sent", async () => {
+    const { host, q, calls } = await mount({ can: ADMIN });
     q<HTMLButtonElement>("probe-target-add")!.click();
     await settle();
+    await type(field(host, "probe-target-label"), "Edge");
+    await type(field(host, "probe-target-url"), "https://edge.example.net/");
     await type(field(host, "probe-target-body"), "ok");
     await type(field(host, "probe-target-method") as unknown as HTMLSelectElement, "HEAD");
     expect(field(host, "probe-target-body").disabled).toBe(true);
-    expect(field(host, "probe-target-body").value).toBe("");
-    expect(q("probe-target-form")?.textContent).toMatch(/Needs GET/);
+    expect(field(host, "probe-target-body").value).toBe("ok");
+    expect(q("probe-target-form")?.textContent).toMatch(/Not sent with HEAD/);
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    expect(calls.find((call) => call.method === "target_create")?.payload).toMatchObject({ method: "HEAD", body_contains: "" });
+  });
+
+  it("a URL pasted over the starting https:// does not repeat the scheme", async () => {
+    const { host, q } = await mount({ can: ADMIN });
+    q<HTMLButtonElement>("probe-target-add")!.click();
+    await settle();
+    await type(field(host, "probe-target-url"), "https://https://status.example.net/health");
+    expect(field(host, "probe-target-url").value).toBe("https://status.example.net/health");
+  });
+
+  it("each field's name is its label alone; its help or error describes it", async () => {
+    const { host, q } = await mount({ can: ADMIN });
+    q<HTMLButtonElement>("probe-target-add")!.click();
+    await settle();
+    const url = field(host, "probe-target-url");
+    expect(host.querySelector(`label[for="${url.id}"]`)?.textContent?.trim()).toBe("URL");
+    expect(url.closest("label")).toBeNull();
+    expect(host.querySelector(`#${url.getAttribute("aria-describedby")}`)?.textContent).toMatch(/https only/);
+  });
+
+  it("counts the chosen targets beside the list, and says when there are too many", async () => {
+    const { host, q } = await mount({ can: ADMIN });
+    expect(q("probe-targets-count")?.textContent?.trim()).toBe("1 of 16 chosen");
+    row(host, "custom-home-nas").querySelector<HTMLInputElement>("input")!.click();
+    await settle();
+    expect(q("probe-targets-count")?.textContent?.trim()).toBe("2 of 16 chosen");
+    expect(q("probe-targets-count")?.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("folds a long saved list to the first few and the chosen ones", async () => {
+    const { host, q, table, probe } = await mount({ can: ADMIN });
+    for (let i = 0; i < 9; i++) table["probe/target_create"]!({ label: `Extra ${i}`, url: `https://extra${i}.example.net/`, method: "GET", expect_status: "200" });
+    await probe.reloadTargets();
+    await settle();
+    probe.chosenTargets.value = [...probe.chosenTargets.value, "custom-extra-8"];
+    await settle();
+    const rows = () => [...host.querySelectorAll<HTMLElement>(".probe-saved-row")].map((el) => el.dataset.target);
+    expect(rows()).toHaveLength(7);
+    expect(rows()).toContain("custom-extra-8");
+    expect(q("probe-saved-fold")?.textContent).toMatch(/Show all 11 saved targets \(4 more\)/);
+    q<HTMLButtonElement>("probe-saved-fold")!.click();
+    await settle();
+    expect(rows()).toHaveLength(11);
+    expect(q("probe-saved-fold")?.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("a refusal from the server is said in the form, which stays open with what was typed", async () => {
@@ -414,12 +463,15 @@ describe("saved targets", () => {
     expect(field(host, "probe-target-url").value).toBe("https://refuse-me.example.net/");
   });
 
-  it("edits a target by the version it read, and Escape closes the form with the focus back on the row", async () => {
+  it("edits a target under its own row by the version it read, and Escape returns the focus to its Edit button", async () => {
     const { host, q, calls } = await mount({ can: ADMIN });
-    row(host, "custom-home-nas").querySelector<HTMLButtonElement>('[data-testid="probe-target-edit"]')!.click();
+    const edit = () => row(host, "custom-home-nas").querySelector<HTMLButtonElement>('[data-testid="probe-target-edit"]')!;
+    edit().click();
     await settle();
     expect(q("probe-target-form")?.getAttribute("aria-label")).toBe("Edit Home NAS health");
     expect(row(host, "custom-home-nas").dataset.editing).toBe("true");
+    // The form opens right under the row it edits, not under the whole list.
+    expect(row(host, "custom-home-nas").nextElementSibling?.querySelector('[data-testid="probe-target-form"]')).not.toBeNull();
     expect(field(host, "probe-target-status").value).toBe("200-299");
     await type(field(host, "probe-target-status"), "200");
     q<HTMLButtonElement>("probe-target-save")!.click();
@@ -433,7 +485,94 @@ describe("saved targets", () => {
     field(host, "probe-target-label").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await settle();
     expect(q("probe-target-form")).toBeNull();
-    expect(document.activeElement).toBe(row(host, "custom-home-nas").querySelector("input"));
+    expect(document.activeElement).toBe(edit());
+  });
+
+  it("after someone else's save, Reload keeps the fields this operator changed on top of their version", async () => {
+    const { host, q, calls, table } = await mount({ can: ADMIN });
+    row(host, "custom-home-nas").querySelector<HTMLButtonElement>('[data-testid="probe-target-edit"]')!.click();
+    await settle();
+    await type(field(host, "probe-target-url"), "https://nas.home-lab.example.net:8443/api/ready");
+    // Another operator renames it meanwhile.
+    table["probe/target_update"]!({ id: "custom-home-nas", version: 3, label: "Home NAS (renamed)", url: "https://nas.home-lab.example.net:8443/api/health?probe=lattice", method: "GET", expect_status: "200-299", body_contains: '"status":"ok"' });
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    expect(q("probe-target-save-error")?.textContent).toMatch(/Someone changed this target/);
+    [...q("probe-target-save-error")!.querySelectorAll("button")].find((button) => button.textContent?.includes("Reload targets"))!.click();
+    await settle();
+    expect(q("probe-target-notice")?.textContent).toMatch(/newer version.*your URL kept/);
+    expect(field(host, "probe-target-label").value).toBe("Home NAS (renamed)");
+    expect(field(host, "probe-target-url").value).toBe("https://nas.home-lab.example.net:8443/api/ready");
+    expect(document.activeElement).toBe(field(host, "probe-target-label"));
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    const updates = calls.filter((call) => call.method === "target_update");
+    expect(updates.at(-1)!.payload).toMatchObject({ id: "custom-home-nas", version: 4, label: "Home NAS (renamed)", url: "https://nas.home-lab.example.net:8443/api/ready" });
+    expect(q("probe-target-form")).toBeNull();
+  });
+
+  it("a target deleted elsewhere while it is edited can be saved as new or let go", async () => {
+    const { host, q, calls, table } = await mount({ can: ADMIN });
+    row(host, "custom-cdn-edge").querySelector<HTMLButtonElement>('[data-testid="probe-target-edit"]')!.click();
+    await settle();
+    table["probe/target_delete"]!({ id: "custom-cdn-edge", version: 1 });
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    expect(q("probe-target-save-error")?.textContent).toMatch(/may have been deleted/);
+    [...q("probe-target-save-error")!.querySelectorAll("button")].find((button) => button.textContent?.includes("Reload targets"))!.click();
+    await settle();
+    expect(host.querySelector('.probe-saved-row[data-target="custom-cdn-edge"]')).toBeNull();
+    expect(q("probe-target-gone")?.textContent).toMatch(/deleted this target/);
+    expect(q("probe-target-save")?.textContent).toMatch(/Save as new/);
+    expect(field(host, "probe-target-label").value).toBe("CDN edge (HEAD)");
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    expect(calls.find((call) => call.method === "target_create")?.payload).toMatchObject({ label: "CDN edge (HEAD)", method: "HEAD" });
+    expect(row(host, "custom-cdn-edge-head")).not.toBeNull();
+  });
+
+  it("while a save is in flight, Cancel and Escape cannot pretend to stop it", async () => {
+    let finish: (value: unknown) => void = () => {};
+    const { host, q } = await mount({ can: ADMIN, answers: { target_create: () => new Promise((resolve) => { finish = resolve; }) } });
+    q<HTMLButtonElement>("probe-target-add")!.click();
+    await settle();
+    await type(field(host, "probe-target-label"), "Slow");
+    await type(field(host, "probe-target-url"), "https://slow.example.net/");
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    expect(q<HTMLButtonElement>("probe-target-cancel")!.disabled).toBe(true);
+    field(host, "probe-target-label").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settle();
+    expect(q("probe-target-form")).not.toBeNull();
+    finish({ id: "custom-slow", source: "custom", label: "Slow", url: "https://slow.example.net/", method: "GET", expect_status: "200-299", version: 1 });
+    await settle();
+    expect(q("probe-target-form")).toBeNull();
+    expect(document.activeElement).toBe(row(host, "custom-slow").querySelector("input"));
+  });
+
+  it("a delete that fails says why and leaves the focus on its Delete button", async () => {
+    const { host, q } = await mount({ can: ADMIN, answers: { target_delete: () => Promise.reject(new LinkFixtureError(500, "internal_error", "the saved probe targets could not be written")) } });
+    row(host, "custom-cdn-edge").querySelector<HTMLButtonElement>('[data-testid="probe-target-delete"]')!.click();
+    await settle();
+    q<HTMLButtonElement>("probe-target-confirm-delete")!.click();
+    await settle();
+    expect(row(host, "custom-cdn-edge").querySelector('[role="alert"]')?.textContent).toMatch(/The saved probe targets could not be written/);
+    expect(document.activeElement).toBe(row(host, "custom-cdn-edge").querySelector('[data-testid="probe-target-delete"]'));
+  });
+
+  it("a result keeps the names its targets had when it ran", async () => {
+    const { host, q, paste, run } = await mount({ can: ADMIN });
+    row(host, "custom-home-nas").querySelector<HTMLInputElement>("input")!.click();
+    await settle();
+    await paste(JSON.stringify(SAMPLE_CHAIN));
+    await run();
+    row(host, "custom-home-nas").querySelector<HTMLButtonElement>('[data-testid="probe-target-edit"]')!.click();
+    await settle();
+    await type(field(host, "probe-target-label"), "Renamed later");
+    q<HTMLButtonElement>("probe-target-save")!.click();
+    await settle();
+    expect(row(host, "custom-home-nas").textContent).toMatch(/Renamed later/);
+    expect(q("probe-targets-table")!.querySelector('[data-target="custom-home-nas"]')?.textContent).toMatch(/Home NAS health/);
   });
 
   it("a save that lost to someone else's says so and offers to read the list again", async () => {
@@ -445,7 +584,7 @@ describe("saved targets", () => {
     await settle();
     q<HTMLButtonElement>("probe-target-save")!.click();
     await settle();
-    expect(q("probe-target-save-error")?.textContent).toMatch(/someone changed this target/);
+    expect(q("probe-target-save-error")?.textContent).toMatch(/Someone changed this target/);
     const before = calls.filter((call) => call.method === "targets").length;
     [...q("probe-target-save-error")!.querySelectorAll("button")].find((button) => button.textContent?.includes("Reload targets"))!.click();
     await settle();
@@ -459,9 +598,15 @@ describe("saved targets", () => {
     const remove = () => row(host, "custom-cdn-edge").querySelector<HTMLButtonElement>('[data-testid="probe-target-delete"]')!;
     remove().click();
     await settle();
-    expect(row(host, "custom-cdn-edge").textContent).toMatch(/Delete\?/);
+    expect(row(host, "custom-cdn-edge").textContent).toMatch(/Delete CDN edge \(HEAD\)\?/);
     expect(document.activeElement?.textContent).toBe("Keep");
     (document.activeElement as HTMLButtonElement).click();
+    await settle();
+    expect(document.activeElement).toBe(remove());
+    // Escape inside the confirm keeps the target too.
+    remove().click();
+    await settle();
+    (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await settle();
     expect(document.activeElement).toBe(remove());
     remove().click();
@@ -470,6 +615,9 @@ describe("saved targets", () => {
     await settle();
     expect(calls.find((call) => call.method === "target_delete")?.payload).toEqual({ id: "custom-cdn-edge", version: 1 });
     expect(host.querySelector('[data-target="custom-cdn-edge"]')).toBeNull();
+    expect(q("probe-targets-announce")?.textContent).toBe("Deleted CDN edge (HEAD).");
+    // The focus goes to the saved target before it, the last one left.
+    expect(document.activeElement).toBe(row(host, "custom-home-nas").querySelector('[data-testid="probe-target-delete"]'));
     await paste(JSON.stringify(SAMPLE_CHAIN));
     await run();
     expect(calls.find((call) => call.method === "run")!.payload.targets).toEqual(["gstatic-204"]);
@@ -491,9 +639,18 @@ describe("saved targets", () => {
 
   it("while the probe cannot run saved targets, they are listed, not offered, and the reason is said", async () => {
     const { host, q } = await mount({ scenario: "outdated", can: ADMIN });
-    expect(q("probe-saved-outdated")?.textContent).toMatch(/cannot run yet: lattice-probe 0\.1\.0-alpha\.2 does not run saved targets/);
+    expect(q("probe-saved-outdated")?.textContent).toMatch(/cannot run yet: lattice-probe 0\.1\.0-alpha\.2 does not run saved targets; a newer lattice-probe does\. Updating lattice-probe lets them run/);
     expect(row(host, "custom-home-nas").querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
     expect(q("probe-target-add")).not.toBeNull();
+  });
+
+  it("without the edit scope, an outdated probe's note does not promise a run, and an empty list is not shown", async () => {
+    const outdated = await mount({ scenario: "outdated", can: READ_ONLY });
+    expect(outdated.q("probe-target-readonly")?.textContent).not.toMatch(/Running them/);
+    outdated.unmount();
+    document.body.innerHTML = "";
+    const empty = await mount({ scenario: "nosaved", can: READ_ONLY });
+    expect(empty.q("probe-saved")).toBeNull();
   });
 
   it("an older server answers built-in targets only, and the page offers nothing it cannot keep", async () => {

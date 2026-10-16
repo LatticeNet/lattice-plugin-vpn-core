@@ -220,8 +220,8 @@ function setTest(event: Event): void {
   p.chosenTest.value = (event.target as HTMLSelectElement).value;
 }
 
-/** A saved target's label in the result; a built-in one keeps its id. */
-const savedLabels = computed(() => new Map(p.targets.value.filter((target) => target.source === "custom").map((target) => [target.id, target.label])));
+/** A saved target's label in the result, as it was when the run started; a built-in one keeps its id. */
+const savedLabels = computed(() => new Map(Object.entries(p.tested.value?.labels ?? {})));
 
 function testedTime(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });

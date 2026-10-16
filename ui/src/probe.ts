@@ -61,6 +61,8 @@ export interface RunFailureState extends Omit<RunFailure, "kind"> {
 export interface Tested {
   label: string;
   targets: number;
+  /** Saved targets' names as they were when the run started, so a later edit does not relabel this result. */
+  labels: Record<string, string>;
   samples: number;
   udp: boolean;
   throughput: boolean;
@@ -186,8 +188,8 @@ export function useProbe(deps: ProbeDeps) {
   }
 
   /** Read the list again, after someone else changed it or a save was refused for that. */
-  function reloadTargets(): void {
-    if (allowed.value) void loadTargets();
+  async function reloadTargets(): Promise<void> {
+    if (allowed.value) await loadTargets();
   }
 
   /**
@@ -210,7 +212,7 @@ export function useProbe(deps: ProbeDeps) {
       }
       return { ok: true, target: saved };
     } catch (cause) {
-      return { ok: false, message: safeErrorMessage(cause, "The target could not be saved."), stale: isConflict(cause) };
+      return { ok: false, message: safeErrorMessage(cause, "The target could not be saved."), stale: isStale(cause) };
     } finally {
       editBusy.value = false;
     }
@@ -226,7 +228,7 @@ export function useProbe(deps: ProbeDeps) {
       chosenTargets.value = chosenTargets.value.filter((id) => id !== target.id);
       return { ok: true };
     } catch (cause) {
-      return { ok: false, message: safeErrorMessage(cause, "The target could not be deleted."), stale: isConflict(cause) };
+      return { ok: false, message: safeErrorMessage(cause, "The target could not be deleted."), stale: isStale(cause) };
     } finally {
       editBusy.value = false;
     }
@@ -239,11 +241,11 @@ export function useProbe(deps: ProbeDeps) {
     if (targetsState.value === "idle") void loadTargets();
   }
 
-  /** The operator asked to look again: health always, targets when they never arrived. */
+  /** The operator asked to look again: health and targets, which another operator may have changed. */
   function refresh(): void {
     if (!allowed.value) return;
     void loadHealth();
-    if (targetsState.value === "error" || targetsState.value === "idle") void loadTargets();
+    void loadTargets();
   }
 
   /**
@@ -256,6 +258,7 @@ export function useProbe(deps: ProbeDeps) {
     if (!built.ok) return built;
     const mine = ++generation;
     const label = outboundLabel(outbounds.value, built.request.test);
+    const labels = Object.fromEntries(targets.value.filter((target) => target.source === "custom").map((target) => [target.id, target.label]));
     failure.value = undefined;
     result.value = undefined;
     tested.value = undefined;
@@ -273,6 +276,7 @@ export function useProbe(deps: ProbeDeps) {
       tested.value = {
         label,
         targets: built.request.targets.length,
+        labels,
         samples: built.request.samples,
         udp: built.request.udp,
         throughput: built.request.throughput,
@@ -418,9 +422,10 @@ export function useProbe(deps: ProbeDeps) {
   };
 }
 
-/** Someone changed the target since it was read, or the list is full: a 409. */
-function isConflict(cause: unknown): boolean {
-  return typeof cause === "object" && cause !== null && (cause as { httpStatus?: unknown }).httpStatus === 409;
+/** The list moved under this page: a target changed since it was read (409) or is gone (404). */
+function isStale(cause: unknown): boolean {
+  const status = typeof cause === "object" && cause !== null ? (cause as { httpStatus?: unknown }).httpStatus : undefined;
+  return status === 409 || status === 404;
 }
 
 export type ProbeState = ReturnType<typeof useProbe>;

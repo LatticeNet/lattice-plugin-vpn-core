@@ -56,7 +56,7 @@ export function checkTargetDraft(draft: TargetDraft): DraftCheck {
   const errors: Partial<Record<DraftField, string>> = {};
   const label = draft.label.trim();
   if (!label) errors.label = "Give the target a name.";
-  else if ([...label].length > TARGET_LABEL_MAX) errors.label = `At most ${TARGET_LABEL_MAX} characters.`;
+  else if ([...label].length > TARGET_LABEL_MAX) errors.label = `At most ${TARGET_LABEL_MAX} characters; this name has ${[...label].length}.`;
   else if (CONTROL.test(label)) errors.label = "Use printable text.";
 
   const urlProblem = checkTargetUrl(draft.url);
@@ -67,10 +67,10 @@ export function checkTargetDraft(draft: TargetDraft): DraftCheck {
   const status = canonicalStatus(draft.expectStatus);
   if (!status.ok) errors.expectStatus = status.message;
 
-  const body = draft.bodyContains;
+  // HEAD has no body: the text is kept in the form for a switch back to GET, but not checked or sent.
+  const body = draft.method === "HEAD" ? "" : draft.bodyContains;
   if (body) {
-    if (draft.method === "HEAD") errors.bodyContains = "A HEAD answer has no body. Use GET, or leave this empty.";
-    else if (new TextEncoder().encode(body).length > TARGET_BODY_MAX) errors.bodyContains = `At most ${TARGET_BODY_MAX} bytes.`;
+    if (new TextEncoder().encode(body).length > TARGET_BODY_MAX) errors.bodyContains = `At most ${TARGET_BODY_MAX} bytes.`;
     else if (CONTROL.test(body)) errors.bodyContains = "Use text on one line.";
   }
   if (Object.keys(errors).length || !status.ok) return { ok: false, errors };
@@ -90,6 +90,7 @@ export function canonicalStatus(text: string): { ok: true; value: string } | { o
   if (items.length > TARGET_STATUS_ITEMS_MAX) return { ok: false, message: `At most ${TARGET_STATUS_ITEMS_MAX} statuses or ranges.` };
   const spans: Array<[number, number]> = [];
   for (const item of items) {
+    if (!item) return { ok: false, message: "There is an empty item; remove the extra comma." };
     const parts = item.split("-");
     if (parts.length > 2) return { ok: false, message: `"${item.slice(0, 12)}" is not a status or a range; write 204 or 200-299.` };
     const ends: number[] = [];

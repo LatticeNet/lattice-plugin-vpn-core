@@ -233,16 +233,21 @@ export function probeHandlers(scenario: ProbeScenario): Record<string, (payload:
       }
       return { available: true, probe_version: "0.1.0", engine: "sing-box", core_version: "1.13.19", uptime_s: 11_520, inflight: 1, max_inflight: 32, targets: PROBE_TARGETS.length };
     },
-    "probe/run": (payload: RunPayload) => withBodyMatch(runAnswer(scenario, payload ?? {}), saved),
+    "probe/run": (payload: RunPayload) => withSavedTargets(runAnswer(scenario, payload ?? {}), saved),
   };
 }
 
-/** A saved target with body text reports whether a passing answer held it, as the probe does. */
-function withBodyMatch(answer: unknown, saved: SavedTarget[]): unknown {
+/**
+ * A saved target answers with its own passing status, and one with body
+ * text reports whether a passing answer held it, as the probe does.
+ */
+function withSavedTargets(answer: unknown, saved: SavedTarget[]): unknown {
   if (!answer || typeof answer !== "object" || !Array.isArray((answer as { targets?: unknown }).targets)) return answer;
   const rows = (answer as { targets: Array<Record<string, unknown>> }).targets.map((row) => {
     const target = saved.find((item) => item.id === row.id);
-    return target?.body_contains && typeof row.ok === "number" && row.ok > 0 ? { ...row, body_match: true } : row;
+    if (!target || typeof row.ok !== "number" || row.ok === 0) return row;
+    const status = Number(target.expect_status.split(/[,-]/)[0]);
+    return { ...row, status, ...(target.body_contains && target.method === "GET" ? { body_match: true } : {}) };
   });
   return { ...(answer as object), targets: rows };
 }

@@ -80,7 +80,7 @@ describe("the saved-target form's checks, which follow lattice-probe's", () => {
     expect(canonicalStatus("204-204")).toEqual({ ok: true, value: "204" });
     for (const [text, reason] of [
       ["", /Enter the statuses/], ["ok", /not a status/], ["99", /not a status/], ["600", /not an HTTP status/],
-      ["299-200", /backwards/], ["200,", /not a status/], ["200-250-299", /not a status/],
+      ["299-200", /backwards/], ["200,", /empty item; remove the extra comma/], ["200-250-299", /not a status/],
       [Array(17).fill("200").join(","), /At most 16/],
     ] as const) {
       const result = canonicalStatus(text);
@@ -93,9 +93,10 @@ describe("the saved-target form's checks, which follow lattice-probe's", () => {
     const result = checkTargetDraft({ label: " ", url: "http://x", method: "HEAD", expectStatus: "2xx", bodyContains: "ok" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(Object.keys(result.errors).sort()).toEqual(["bodyContains", "expectStatus", "label", "url"]);
-    expect(result.errors.bodyContains).toMatch(/HEAD answer has no body/);
-    expect(checkTargetDraft({ ...good, label: "x".repeat(65) })).toMatchObject({ ok: false, errors: { label: expect.stringMatching(/64/) } });
+    // HEAD keeps the body text in the form but neither checks nor sends it.
+    expect(Object.keys(result.errors).sort()).toEqual(["expectStatus", "label", "url"]);
+    expect(checkTargetDraft({ ...good, method: "HEAD", bodyContains: "a\nb" })).toMatchObject({ ok: true, input: { method: "HEAD", body_contains: "" } });
+    expect(checkTargetDraft({ ...good, label: "x".repeat(73) })).toMatchObject({ ok: false, errors: { label: "At most 64 characters; this name has 73." } });
     expect(checkTargetDraft({ ...good, bodyContains: "é".repeat(129) })).toMatchObject({ ok: false, errors: { bodyContains: expect.stringMatching(/256 bytes/) } });
     expect(checkTargetDraft({ ...good, bodyContains: "a\nb" })).toMatchObject({ ok: false, errors: { bodyContains: expect.stringMatching(/one line/) } });
   });
