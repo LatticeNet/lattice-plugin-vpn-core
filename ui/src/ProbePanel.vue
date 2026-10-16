@@ -31,6 +31,7 @@ import {
   type BuildResult,
 } from "./probeModel";
 import { revealOffset } from "./textareaCaret";
+import ProbeTargets from "./ProbeTargets.vue";
 
 const props = defineProps<{ probe: ProbeState }>();
 
@@ -39,7 +40,7 @@ const RUN_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navi
 
 const editor = ref<HTMLTextAreaElement>();
 const samplesInput = ref<HTMLInputElement>();
-const targetList = ref<HTMLElement>();
+const targetList = ref<InstanceType<typeof ProbeTargets>>();
 const resultPanel = ref<HTMLElement>();
 const runButton = ref<HTMLButtonElement>();
 const clearButton = ref<HTMLButtonElement>();
@@ -61,7 +62,7 @@ const blocker = computed(() => {
   if (p.unavailable.value) return "The probe is not answering, so tests cannot run.";
   if (p.targetsState.value === "loading" || p.targetsState.value === "idle") return "Reading the probe's targets.";
   if (p.targetsState.value === "error") return "The probe's targets could not be read, so tests cannot run.";
-  if (!p.targets.value.length) return "The probe offers no targets, so tests cannot run.";
+  if (!p.runnable.value.length) return "The probe offers no targets, so tests cannot run.";
   return "";
 });
 const canRun = computed(() => p.ready.value && read.value.kind !== "empty");
@@ -160,7 +161,7 @@ function showFault(): void {
 function pointAt(built: BuildResult): void {
   if (built.ok) return;
   if (built.field === "outbound" || built.field === "size") showFault();
-  else if (built.field === "targets") targetList.value?.querySelector<HTMLInputElement>("input")?.focus();
+  else if (built.field === "targets") targetList.value?.focusFirst();
   else if (built.field === "samples") samplesInput.value?.focus();
   else if (built.field === "test") document.getElementById("probe-test")?.focus();
 }
@@ -219,13 +220,8 @@ function setTest(event: Event): void {
   p.chosenTest.value = (event.target as HTMLSelectElement).value;
 }
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-}
+/** A saved target's label in the result, as it was when the run started; a built-in one keeps its id. */
+const savedLabels = computed(() => new Map(Object.entries(p.tested.value?.labels ?? {})));
 
 function testedTime(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -333,21 +329,7 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
           <small class="field-help">The end of a chain is tested by default, so the request passes every hop. Only the tested outbound and the hops it passes through are sent.</small>
         </label>
 
-        <fieldset ref="targetList" class="field probe-wide probe-targets" data-testid="probe-targets">
-          <legend>Targets</legend>
-          <p v-if="p.targetsState.value === 'loading' && !p.targets.value.length" class="field-help"><LoaderCircle class="spin" :size="12" aria-hidden="true" /> Reading the probe's targets</p>
-          <p v-else-if="p.targetsState.value === 'error'" class="field-help error-text">
-            {{ p.targetsError.value }}
-            <button class="probe-link" type="button" @click="p.refresh()">Try again</button>
-          </p>
-          <div v-else class="probe-target-list">
-            <label v-for="target in p.targets.value" :key="target.id" class="probe-check">
-              <input v-model="p.chosenTargets.value" type="checkbox" :value="target.id" />
-              <span class="mono">{{ target.id }}</span>
-              <small>{{ hostOf(target.url) }}<template v-if="target.expect"> · expects {{ target.expect }}</template></small>
-            </label>
-          </div>
-        </fieldset>
+        <ProbeTargets ref="targetList" :probe="probe" />
 
         <label class="field">
           <span>Samples</span>
@@ -477,8 +459,9 @@ const facts = computed(() => (result.value ? resultFacts(result.value, { udp: !!
               <tbody v-for="target in result.targets" :key="target.id" :data-target="target.id">
                 <tr>
                   <td class="sticky-first">
-                    <strong class="mono">{{ target.id }}</strong>
-                    <small v-if="target.status">HTTP {{ target.status }}</small>
+                    <strong v-if="savedLabels.get(target.id)">{{ savedLabels.get(target.id) }}</strong>
+                    <strong v-else class="mono">{{ target.id }}</strong>
+                    <small v-if="target.status">HTTP {{ target.status }}<template v-if="target.bodyMatch !== undefined"> · text {{ target.bodyMatch ? "found" : "not found" }}</template></small>
                   </td>
                   <td class="num"><span class="status-dot" :data-tone="target.ok === target.of && target.of > 0 ? 'healthy' : target.ok > 0 ? 'warning' : 'error'">{{ target.ok }} of {{ target.of }}</span></td>
                   <!-- A spread over no answered sample is no figure, so none is drawn. -->

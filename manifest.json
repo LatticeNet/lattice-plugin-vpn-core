@@ -9,12 +9,12 @@
     "network:apply",
     "task:run"
   ],
-  "version": "0.11.0-alpha.6",
+  "version": "0.11.0-alpha.7",
   "publisher": "latticenet",
-  "signature_ed25519": "CA34wUgRInN8RS6udo0nJPhCn8KD0oWCSbrtJVZfoeEzGCTOftSUxRD78kMHGNhueBClt9gTJWCeoQZKYyRQDA==",
+  "signature_ed25519": "",
   "bundle": {
     "format": "tar+gzip",
-    "digest_sha256": "f81533ce9f603f987e0bd3d187003cab4b1bf676edfefe9efec1dd07c827d198"
+    "digest_sha256": "394b99e66870acd23bda5995eefdca171605e483d13684c6e4bdb80e3e06e000"
   },
   "runtime": {
     "protocol": "stdio-json-v1",
@@ -431,6 +431,30 @@
           "effect": "write",
           "scopes": [
             "vpn:probe"
+          ]
+        },
+        {
+          "name": "target_create",
+          "effect": "write",
+          "scopes": [
+            "vpn:probe",
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "target_update",
+          "effect": "write",
+          "scopes": [
+            "vpn:probe",
+            "vpncore:admin"
+          ]
+        },
+        {
+          "name": "target_delete",
+          "effect": "write",
+          "scopes": [
+            "vpn:probe",
+            "vpncore:admin"
           ]
         }
       ],

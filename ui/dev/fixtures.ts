@@ -1016,7 +1016,8 @@ function denseSeats(groups: FleetGroup[]): FixtureUser[] {
     id: `u_team_${index + 1}`, email: `team-${index + 1}@example.invalid`, name: `Team seat ${index + 1}`, enabled: index !== 8,
     credentials: [{ protocol: "vless", has_secret: true }], bindings: [] as FixtureUser["bindings"],
     quota_bytes: [50, 100, 200, 0, 100, 50, 0, 20, 100][index] * GiB, quota_period: "monthly", quota_reset_day: 1,
-    expires_at: index % 3 === 0 ? `2026-1${index % 2}-15T00:00:00Z` : ZERO_TIME, group: "team", migrated: false,
+    // A month or two ahead of today: fixed dates turned these seats expired once they passed.
+    expires_at: index % 3 === 0 ? inDays(index % 2 ? 61 : 30) : ZERO_TIME, group: "team", migrated: false,
     created_at: "2026-07-01T09:12:00Z", updated_at: "2026-09-01T11:00:00Z",
   }));
   return [...productionBase(groups).map(({ used_total_bytes, used_period_bytes, last_7d, allocated_nodes, last_seen_at, ...rest }) => rest as FixtureUser), ...USERS.map((user) => ({ ...user }) as FixtureUser), ...team];

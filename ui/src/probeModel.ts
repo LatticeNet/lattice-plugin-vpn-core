@@ -15,7 +15,9 @@
  */
 
 export const PROBE_SERVICE = "latticenet.vpn-core/probe";
-export type ProbeMethod = "health" | "targets" | "run";
+export type ProbeMethod = "health" | "targets" | "run" | "target_create" | "target_update" | "target_delete";
+/** The methods that change the saved target list; the server asks vpncore:admin for them. */
+export const TARGET_EDIT_METHODS = ["target_create", "target_update", "target_delete"] as const;
 
 /** The outbound types the probe accepts; anything else it refuses before any network use. */
 export const PROBE_TYPES = [
@@ -23,6 +25,8 @@ export const PROBE_TYPES = [
   "tuic", "shadowtls", "anytls", "socks", "http", "ssh",
 ] as const;
 export const MAX_OUTBOUNDS = 8;
+/** Targets one run measures, built-in and saved together, as the probe caps them. */
+export const MAX_TARGETS_PER_RUN = 16;
 /** The request body cap, on the server and in the probe alike. */
 export const MAX_REQUEST_BYTES = 64 * 1024;
 export const SAMPLES_MIN = 1;
@@ -488,6 +492,9 @@ export function buildProbeRequest(read: DraftRead, options: ProbeOptions, knownT
   const chosen = new Set(options.targets);
   const targets = knownTargets.filter((id) => chosen.has(id) && TARGET_ID.test(id));
   if (!targets.length) return { ok: false, field: "targets", message: "Choose at least one target." };
+  if (targets.length > MAX_TARGETS_PER_RUN) {
+    return { ok: false, field: "targets", message: `A run measures at most ${MAX_TARGETS_PER_RUN} targets; ${targets.length} are chosen.` };
+  }
   const samples = options.samples;
   if (!Number.isInteger(samples) || samples < SAMPLES_MIN || samples > SAMPLES_MAX) {
     return { ok: false, field: "samples", message: `Samples must be a whole number from ${SAMPLES_MIN} to ${SAMPLES_MAX}.` };
@@ -517,8 +524,37 @@ export function buildProbeRequest(read: DraftRead, options: ProbeOptions, knownT
 
 export interface ProbeTarget {
   id: string;
+  /** "builtin" ships with the probe; "custom" is one an operator saved. */
+  source: "builtin" | "custom";
+  /** A saved target's name; empty for a built-in one, which goes by its id. */
+  label: string;
   url: string;
+  method: "GET" | "HEAD";
+  /** A built-in target's single status; 0 when the answer gave none. */
   expect: number;
+  /** Every target's passing statuses, "204" or "200-299,301". */
+  expectStatus: string;
+  bodyContains: string;
+  /** A saved target's version, named by an update or delete; 0 for a built-in one. */
+  version: number;
+}
+
+/** Whether saved targets can run now, from servers that keep them. */
+export interface CustomTargets {
+  supported: boolean;
+  reason: string;
+  limit: number;
+}
+
+/** The targets answer. `custom` is absent from a server that keeps no saved targets. */
+export interface TargetList {
+  targets: ProbeTarget[];
+  custom?: CustomTargets;
+}
+
+/** What a target is called on the page: a saved one's label, a built-in one's id. */
+export function targetName(target: Pick<ProbeTarget, "id" | "label">): string {
+  return target.label || target.id;
 }
 
 export interface ProbeHealth {
@@ -546,6 +582,8 @@ export interface TargetResult {
   warm?: Spread;
   status?: number;
   error: string;
+  /** For a target with body text: whether an answer with a passing status held it. */
+  bodyMatch?: boolean;
 }
 
 export interface ProbeResult {
@@ -564,15 +602,42 @@ export interface ProbeResult {
 const finite = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
 const text = (value: unknown, max = 400): string => (typeof value === "string" ? value.slice(0, max) : "");
 
-export function parseTargets(value: unknown): ProbeTarget[] | undefined {
+/**
+ * The targets answer. An older server sends built-in targets only, with id,
+ * url and expect; a newer one marks each target's source, gives every
+ * target its status set, and says in `custom` whether saved targets run.
+ */
+export function parseTargets(value: unknown): TargetList | undefined {
   if (!isRecord(value) || !Array.isArray(value.targets)) return undefined;
-  const out: ProbeTarget[] = [];
+  const targets: ProbeTarget[] = [];
   for (const item of value.targets) {
     if (!isRecord(item) || typeof item.id !== "string" || !TARGET_ID.test(item.id)) continue;
-    if (out.some((target) => target.id === item.id)) continue;
-    out.push({ id: item.id, url: text(item.url, 300), expect: finite(item.expect) ?? 0 });
+    if (targets.some((target) => target.id === item.id)) continue;
+    const expect = finite(item.expect) ?? 0;
+    const custom = item.source === "custom";
+    targets.push({
+      id: item.id,
+      source: custom ? "custom" : "builtin",
+      label: custom ? text(item.label, 64) : "",
+      url: text(item.url, 2048),
+      method: item.method === "HEAD" ? "HEAD" : "GET",
+      expect,
+      expectStatus: text(item.expect_status, 128) || (expect ? String(expect) : ""),
+      bodyContains: text(item.body_contains, 256),
+      version: custom ? finite(item.version) ?? 0 : 0,
+    });
   }
-  return out;
+  const custom = isRecord(value.custom) && typeof value.custom.supported === "boolean"
+    ? { supported: value.custom.supported, reason: text(value.custom.reason), limit: finite(value.custom.limit) ?? 32 }
+    : undefined;
+  return custom ? { targets, custom } : { targets };
+}
+
+/** One saved target as target_create and target_update answer it. */
+export function parseSavedTarget(value: unknown): ProbeTarget | undefined {
+  const parsed = parseTargets({ targets: [value] });
+  const target = parsed?.targets[0];
+  return target?.source === "custom" ? target : undefined;
 }
 
 export function parseHealth(value: unknown): ProbeHealth | undefined {
@@ -612,6 +677,7 @@ export function parseProbeResult(value: unknown): ProbeResult | undefined {
         warm: spread(item.warm_ms),
         status: finite(item.status),
         error: text(item.error),
+        ...(typeof item.body_match === "boolean" ? { bodyMatch: item.body_match } : {}),
       }))
     : [];
   const exit = isRecord(value.exit) ? { ip: text(value.exit.ip, 64), loc: text(value.exit.loc, 8), colo: text(value.exit.colo, 16) } : undefined;

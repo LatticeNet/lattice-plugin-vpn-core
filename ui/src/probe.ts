@@ -21,20 +21,25 @@ import {
   classifyRunError,
   keepTestTag,
   outboundLabel,
+  MAX_TARGETS_PER_RUN,
   parseHealth,
   parseProbeResult,
+  parseSavedTarget,
   parseTargets,
   readDraft,
   RUN_CALL_TIMEOUT_MS,
   SAMPLES_DEFAULT,
+  TARGET_EDIT_METHODS,
   THROUGHPUT_DEFAULT_BYTES,
   type BuildResult,
+  type CustomTargets,
   type ProbeHealth,
   type ProbeMethod,
   type ProbeResult,
   type ProbeTarget,
   type RunFailure,
 } from "./probeModel";
+import type { TargetInput } from "./probeTargetForm";
 import { safeErrorMessage } from "./vpnModel";
 
 export interface ProbeDeps {
@@ -56,6 +61,8 @@ export interface RunFailureState extends Omit<RunFailure, "kind"> {
 export interface Tested {
   label: string;
   targets: number;
+  /** Saved targets' names as they were when the run started, so a later edit does not relabel this result. */
+  labels: Record<string, string>;
   samples: number;
   udp: boolean;
   throughput: boolean;
@@ -92,6 +99,10 @@ export function useProbe(deps: ProbeDeps) {
   const targets = shallowRef<ProbeTarget[]>([]);
   const targetsState = ref<ReadState>("idle");
   const targetsError = ref("");
+  /** Whether saved targets run; absent when the server keeps none. */
+  const custom = shallowRef<CustomTargets>();
+  /** A save or delete in flight. */
+  const editBusy = ref(false);
 
   const phase = ref<RunPhase>("idle");
   const result = shallowRef<ProbeResult>();
@@ -110,7 +121,12 @@ export function useProbe(deps: ProbeDeps) {
   /** The probe said it is not there. A health read that failed is not that. */
   const unavailable = computed(() => healthState.value === "ready" && health.value?.available === false);
   const running = computed(() => phase.value === "running");
-  const ready = computed(() => allowed.value && !unavailable.value && targets.value.length > 0);
+  /** The ids a run may name: built-in targets, and saved ones while the probe runs them. */
+  const runnable = computed(() => targets.value.filter((target) => target.source === "builtin" || custom.value?.supported).map((target) => target.id));
+  const ready = computed(() => allowed.value && !unavailable.value && runnable.value.length > 0);
+  /** The server keeps a saved list and this session may change it. */
+  const canEditTargets = computed(() => allowed.value && !!custom.value && TARGET_EDIT_METHODS.every((method) => deps.can(method)));
+  const customCount = computed(() => targets.value.filter((target) => target.source === "custom").length);
 
   function options() {
     return {
@@ -124,7 +140,7 @@ export function useProbe(deps: ProbeDeps) {
   }
 
   /** The request this run would send, or what stops it. Recomputed only when an input changes. */
-  const request = computed<BuildResult>(() => buildProbeRequest(read.value, options(), targets.value.map((target) => target.id)));
+  const request = computed<BuildResult>(() => buildProbeRequest(read.value, options(), runnable.value));
 
   function denied(cause: unknown): boolean {
     if (classifyRunError(cause).kind !== "denied") return false;
@@ -157,16 +173,64 @@ export function useProbe(deps: ProbeDeps) {
     try {
       const parsed = parseTargets(await deps.call<unknown>("targets", {}, READ_TIMEOUT_MS).promise);
       if (!parsed) throw new Error("The probe's target answer was not a target list, so no target is offered rather than a guess.");
-      targets.value = parsed;
-      const known = new Set(parsed.map((target) => target.id));
+      targets.value = parsed.targets;
+      custom.value = parsed.custom;
+      const known = new Set(runnable.value);
       const kept = chosenTargets.value.filter((id) => known.has(id));
-      chosenTargets.value = kept.length ? kept : parsed.slice(0, 1).map((target) => target.id);
+      chosenTargets.value = kept.length ? kept : runnable.value.slice(0, 1);
       targetsState.value = "ready";
       targetsError.value = "";
     } catch (cause) {
       if (denied(cause)) return;
       targetsError.value = safeErrorMessage(cause, "The probe's targets could not be read");
       targetsState.value = "error";
+    }
+  }
+
+  /** Read the list again, after someone else changed it or a save was refused for that. */
+  async function reloadTargets(): Promise<void> {
+    if (allowed.value) await loadTargets();
+  }
+
+  /**
+   * Save a new target, or a change to `existing` naming the version it was
+   * read at. A new target that can run is chosen for the next run.
+   */
+  async function saveTarget(input: TargetInput, existing?: ProbeTarget): Promise<{ ok: true; target: ProbeTarget } | { ok: false; message: string; stale: boolean }> {
+    const method = existing ? "target_update" : "target_create";
+    if (editBusy.value || !canEditTargets.value) return { ok: false, message: "This session cannot change the saved targets.", stale: false };
+    editBusy.value = true;
+    try {
+      const payload = existing ? { id: existing.id, version: existing.version, ...input } : { ...input };
+      const saved = parseSavedTarget(await deps.call<unknown>(method, payload, READ_TIMEOUT_MS).promise);
+      if (!saved) throw new Error("The server's answer was not a saved target. Reload the list to see what was saved.");
+      if (existing) {
+        targets.value = targets.value.map((target) => (target.id === existing.id ? saved : target));
+      } else {
+        targets.value = [...targets.value, saved];
+        if (runnable.value.includes(saved.id) && chosenTargets.value.length < MAX_TARGETS_PER_RUN) chosenTargets.value = [...chosenTargets.value, saved.id];
+      }
+      return { ok: true, target: saved };
+    } catch (cause) {
+      return { ok: false, message: safeErrorMessage(cause, "The target could not be saved."), stale: isStale(cause) };
+    } finally {
+      editBusy.value = false;
+    }
+  }
+
+  /** Delete a saved target, naming the version it was read at. */
+  async function deleteTarget(target: ProbeTarget): Promise<{ ok: true } | { ok: false; message: string; stale: boolean }> {
+    if (editBusy.value || !canEditTargets.value) return { ok: false, message: "This session cannot change the saved targets.", stale: false };
+    editBusy.value = true;
+    try {
+      await deps.call<unknown>("target_delete", { id: target.id, version: target.version }, READ_TIMEOUT_MS).promise;
+      targets.value = targets.value.filter((item) => item.id !== target.id);
+      chosenTargets.value = chosenTargets.value.filter((id) => id !== target.id);
+      return { ok: true };
+    } catch (cause) {
+      return { ok: false, message: safeErrorMessage(cause, "The target could not be deleted."), stale: isStale(cause) };
+    } finally {
+      editBusy.value = false;
     }
   }
 
@@ -177,11 +241,11 @@ export function useProbe(deps: ProbeDeps) {
     if (targetsState.value === "idle") void loadTargets();
   }
 
-  /** The operator asked to look again: health always, targets when they never arrived. */
+  /** The operator asked to look again: health and targets, which another operator may have changed. */
   function refresh(): void {
     if (!allowed.value) return;
     void loadHealth();
-    if (targetsState.value === "error" || targetsState.value === "idle") void loadTargets();
+    void loadTargets();
   }
 
   /**
@@ -194,6 +258,7 @@ export function useProbe(deps: ProbeDeps) {
     if (!built.ok) return built;
     const mine = ++generation;
     const label = outboundLabel(outbounds.value, built.request.test);
+    const labels = Object.fromEntries(targets.value.filter((target) => target.source === "custom").map((target) => [target.id, target.label]));
     failure.value = undefined;
     result.value = undefined;
     tested.value = undefined;
@@ -211,6 +276,7 @@ export function useProbe(deps: ProbeDeps) {
       tested.value = {
         label,
         targets: built.request.targets.length,
+        labels,
         samples: built.request.samples,
         udp: built.request.udp,
         throughput: built.request.throughput,
@@ -326,6 +392,14 @@ export function useProbe(deps: ProbeDeps) {
     targets,
     targetsState,
     targetsError,
+    custom,
+    runnable,
+    canEditTargets,
+    customCount,
+    editBusy,
+    reloadTargets,
+    saveTarget,
+    deleteTarget,
     phase,
     result,
     tested,
@@ -346,6 +420,12 @@ export function useProbe(deps: ProbeDeps) {
     format,
     dispose,
   };
+}
+
+/** The list moved under this page: a target changed since it was read (409) or is gone (404). */
+function isStale(cause: unknown): boolean {
+  const status = typeof cause === "object" && cause !== null ? (cause as { httpStatus?: unknown }).httpStatus : undefined;
+  return status === 409 || status === 404;
 }
 
 export type ProbeState = ReturnType<typeof useProbe>;
