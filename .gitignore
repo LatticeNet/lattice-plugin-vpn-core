@@ -7,3 +7,7 @@ dist/
 
 # OMC orchestration tool state (not part of the project)
 .omc/
+
+# Local release and build outputs; releases carry the bundle, not the tree.
+/.release-bundle.tar.gz
+/system-go/system-go
